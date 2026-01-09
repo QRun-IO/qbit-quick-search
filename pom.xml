@@ -19,6 +19,8 @@
 
    <properties>
       <revision>0.1.0</revision>
+      <maven.compiler.source>21</maven.compiler.source>
+      <maven.compiler.target>21</maven.compiler.target>
       <opensearch.version>2.10.0</opensearch.version>
    </properties>
 

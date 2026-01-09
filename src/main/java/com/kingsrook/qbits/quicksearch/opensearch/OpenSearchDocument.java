@@ -17,6 +17,7 @@ package com.kingsrook.qbits.quicksearch.opensearch;
 
 
 import java.time.Instant;
+import com.fasterxml.jackson.annotation.JsonIgnore;
 
 
 /*******************************************************************************
@@ -34,7 +35,9 @@ public class OpenSearchDocument
 
    /***************************************************************************
     ** Generate a unique document ID for OpenSearch.
+    ** This is not stored in the document body - it's used as the document _id.
     ***************************************************************************/
+   @JsonIgnore
    public String getDocumentId()
    {
       return sourceTable + ":" + recordId;

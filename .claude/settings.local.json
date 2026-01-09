@@ -1,0 +1,27 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(find:*)",
+      "Bash(grep:*)",
+      "Bash(mvn compile:*)",
+      "Bash(jar -tf:*)",
+      "Bash(jar -xf:*)",
+      "Bash(cat:*)",
+      "Bash(mvn test:*)",
+      "Bash(done)",
+      "Bash(mvn verify:*)",
+      "Bash(git add:*)",
+      "Bash(git commit:*)",
+      "Bash(git push:*)",
+      "mcp__circleci-mcp-server__get_latest_pipeline_status",
+      "mcp__circleci-mcp-server__list_followed_projects",
+      "mcp__circleci-mcp-server__run_pipeline",
+      "mcp__circleci-mcp-server__get_build_failure_logs",
+      "mcp__circleci-mcp-server__config_helper",
+      "mcp__github__get_file_contents",
+      "Bash(mvn dependency:tree:*)",
+      "Bash(mvn help:effective-pom:*)",
+      "Bash(git checkout:*)"
+    ]
+  }
+}
