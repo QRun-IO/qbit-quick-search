@@ -5,13 +5,10 @@ orbs:
 
 workflows:
 
-  test_only:
+  test_all_branches:
     jobs:
       - qqq-orb/mvn_test_only:
           context: [ qqq-maven-registry-credentials ]
-          filters:
-            branches:
-              ignore: /(develop|main|release/.*|hotfix/.*|integration.*)/
 
   publish_snapshot:
     jobs:
@@ -31,3 +28,5 @@ workflows:
           filters:
             branches:
               only: [ main ]
+            tags:
+              only: [ /v.*/ ]
