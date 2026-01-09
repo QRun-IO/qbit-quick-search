@@ -19,6 +19,8 @@ package com.kingsrook.qbits.quicksearch.opensearch;
 import java.io.IOException;
 import java.util.ArrayList;
 import java.util.List;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule;
 import com.kingsrook.qbits.quicksearch.QuickSearchQBitConfig;
 import com.kingsrook.qqq.backend.core.exceptions.QException;
 import com.kingsrook.qqq.backend.core.logging.QLogger;
@@ -86,7 +88,9 @@ public class QuickSearchOpenSearchClient
             );
          }
 
-         builder.setMapper(new JacksonJsonpMapper());
+         ObjectMapper objectMapper = new ObjectMapper();
+         objectMapper.registerModule(new JavaTimeModule());
+         builder.setMapper(new JacksonJsonpMapper(objectMapper));
 
          this.client = new OpenSearchClient(builder.build());
       }
