@@ -29,7 +29,12 @@
       "Bash(WT=/Users/james.maes/Git.Local/QRun-IO/qbit-quick-search/.claude/worktrees/agent-a9dc6e8e)",
       "Bash(DEST=/Users/james.maes/Git.Local/QRun-IO/qbit-quick-search)",
       "Bash(cp \"$WT/src/main/java/com/kingsrook/qbits/quicksearch/opensearch/BulkIndexResult.java\" \"$DEST/src/main/java/com/kingsrook/qbits/quicksearch/opensearch/\")",
-      "Bash(mvn clean:*)"
+      "Bash(mvn clean:*)",
+      "Bash(jar tf:*)",
+      "Bash(unzip -p /Users/james.maes/.m2/repository/com/kingsrook/qqq/qqq-backend-core/0.40.0-SNAPSHOT/qqq-backend-core-0.40.0-SNAPSHOT.jar com/kingsrook/qqq/backend/core/actions/customizers/TableCustomizerInterface.java)",
+      "Bash(sed -i '' 's/postInsertRecord/postInsert/g' src/test/java/com/kingsrook/qbits/quicksearch/customizers/QuickSearchPostInsertCustomizerTest.java)",
+      "Bash(sed -i '' 's/postUpdateRecord/postUpdate/g' src/test/java/com/kingsrook/qbits/quicksearch/customizers/QuickSearchPostUpdateCustomizerTest.java)",
+      "Bash(sed -i '' 's/postDeleteRecord/postDelete/g' src/test/java/com/kingsrook/qbits/quicksearch/customizers/QuickSearchPostDeleteCustomizerTest.java)"
     ]
   }
 }
