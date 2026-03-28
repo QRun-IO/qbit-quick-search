@@ -28,7 +28,8 @@
       "Bash(open:*)",
       "Bash(WT=/Users/james.maes/Git.Local/QRun-IO/qbit-quick-search/.claude/worktrees/agent-a9dc6e8e)",
       "Bash(DEST=/Users/james.maes/Git.Local/QRun-IO/qbit-quick-search)",
-      "Bash(cp \"$WT/src/main/java/com/kingsrook/qbits/quicksearch/opensearch/BulkIndexResult.java\" \"$DEST/src/main/java/com/kingsrook/qbits/quicksearch/opensearch/\")"
+      "Bash(cp \"$WT/src/main/java/com/kingsrook/qbits/quicksearch/opensearch/BulkIndexResult.java\" \"$DEST/src/main/java/com/kingsrook/qbits/quicksearch/opensearch/\")",
+      "Bash(mvn clean:*)"
     ]
   }
 }

@@ -30,6 +30,7 @@ import java.util.Map;
 public class QuickSearchableTableConfig
 {
    private String              tableName;
+   private String              primaryKeyField;
    private List<String>        searchableFields;
    private Map<String, Integer> fieldWeights;
    private Map<String, Boolean> fieldIncludeLabels;
@@ -65,6 +66,37 @@ public class QuickSearchableTableConfig
    public QuickSearchableTableConfig withTableName(String tableName)
    {
       this.tableName = tableName;
+      return (this);
+   }
+
+
+
+   /***************************************************************************
+    ** Getter for primaryKeyField
+    ***************************************************************************/
+   public String getPrimaryKeyField()
+   {
+      return (this.primaryKeyField);
+   }
+
+
+
+   /***************************************************************************
+    ** Setter for primaryKeyField
+    ***************************************************************************/
+   public void setPrimaryKeyField(String primaryKeyField)
+   {
+      this.primaryKeyField = primaryKeyField;
+   }
+
+
+
+   /***************************************************************************
+    ** Fluent setter for primaryKeyField
+    ***************************************************************************/
+   public QuickSearchableTableConfig withPrimaryKeyField(String primaryKeyField)
+   {
+      this.primaryKeyField = primaryKeyField;
       return (this);
    }
 
