@@ -92,12 +92,6 @@
       </dependency>
 
       <dependency>
-         <groupId>com.kingsrook.qqq</groupId>
-         <artifactId>qqq-middleware-javalin</artifactId>
-         <optional>true</optional>
-      </dependency>
-
-      <dependency>
          <groupId>org.opensearch.client</groupId>
          <artifactId>opensearch-java</artifactId>
          <version>${opensearch.version}</version>
@@ -207,10 +201,6 @@
                      <goal>check</goal>
                   </goals>
                   <configuration>
-                     <!-- Coverage thresholds reduced for initial release.     -->
-                     <!-- FullReindexStep, BasepullIndexStep, and             -->
-                     <!-- QuickSearchQBitProducer require integration tests   -->
-                     <!-- with OpenSearch to achieve higher coverage.         -->
                      <rules>
                         <rule>
                            <element>BUNDLE</element>
@@ -218,12 +208,12 @@
                               <limit>
                                  <counter>INSTRUCTION</counter>
                                  <value>COVEREDRATIO</value>
-                                 <minimum>0.30</minimum>
+                                 <minimum>0.70</minimum>
                               </limit>
                               <limit>
                                  <counter>CLASS</counter>
                                  <value>COVEREDRATIO</value>
-                                 <minimum>0.80</minimum>
+                                 <minimum>0.90</minimum>
                               </limit>
                            </limits>
                         </rule>

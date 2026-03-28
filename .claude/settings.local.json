@@ -21,7 +21,11 @@
       "mcp__github__get_file_contents",
       "Bash(mvn dependency:tree:*)",
       "Bash(mvn help:effective-pom:*)",
-      "Bash(git checkout:*)"
+      "Bash(git checkout:*)",
+      "Bash(ls /Users/james.maes/Git.Local/QRun-IO/qbit-quick-search/docs/*.md)",
+      "Bash(git:*)",
+      "Bash(ls:*)",
+      "Bash(open:*)"
     ]
   }
 }
