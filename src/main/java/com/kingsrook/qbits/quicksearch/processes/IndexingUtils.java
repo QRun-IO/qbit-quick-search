@@ -134,6 +134,10 @@ public class IndexingUtils
    {
       String searchableText = buildSearchableText(record, fields, includeLabels);
       String recordId = record.getValueString(primaryKeyField);
+      if(recordId == null)
+      {
+         return (null);
+      }
       String recordLabel = record.getRecordLabel();
 
       Map<String, Object> fieldValues = new HashMap<>();

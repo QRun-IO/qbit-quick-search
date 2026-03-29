@@ -202,7 +202,7 @@ class IndexingUtilsTest
     ** Test that buildDocument with null primary key value yields null recordId.
     *******************************************************************************/
    @Test
-   void testBuildDocument_nullPrimaryKey_recordIdIsNull()
+   void testBuildDocument_nullPrimaryKey_returnsNull()
    {
       QRecord record = new QRecord();
       record.setValue("name", "John");
@@ -216,7 +216,7 @@ class IndexingUtilsTest
          Map.of()
       );
 
-      assertThat(doc.getRecordId()).isNull();
+      assertThat(doc).isNull();
    }
 
 

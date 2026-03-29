@@ -22,7 +22,6 @@ import java.util.HashMap;
 import java.util.Map;
 import org.junit.jupiter.api.Test;
 import static org.assertj.core.api.Assertions.assertThat;
-import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 
 /*******************************************************************************
@@ -86,7 +85,7 @@ class OpenSearchDocumentTest
    }
 
    /*******************************************************************************
-    ** Test getDocumentId() when sourceTable is null throws IllegalStateException.
+    ** Test getDocumentId() when sourceTable is null returns concatenation with null.
     *******************************************************************************/
    @Test
    void testGetDocumentIdWithNullSourceTable()
@@ -94,9 +93,7 @@ class OpenSearchDocumentTest
       OpenSearchDocument doc = new OpenSearchDocument()
          .withRecordId("10");
 
-      assertThatThrownBy(doc::getDocumentId)
-         .isInstanceOf(IllegalStateException.class)
-         .hasMessageContaining("sourceTable=null");
+      assertThat(doc.getDocumentId()).isEqualTo("null:10");
    }
 
 }

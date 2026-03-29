@@ -194,8 +194,11 @@ public class QuickSearchQBitProducer
       QProcessMetaData basepullProcess = buildBasepullProcess(basepullProcessName);
       QProcessMetaData fullReindexProcess = buildFullReindexProcess(fullReindexProcessName);
 
-      qInstance.addProcess(basepullProcess);
-      qInstance.addProcess(fullReindexProcess);
+      if(Boolean.TRUE.equals(config.getEnableScheduledProcesses()))
+      {
+         qInstance.addProcess(basepullProcess);
+         qInstance.addProcess(fullReindexProcess);
+      }
 
       ////////////////////////////////////////////////////
       // 9. Register customizers on source tables       //
@@ -213,9 +216,13 @@ public class QuickSearchQBitProducer
          .withName(appName)
          .withLabel("Quick Search Admin")
          .withChild(indexTable)
-         .withChild(indexRunTable)
-         .withChild(basepullProcess)
-         .withChild(fullReindexProcess);
+         .withChild(indexRunTable);
+
+      if(Boolean.TRUE.equals(config.getEnableScheduledProcesses()))
+      {
+         app.withChild(basepullProcess);
+         app.withChild(fullReindexProcess);
+      }
 
       qInstance.addApp(app);
    }

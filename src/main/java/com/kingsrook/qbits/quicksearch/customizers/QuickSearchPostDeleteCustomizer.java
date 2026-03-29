@@ -20,12 +20,12 @@ package com.kingsrook.qbits.quicksearch.customizers;
 import java.util.ArrayList;
 import java.util.List;
 import com.kingsrook.qqq.backend.core.actions.customizers.TableCustomizerInterface;
-import com.kingsrook.qqq.backend.core.context.QContext;
 import com.kingsrook.qqq.backend.core.exceptions.QException;
 import com.kingsrook.qqq.backend.core.logging.QLogger;
 import com.kingsrook.qqq.backend.core.model.actions.tables.delete.DeleteInput;
 import com.kingsrook.qqq.backend.core.model.data.QRecord;
 import com.kingsrook.qbits.quicksearch.QuickSearchQBitContext;
+import com.kingsrook.qbits.quicksearch.QuickSearchableTableConfig;
 import com.kingsrook.qbits.quicksearch.publisher.IndexEvent;
 import com.kingsrook.qbits.quicksearch.publisher.IndexEventAction;
 import com.kingsrook.qbits.quicksearch.publisher.IndexEventPublisher;
@@ -81,7 +81,8 @@ public class QuickSearchPostDeleteCustomizer implements TableCustomizerInterface
       try
       {
          String tableName = deleteInput.getTableName();
-         String primaryKeyField = QContext.getQInstance().getTable(tableName).getPrimaryKeyField();
+         QuickSearchableTableConfig tableConfig = QuickSearchQBitContext.getTableConfig(tableName);
+         String primaryKeyField = (tableConfig != null && tableConfig.getPrimaryKeyField() != null) ? tableConfig.getPrimaryKeyField() : "id";
 
          List<IndexEvent> events = new ArrayList<>();
          for(QRecord record : records)

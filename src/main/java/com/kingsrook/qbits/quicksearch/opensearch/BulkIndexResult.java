@@ -59,7 +59,7 @@ public class BulkIndexResult
     *******************************************************************************/
    public Boolean isFullySuccessful()
    {
-      return (failureCount == 0);
+      return (failureCount.equals(0));
    }
 
 

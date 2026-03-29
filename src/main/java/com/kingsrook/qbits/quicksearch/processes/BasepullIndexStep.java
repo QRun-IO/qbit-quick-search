@@ -87,7 +87,7 @@ public class BasepullIndexStep extends AbstractIndexingStep
       // 2. Query all enabled quickSearchIndex rows     //
       ////////////////////////////////////////////////////
       QueryInput queryInput = new QueryInput();
-      queryInput.setTableName(QuickSearchIndex.TABLE_NAME);
+      queryInput.setTableName(getConfig().getQuickSearchIndexTableName());
       queryInput.setFilter(new QQueryFilter()
          .withCriteria(new QFilterCriteria("enabled", QCriteriaOperator.EQUALS, true)));
 
@@ -246,6 +246,8 @@ public class BasepullIndexStep extends AbstractIndexingStep
                }
             }
 
+            documents.removeIf(doc -> doc == null);
+
             ////////////////////////////////////////////////////
             // Bulk-index the batch                           //
             ////////////////////////////////////////////////////
@@ -276,7 +278,7 @@ public class BasepullIndexStep extends AbstractIndexingStep
                .withValue("lastBasepullTime", Instant.now());
 
             UpdateInput updateInput = new UpdateInput();
-            updateInput.setTableName(QuickSearchIndex.TABLE_NAME);
+            updateInput.setTableName(getConfig().getQuickSearchIndexTableName());
             updateInput.setRecords(List.of(updateRecord));
 
             new UpdateAction().execute(updateInput);

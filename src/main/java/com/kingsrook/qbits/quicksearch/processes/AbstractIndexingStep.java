@@ -38,7 +38,6 @@ import com.kingsrook.qqq.backend.core.model.data.QRecord;
 import com.kingsrook.qbits.quicksearch.QuickSearchQBitConfig;
 import com.kingsrook.qbits.quicksearch.QuickSearchQBitContext;
 import com.kingsrook.qbits.quicksearch.QuickSearchableTableConfig;
-import com.kingsrook.qbits.quicksearch.model.QuickSearchIndex;
 import com.kingsrook.qbits.quicksearch.model.QuickSearchIndexRun;
 import com.kingsrook.qbits.quicksearch.opensearch.QuickSearchOpenSearchClient;
 
@@ -147,7 +146,7 @@ public abstract class AbstractIndexingStep implements BackendStep
       // Query for an existing index row                                          //
       //////////////////////////////////////////////////////////////////////////////
       QueryInput queryInput = new QueryInput();
-      queryInput.setTableName(QuickSearchIndex.TABLE_NAME);
+      queryInput.setTableName(getConfig().getQuickSearchIndexTableName());
       queryInput.setFilter(new QQueryFilter()
          .withCriteria(new QFilterCriteria("tableName", QCriteriaOperator.EQUALS, tableName)));
 
@@ -176,15 +175,22 @@ public abstract class AbstractIndexingStep implements BackendStep
             .withValue("status", "ACTIVE");
 
          InsertInput insertInput = new InsertInput();
-         insertInput.setTableName(QuickSearchIndex.TABLE_NAME);
+         insertInput.setTableName(getConfig().getQuickSearchIndexTableName());
          insertInput.setRecords(List.of(record));
 
          new InsertAction().execute(insertInput);
       }
       catch(Exception e)
       {
-         LOG.info("Insert of index row may have hit a duplicate key (another thread likely created it); continuing",
-            "tableName", tableName, "message", e.getMessage());
+         ////////////////////////////////////////////////////////////////////
+         // Re-query to check if another thread inserted the row           //
+         ////////////////////////////////////////////////////////////////////
+         QueryOutput recheck = new QueryAction().execute(queryInput);
+         if(recheck.getRecords().isEmpty())
+         {
+            throw new QException("Failed to create QuickSearchIndex row for table [" + tableName + "]", e);
+         }
+         LOG.debug("QuickSearchIndex row already exists (concurrent insert)", "tableName", tableName);
       }
    }
 
@@ -264,7 +270,7 @@ public abstract class AbstractIndexingStep implements BackendStep
          .withValue("startTime", Instant.now());
 
       InsertInput insertInput = new InsertInput();
-      insertInput.setTableName(QuickSearchIndexRun.TABLE_NAME);
+      insertInput.setTableName(getConfig().getQuickSearchIndexRunTableName());
       insertInput.setRecords(List.of(record));
 
       InsertOutput insertOutput = new InsertAction().execute(insertInput);
@@ -316,7 +322,7 @@ public abstract class AbstractIndexingStep implements BackendStep
             .withValue("errorMessage", errorMessage);
 
          UpdateInput updateInput = new UpdateInput();
-         updateInput.setTableName(QuickSearchIndexRun.TABLE_NAME);
+         updateInput.setTableName(getConfig().getQuickSearchIndexRunTableName());
          updateInput.setRecords(List.of(record));
 
          new UpdateAction().execute(updateInput);

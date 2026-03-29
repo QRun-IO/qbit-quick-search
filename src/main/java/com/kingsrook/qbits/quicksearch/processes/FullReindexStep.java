@@ -35,7 +35,6 @@ import com.kingsrook.qqq.backend.core.model.actions.tables.update.UpdateInput;
 import com.kingsrook.qqq.backend.core.model.data.QRecord;
 import com.kingsrook.qbits.quicksearch.QuickSearchQBitConfig;
 import com.kingsrook.qbits.quicksearch.QuickSearchableTableConfig;
-import com.kingsrook.qbits.quicksearch.model.QuickSearchIndex;
 import com.kingsrook.qbits.quicksearch.model.QuickSearchIndexRun;
 import com.kingsrook.qbits.quicksearch.opensearch.BulkIndexResult;
 import com.kingsrook.qbits.quicksearch.opensearch.OpenSearchDocument;
@@ -125,7 +124,7 @@ public class FullReindexStep extends AbstractIndexingStep
       // Query for the index row to get its ID          //
       ////////////////////////////////////////////////////
       QueryInput queryInput = new QueryInput();
-      queryInput.setTableName(QuickSearchIndex.TABLE_NAME);
+      queryInput.setTableName(getConfig().getQuickSearchIndexTableName());
       queryInput.setFilter(new QQueryFilter()
          .withCriteria(new QFilterCriteria("tableName", QCriteriaOperator.EQUALS, tableName)));
 
@@ -180,6 +179,8 @@ public class FullReindexStep extends AbstractIndexingStep
                documents.add(doc);
             }
 
+            documents.removeIf(doc -> doc == null);
+
             BulkIndexResult result = client.indexDocuments(documents, config.getBulkBatchSize());
 
             totalProcessed += batch.size();
@@ -191,23 +192,28 @@ public class FullReindexStep extends AbstractIndexingStep
 
          ////////////////////////////////////////////////////
          // Update the QuickSearchIndex row               //
+         // only when no indexing errors occurred          //
          ////////////////////////////////////////////////////
-         QRecord updateRecord = new QRecord()
-            .withValue("id", indexId)
-            .withValue("lastFullReindexTime", Instant.now())
-            .withValue("lastBasepullTime", Instant.now())
-            .withValue("recordCount", totalProcessed);
+         if(totalErrors.equals(0))
+         {
+            QRecord updateRecord = new QRecord()
+               .withValue("id", indexId)
+               .withValue("lastFullReindexTime", Instant.now())
+               .withValue("lastBasepullTime", Instant.now())
+               .withValue("recordCount", totalProcessed);
 
-         UpdateInput updateInput = new UpdateInput();
-         updateInput.setTableName(QuickSearchIndex.TABLE_NAME);
-         updateInput.setRecords(List.of(updateRecord));
+            UpdateInput updateInput = new UpdateInput();
+            updateInput.setTableName(getConfig().getQuickSearchIndexTableName());
+            updateInput.setRecords(List.of(updateRecord));
 
-         new UpdateAction().execute(updateInput);
+            new UpdateAction().execute(updateInput);
+         }
 
          ////////////////////////////////////////////////////
-         // Complete the run record as success             //
+         // Complete the run record                        //
          ////////////////////////////////////////////////////
-         completeRunRecord(run, "SUCCESS", totalProcessed, totalIndexed, totalErrors, null);
+         String finalStatus = totalErrors.equals(0) ? "COMPLETED" : "FAILED";
+         completeRunRecord(run, finalStatus, totalProcessed, totalIndexed, totalErrors, null);
 
          LOG.info("Full reindex complete", "tableName", tableName, "totalProcessed", totalProcessed,
             "totalIndexed", totalIndexed, "totalErrors", totalErrors);

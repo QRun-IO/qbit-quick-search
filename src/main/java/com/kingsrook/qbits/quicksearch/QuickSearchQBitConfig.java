@@ -20,6 +20,8 @@ import java.util.List;
 import com.kingsrook.qqq.backend.core.model.metadata.QInstance;
 import com.kingsrook.qqq.backend.core.model.metadata.qbits.QBitConfig;
 import com.kingsrook.qqq.backend.core.utils.StringUtils;
+import com.kingsrook.qbits.quicksearch.model.QuickSearchIndex;
+import com.kingsrook.qbits.quicksearch.model.QuickSearchIndexRun;
 import com.kingsrook.qbits.quicksearch.publisher.IndexEventPublisher;
 
 
@@ -139,6 +141,26 @@ public class QuickSearchQBitConfig implements QBitConfig
          return tableNamePrefix + name;
       }
       return name;
+   }
+
+
+
+   /***************************************************************************
+    ** Return the prefixed table name for the QuickSearchIndex table.
+    ***************************************************************************/
+   public String getQuickSearchIndexTableName()
+   {
+      return applyPrefix(QuickSearchIndex.TABLE_NAME);
+   }
+
+
+
+   /***************************************************************************
+    ** Return the prefixed table name for the QuickSearchIndexRun table.
+    ***************************************************************************/
+   public String getQuickSearchIndexRunTableName()
+   {
+      return applyPrefix(QuickSearchIndexRun.TABLE_NAME);
    }
 
 

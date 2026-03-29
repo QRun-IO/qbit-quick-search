@@ -222,7 +222,7 @@ class FullReindexStepTest extends BaseQuickSearchTest
       assertThat(runRecords).hasSize(1);
 
       QRecord runRecord = runRecords.get(0);
-      assertThat(runRecord.getValueString("status")).isEqualTo("SUCCESS");
+      assertThat(runRecord.getValueString("status")).isEqualTo("COMPLETED");
       assertThat(runRecord.getValueInteger("recordsProcessed")).isEqualTo(0);
       assertThat(runRecord.getValueInteger("recordsIndexed")).isEqualTo(0);
 
