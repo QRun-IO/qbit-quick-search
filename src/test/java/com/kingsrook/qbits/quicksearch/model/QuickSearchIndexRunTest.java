@@ -5,7 +5,7 @@
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
  *
- *     http://www.apache.org/licenses/LICENSE-2.0
+ *     https://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -13,6 +13,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+
 package com.kingsrook.qbits.quicksearch.model;
 
 
@@ -27,9 +28,9 @@ import static org.assertj.core.api.Assertions.assertThat;
 class QuickSearchIndexRunTest
 {
 
-   /***************************************************************************
-    ** Test TABLE_NAME constant.
-    ***************************************************************************/
+   /*******************************************************************************
+    ** Test that TABLE_NAME constant has expected value.
+    *******************************************************************************/
    @Test
    void testTableNameConstant()
    {
@@ -38,95 +39,92 @@ class QuickSearchIndexRunTest
 
 
 
-   /***************************************************************************
-    ** Test all getters and fluent setters.
-    ***************************************************************************/
+   /*******************************************************************************
+    ** Test that fluent setters return this (fluent chaining).
+    *******************************************************************************/
    @Test
-   void testGettersAndSetters()
+   void testFluentSettersReturnThis()
    {
-      Instant start = Instant.now();
-      Instant end = start.plusSeconds(60);
-
-      QuickSearchIndexRun run = new QuickSearchIndexRun()
-         .withId(1)
-         .withQuickSearchIndexId(100)
-         .withRunType("FULL")
-         .withStatus("COMPLETE")
-         .withStartTime(start)
-         .withEndTime(end)
-         .withRecordsProcessed(1000)
-         .withRecordsIndexed(950)
-         .withErrorCount(5)
-         .withErrorMessage("Some warnings");
-
-      assertThat(run.getId()).isEqualTo(1);
-      assertThat(run.getQuickSearchIndexId()).isEqualTo(100);
-      assertThat(run.getRunType()).isEqualTo("FULL");
-      assertThat(run.getStatus()).isEqualTo("COMPLETE");
-      assertThat(run.getStartTime()).isEqualTo(start);
-      assertThat(run.getEndTime()).isEqualTo(end);
-      assertThat(run.getRecordsProcessed()).isEqualTo(1000);
-      assertThat(run.getRecordsIndexed()).isEqualTo(950);
-      assertThat(run.getErrorCount()).isEqualTo(5);
-      assertThat(run.getErrorMessage()).isEqualTo("Some warnings");
-   }
-
-
-
-   /***************************************************************************
-    ** Test standard setters.
-    ***************************************************************************/
-   @Test
-   void testStandardSetters()
-   {
-      Instant start = Instant.now();
-      Instant end = start.plusSeconds(30);
-
-      QuickSearchIndexRun run = new QuickSearchIndexRun();
-      run.setId(2);
-      run.setQuickSearchIndexId(200);
-      run.setRunType("BASEPULL");
-      run.setStatus("RUNNING");
-      run.setStartTime(start);
-      run.setEndTime(end);
-      run.setRecordsProcessed(500);
-      run.setRecordsIndexed(500);
-      run.setErrorCount(0);
-      run.setErrorMessage(null);
-
-      assertThat(run.getId()).isEqualTo(2);
-      assertThat(run.getQuickSearchIndexId()).isEqualTo(200);
-      assertThat(run.getRunType()).isEqualTo("BASEPULL");
-      assertThat(run.getStatus()).isEqualTo("RUNNING");
-      assertThat(run.getStartTime()).isEqualTo(start);
-      assertThat(run.getEndTime()).isEqualTo(end);
-      assertThat(run.getRecordsProcessed()).isEqualTo(500);
-      assertThat(run.getRecordsIndexed()).isEqualTo(500);
-      assertThat(run.getErrorCount()).isEqualTo(0);
-      assertThat(run.getErrorMessage()).isNull();
-   }
-
-
-
-   /***************************************************************************
-    ** Test fluent setters return this.
-    ***************************************************************************/
-   @Test
-   void testFluentSetters_returnThis()
-   {
-      QuickSearchIndexRun run = new QuickSearchIndexRun();
+      QuickSearchIndexRun entity = new QuickSearchIndexRun();
       Instant now = Instant.now();
 
-      assertThat(run.withId(1)).isSameAs(run);
-      assertThat(run.withQuickSearchIndexId(1)).isSameAs(run);
-      assertThat(run.withRunType("FULL")).isSameAs(run);
-      assertThat(run.withStatus("RUNNING")).isSameAs(run);
-      assertThat(run.withStartTime(now)).isSameAs(run);
-      assertThat(run.withEndTime(now)).isSameAs(run);
-      assertThat(run.withRecordsProcessed(0)).isSameAs(run);
-      assertThat(run.withRecordsIndexed(0)).isSameAs(run);
-      assertThat(run.withErrorCount(0)).isSameAs(run);
-      assertThat(run.withErrorMessage(null)).isSameAs(run);
+      assertThat(entity.withId(1)).isSameAs(entity);
+      assertThat(entity.withQuickSearchIndexId(10)).isSameAs(entity);
+      assertThat(entity.withRunType("basepull")).isSameAs(entity);
+      assertThat(entity.withStatus("running")).isSameAs(entity);
+      assertThat(entity.withStartTime(now)).isSameAs(entity);
+      assertThat(entity.withEndTime(now)).isSameAs(entity);
+      assertThat(entity.withRecordsProcessed(500)).isSameAs(entity);
+      assertThat(entity.withRecordsIndexed(490)).isSameAs(entity);
+      assertThat(entity.withErrorCount(10)).isSameAs(entity);
+      assertThat(entity.withErrorMessage("something failed")).isSameAs(entity);
+      assertThat(entity.withCreateDate(now)).isSameAs(entity);
+      assertThat(entity.withModifyDate(now)).isSameAs(entity);
+   }
+
+
+
+   /*******************************************************************************
+    ** Test that getters return values set via fluent setters.
+    *******************************************************************************/
+   @Test
+   void testGettersReturnSetValues()
+   {
+      Instant startTime = Instant.parse("2024-03-01T09:00:00Z");
+      Instant endTime = Instant.parse("2024-03-01T09:05:00Z");
+      Instant createDate = Instant.parse("2024-03-01T09:00:00Z");
+      Instant modifyDate = Instant.parse("2024-03-01T09:05:30Z");
+
+      QuickSearchIndexRun entity = new QuickSearchIndexRun()
+         .withId(7)
+         .withQuickSearchIndexId(3)
+         .withRunType("fullReindex")
+         .withStatus("completed")
+         .withStartTime(startTime)
+         .withEndTime(endTime)
+         .withRecordsProcessed(1000)
+         .withRecordsIndexed(998)
+         .withErrorCount(2)
+         .withErrorMessage("2 records failed validation")
+         .withCreateDate(createDate)
+         .withModifyDate(modifyDate);
+
+      assertThat(entity.getId()).isEqualTo(7);
+      assertThat(entity.getQuickSearchIndexId()).isEqualTo(3);
+      assertThat(entity.getRunType()).isEqualTo("fullReindex");
+      assertThat(entity.getStatus()).isEqualTo("completed");
+      assertThat(entity.getStartTime()).isEqualTo(startTime);
+      assertThat(entity.getEndTime()).isEqualTo(endTime);
+      assertThat(entity.getRecordsProcessed()).isEqualTo(1000);
+      assertThat(entity.getRecordsIndexed()).isEqualTo(998);
+      assertThat(entity.getErrorCount()).isEqualTo(2);
+      assertThat(entity.getErrorMessage()).isEqualTo("2 records failed validation");
+      assertThat(entity.getCreateDate()).isEqualTo(createDate);
+      assertThat(entity.getModifyDate()).isEqualTo(modifyDate);
+   }
+
+
+
+   /*******************************************************************************
+    ** Test that all fields default to null on a new instance.
+    *******************************************************************************/
+   @Test
+   void testDefaultsAreNull()
+   {
+      QuickSearchIndexRun entity = new QuickSearchIndexRun();
+
+      assertThat(entity.getId()).isNull();
+      assertThat(entity.getQuickSearchIndexId()).isNull();
+      assertThat(entity.getRunType()).isNull();
+      assertThat(entity.getStatus()).isNull();
+      assertThat(entity.getStartTime()).isNull();
+      assertThat(entity.getEndTime()).isNull();
+      assertThat(entity.getRecordsProcessed()).isNull();
+      assertThat(entity.getRecordsIndexed()).isNull();
+      assertThat(entity.getErrorCount()).isNull();
+      assertThat(entity.getErrorMessage()).isNull();
+      assertThat(entity.getCreateDate()).isNull();
+      assertThat(entity.getModifyDate()).isNull();
    }
 
 }

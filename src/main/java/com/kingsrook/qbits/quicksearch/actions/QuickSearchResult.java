@@ -5,7 +5,7 @@
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
  *
- *     http://www.apache.org/licenses/LICENSE-2.0
+ *     https://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -13,141 +13,161 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+
 package com.kingsrook.qbits.quicksearch.actions;
 
 
 /*******************************************************************************
- ** A single result from a quick search query.
+ ** A single search hit returned by a QuickSearch query, representing one
+ ** matching record with its relevance score and optional highlight snippet.
  *******************************************************************************/
 public class QuickSearchResult
 {
+
    private String tableName;
    private String recordId;
    private String recordLabel;
-   private String matchedText;
+   private Float  score;
+   private String highlightSnippet;
 
 
-
-   /***************************************************************************
-    ** Getter for tableName
-    ***************************************************************************/
+   /*******************************************************************************
+    ** Getter for tableName.
+    *******************************************************************************/
    public String getTableName()
    {
-      return (this.tableName);
+      return tableName;
    }
 
 
-
-   /***************************************************************************
-    ** Setter for tableName
-    ***************************************************************************/
+   /*******************************************************************************
+    ** Setter for tableName.
+    *******************************************************************************/
    public void setTableName(String tableName)
    {
       this.tableName = tableName;
    }
 
 
-
-   /***************************************************************************
-    ** Fluent setter for tableName
-    ***************************************************************************/
+   /*******************************************************************************
+    ** Fluent setter for tableName.
+    *******************************************************************************/
    public QuickSearchResult withTableName(String tableName)
    {
       this.tableName = tableName;
-      return (this);
+      return this;
    }
 
 
-
-   /***************************************************************************
-    ** Getter for recordId
-    ***************************************************************************/
+   /*******************************************************************************
+    ** Getter for recordId.
+    *******************************************************************************/
    public String getRecordId()
    {
-      return (this.recordId);
+      return recordId;
    }
 
 
-
-   /***************************************************************************
-    ** Setter for recordId
-    ***************************************************************************/
+   /*******************************************************************************
+    ** Setter for recordId.
+    *******************************************************************************/
    public void setRecordId(String recordId)
    {
       this.recordId = recordId;
    }
 
 
-
-   /***************************************************************************
-    ** Fluent setter for recordId
-    ***************************************************************************/
+   /*******************************************************************************
+    ** Fluent setter for recordId.
+    *******************************************************************************/
    public QuickSearchResult withRecordId(String recordId)
    {
       this.recordId = recordId;
-      return (this);
+      return this;
    }
 
 
-
-   /***************************************************************************
-    ** Getter for recordLabel
-    ***************************************************************************/
+   /*******************************************************************************
+    ** Getter for recordLabel.
+    *******************************************************************************/
    public String getRecordLabel()
    {
-      return (this.recordLabel);
+      return recordLabel;
    }
 
 
-
-   /***************************************************************************
-    ** Setter for recordLabel
-    ***************************************************************************/
+   /*******************************************************************************
+    ** Setter for recordLabel.
+    *******************************************************************************/
    public void setRecordLabel(String recordLabel)
    {
       this.recordLabel = recordLabel;
    }
 
 
-
-   /***************************************************************************
-    ** Fluent setter for recordLabel
-    ***************************************************************************/
+   /*******************************************************************************
+    ** Fluent setter for recordLabel.
+    *******************************************************************************/
    public QuickSearchResult withRecordLabel(String recordLabel)
    {
       this.recordLabel = recordLabel;
-      return (this);
+      return this;
    }
 
 
-
-   /***************************************************************************
-    ** Getter for matchedText
-    ***************************************************************************/
-   public String getMatchedText()
+   /*******************************************************************************
+    ** Getter for score.
+    *******************************************************************************/
+   public Float getScore()
    {
-      return (this.matchedText);
+      return score;
    }
 
 
-
-   /***************************************************************************
-    ** Setter for matchedText
-    ***************************************************************************/
-   public void setMatchedText(String matchedText)
+   /*******************************************************************************
+    ** Setter for score.
+    *******************************************************************************/
+   public void setScore(Float score)
    {
-      this.matchedText = matchedText;
+      this.score = score;
    }
 
 
-
-   /***************************************************************************
-    ** Fluent setter for matchedText
-    ***************************************************************************/
-   public QuickSearchResult withMatchedText(String matchedText)
+   /*******************************************************************************
+    ** Fluent setter for score.
+    *******************************************************************************/
+   public QuickSearchResult withScore(Float score)
    {
-      this.matchedText = matchedText;
-      return (this);
+      this.score = score;
+      return this;
+   }
+
+
+   /*******************************************************************************
+    ** Getter for highlightSnippet.
+    *******************************************************************************/
+   public String getHighlightSnippet()
+   {
+      return highlightSnippet;
+   }
+
+
+   /*******************************************************************************
+    ** Setter for highlightSnippet.
+    *******************************************************************************/
+   public void setHighlightSnippet(String highlightSnippet)
+   {
+      this.highlightSnippet = highlightSnippet;
+   }
+
+
+   /*******************************************************************************
+    ** Fluent setter for highlightSnippet.
+    *******************************************************************************/
+   public QuickSearchResult withHighlightSnippet(String highlightSnippet)
+   {
+      this.highlightSnippet = highlightSnippet;
+      return this;
    }
 
 }

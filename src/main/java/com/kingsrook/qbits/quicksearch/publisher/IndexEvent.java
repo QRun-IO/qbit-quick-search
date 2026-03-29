@@ -14,49 +14,23 @@
  * limitations under the License.
  */
 
-package com.kingsrook.qbits.quicksearch.actions;
+package com.kingsrook.qbits.quicksearch.publisher;
+
+
+import com.kingsrook.qqq.backend.core.model.data.QRecord;
 
 
 /*******************************************************************************
- ** Input DTO for the QuickSearch action.
- **
- ** Carries the search term plus optional filtering and pagination parameters.
+ ** Data transfer object representing an event to index or delete a record in
+ ** the OpenSearch quick-search index.
  *******************************************************************************/
-public class QuickSearchInput
+public class IndexEvent
 {
 
-   private String  searchTerm;
-   private String  tableName;
-   private Integer limit;
-   private Integer offset;
-
-
-   /*******************************************************************************
-    ** Getter for searchTerm.
-    *******************************************************************************/
-   public String getSearchTerm()
-   {
-      return searchTerm;
-   }
-
-
-   /*******************************************************************************
-    ** Setter for searchTerm.
-    *******************************************************************************/
-   public void setSearchTerm(String searchTerm)
-   {
-      this.searchTerm = searchTerm;
-   }
-
-
-   /*******************************************************************************
-    ** Fluent setter for searchTerm.
-    *******************************************************************************/
-   public QuickSearchInput withSearchTerm(String searchTerm)
-   {
-      this.searchTerm = searchTerm;
-      return this;
-   }
+   private String           tableName;
+   private String           recordId;
+   private IndexEventAction action;
+   private QRecord          record;
 
 
    /*******************************************************************************
@@ -80,7 +54,7 @@ public class QuickSearchInput
    /*******************************************************************************
     ** Fluent setter for tableName.
     *******************************************************************************/
-   public QuickSearchInput withTableName(String tableName)
+   public IndexEvent withTableName(String tableName)
    {
       this.tableName = tableName;
       return this;
@@ -88,57 +62,85 @@ public class QuickSearchInput
 
 
    /*******************************************************************************
-    ** Getter for limit.
+    ** Getter for recordId.
     *******************************************************************************/
-   public Integer getLimit()
+   public String getRecordId()
    {
-      return limit;
+      return recordId;
    }
 
 
    /*******************************************************************************
-    ** Setter for limit.
+    ** Setter for recordId.
     *******************************************************************************/
-   public void setLimit(Integer limit)
+   public void setRecordId(String recordId)
    {
-      this.limit = limit;
+      this.recordId = recordId;
    }
 
 
    /*******************************************************************************
-    ** Fluent setter for limit.
+    ** Fluent setter for recordId.
     *******************************************************************************/
-   public QuickSearchInput withLimit(Integer limit)
+   public IndexEvent withRecordId(String recordId)
    {
-      this.limit = limit;
+      this.recordId = recordId;
       return this;
    }
 
 
    /*******************************************************************************
-    ** Getter for offset.
+    ** Getter for action.
     *******************************************************************************/
-   public Integer getOffset()
+   public IndexEventAction getAction()
    {
-      return offset;
+      return action;
    }
 
 
    /*******************************************************************************
-    ** Setter for offset.
+    ** Setter for action.
     *******************************************************************************/
-   public void setOffset(Integer offset)
+   public void setAction(IndexEventAction action)
    {
-      this.offset = offset;
+      this.action = action;
    }
 
 
    /*******************************************************************************
-    ** Fluent setter for offset.
+    ** Fluent setter for action.
     *******************************************************************************/
-   public QuickSearchInput withOffset(Integer offset)
+   public IndexEvent withAction(IndexEventAction action)
    {
-      this.offset = offset;
+      this.action = action;
+      return this;
+   }
+
+
+   /*******************************************************************************
+    ** Getter for record.
+    *******************************************************************************/
+   public QRecord getRecord()
+   {
+      return record;
+   }
+
+
+   /*******************************************************************************
+    ** Setter for record.
+    *******************************************************************************/
+   public void setRecord(QRecord record)
+   {
+      this.record = record;
+   }
+
+
+   /*******************************************************************************
+    ** Fluent setter for record.
+    *******************************************************************************/
+   public IndexEvent withRecord(QRecord record)
+   {
+      this.record = record;
       return this;
    }
 

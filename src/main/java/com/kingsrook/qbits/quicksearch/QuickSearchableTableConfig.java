@@ -17,18 +17,26 @@ package com.kingsrook.qbits.quicksearch;
 
 
 import java.util.List;
+import java.util.Map;
 
 
 /*******************************************************************************
  ** Configuration for a table that is searchable via Quick Search.
+ **
+ ** Describes which fields to index, optional per-field boost weights,
+ ** optional per-field label-inclusion flags, basepull scheduling, and
+ ** whether the table is enabled by default.
  *******************************************************************************/
 public class QuickSearchableTableConfig
 {
-   private String       tableName;
-   private List<String> searchableFields;
-   private Integer      basepullIntervalMinutes;
-   private String       basepullTimestampField;
-   private Boolean      enabledByDefault;
+   private String              tableName;
+   private String              primaryKeyField;
+   private List<String>        searchableFields;
+   private Map<String, Integer> fieldWeights;
+   private Map<String, Boolean> fieldIncludeLabels;
+   private Integer             basepullIntervalMinutes;
+   private String              basepullTimestampField;
+   private Boolean             enabledByDefault;
 
 
 
@@ -64,6 +72,37 @@ public class QuickSearchableTableConfig
 
 
    /***************************************************************************
+    ** Getter for primaryKeyField
+    ***************************************************************************/
+   public String getPrimaryKeyField()
+   {
+      return (this.primaryKeyField);
+   }
+
+
+
+   /***************************************************************************
+    ** Setter for primaryKeyField
+    ***************************************************************************/
+   public void setPrimaryKeyField(String primaryKeyField)
+   {
+      this.primaryKeyField = primaryKeyField;
+   }
+
+
+
+   /***************************************************************************
+    ** Fluent setter for primaryKeyField
+    ***************************************************************************/
+   public QuickSearchableTableConfig withPrimaryKeyField(String primaryKeyField)
+   {
+      this.primaryKeyField = primaryKeyField;
+      return (this);
+   }
+
+
+
+   /***************************************************************************
     ** Getter for searchableFields
     ***************************************************************************/
    public List<String> getSearchableFields()
@@ -89,6 +128,68 @@ public class QuickSearchableTableConfig
    public QuickSearchableTableConfig withSearchableFields(List<String> searchableFields)
    {
       this.searchableFields = searchableFields;
+      return (this);
+   }
+
+
+
+   /***************************************************************************
+    ** Getter for fieldWeights
+    ***************************************************************************/
+   public Map<String, Integer> getFieldWeights()
+   {
+      return (this.fieldWeights);
+   }
+
+
+
+   /***************************************************************************
+    ** Setter for fieldWeights
+    ***************************************************************************/
+   public void setFieldWeights(Map<String, Integer> fieldWeights)
+   {
+      this.fieldWeights = fieldWeights;
+   }
+
+
+
+   /***************************************************************************
+    ** Fluent setter for fieldWeights
+    ***************************************************************************/
+   public QuickSearchableTableConfig withFieldWeights(Map<String, Integer> fieldWeights)
+   {
+      this.fieldWeights = fieldWeights;
+      return (this);
+   }
+
+
+
+   /***************************************************************************
+    ** Getter for fieldIncludeLabels
+    ***************************************************************************/
+   public Map<String, Boolean> getFieldIncludeLabels()
+   {
+      return (this.fieldIncludeLabels);
+   }
+
+
+
+   /***************************************************************************
+    ** Setter for fieldIncludeLabels
+    ***************************************************************************/
+   public void setFieldIncludeLabels(Map<String, Boolean> fieldIncludeLabels)
+   {
+      this.fieldIncludeLabels = fieldIncludeLabels;
+   }
+
+
+
+   /***************************************************************************
+    ** Fluent setter for fieldIncludeLabels
+    ***************************************************************************/
+   public QuickSearchableTableConfig withFieldIncludeLabels(Map<String, Boolean> fieldIncludeLabels)
+   {
+      this.fieldIncludeLabels = fieldIncludeLabels;
       return (this);
    }
 

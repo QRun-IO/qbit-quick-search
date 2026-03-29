@@ -20,21 +20,12 @@ import java.time.Instant;
 import java.time.temporal.ChronoUnit;
 import java.util.ArrayList;
 import java.util.List;
-import com.kingsrook.qbits.quicksearch.QuickSearchQBitConfig;
-import com.kingsrook.qbits.quicksearch.model.QuickSearchIndex;
-import com.kingsrook.qbits.quicksearch.model.QuickSearchIndexRun;
-import com.kingsrook.qbits.quicksearch.opensearch.OpenSearchDocument;
-import com.kingsrook.qbits.quicksearch.opensearch.QuickSearchOpenSearchClient;
-import com.kingsrook.qqq.backend.core.actions.processes.BackendStep;
-import com.kingsrook.qqq.backend.core.actions.tables.InsertAction;
-import com.kingsrook.qqq.backend.core.actions.tables.QueryAction;
 import com.kingsrook.qqq.backend.core.actions.tables.UpdateAction;
-import com.kingsrook.qqq.backend.core.context.QContext;
+import com.kingsrook.qqq.backend.core.actions.tables.QueryAction;
 import com.kingsrook.qqq.backend.core.exceptions.QException;
 import com.kingsrook.qqq.backend.core.logging.QLogger;
 import com.kingsrook.qqq.backend.core.model.actions.processes.RunBackendStepInput;
 import com.kingsrook.qqq.backend.core.model.actions.processes.RunBackendStepOutput;
-import com.kingsrook.qqq.backend.core.model.actions.tables.insert.InsertInput;
 import com.kingsrook.qqq.backend.core.model.actions.tables.query.QCriteriaOperator;
 import com.kingsrook.qqq.backend.core.model.actions.tables.query.QFilterCriteria;
 import com.kingsrook.qqq.backend.core.model.actions.tables.query.QQueryFilter;
@@ -42,329 +33,269 @@ import com.kingsrook.qqq.backend.core.model.actions.tables.query.QueryInput;
 import com.kingsrook.qqq.backend.core.model.actions.tables.query.QueryOutput;
 import com.kingsrook.qqq.backend.core.model.actions.tables.update.UpdateInput;
 import com.kingsrook.qqq.backend.core.model.data.QRecord;
-import com.kingsrook.qqq.backend.core.model.metadata.tables.QTableMetaData;
-import com.kingsrook.qqq.backend.core.utils.JsonUtils;
-import com.kingsrook.qqq.backend.core.utils.StringUtils;
-import static com.kingsrook.qqq.backend.core.logging.LogUtils.logPair;
+import com.kingsrook.qbits.quicksearch.QuickSearchQBitConfig;
+import com.kingsrook.qbits.quicksearch.QuickSearchableTableConfig;
+import com.kingsrook.qbits.quicksearch.model.QuickSearchIndex;
+import com.kingsrook.qbits.quicksearch.model.QuickSearchIndexRun;
+import com.kingsrook.qbits.quicksearch.opensearch.BulkIndexResult;
+import com.kingsrook.qbits.quicksearch.opensearch.OpenSearchDocument;
+import com.kingsrook.qbits.quicksearch.opensearch.QuickSearchOpenSearchClient;
 
 
 /*******************************************************************************
- ** Step that performs incremental basepull indexing of Quick Search indexes.
+ ** Incremental basepull indexing process step.
+ **
+ ** Queries all enabled QuickSearchIndex rows, checks whether each is due for a
+ ** basepull run, and for those that are, queries the source table for records
+ ** modified since the last basepull, builds OpenSearch documents, and bulk-indexes
+ ** them.
+ **
+ ** Run records are created at the start of each per-table run and updated with
+ ** final status and counts on completion.  Per-table failures are caught and
+ ** logged so that one bad table does not prevent others from being processed.
  *******************************************************************************/
-public class BasepullIndexStep implements BackendStep
+public class BasepullIndexStep extends AbstractIndexingStep
 {
    private static final QLogger LOG = QLogger.getLogger(BasepullIndexStep.class);
 
-   public static final String FIELD_CONFIG = "quickSearchConfig";
 
 
-
-   /***************************************************************************
-    ** Execute the basepull indexing.
-    ***************************************************************************/
+   /*******************************************************************************
+    ** Main entry point called by the QQQ process engine.
+    **
+    ** 1. For each discovered table, ensure a quickSearchIndex row exists.
+    ** 2. Query all enabled quickSearchIndex rows.
+    ** 3. For each enabled row, check isDueForBasepull and run basepullIndex.
+    **
+    ** @param input  process step input (not directly used)
+    ** @param output process step output (not directly used)
+    ** @throws QException if an unrecoverable error occurs (per-table errors are caught)
+    *******************************************************************************/
    @Override
    public void run(RunBackendStepInput input, RunBackendStepOutput output) throws QException
    {
-      QuickSearchQBitConfig config = (QuickSearchQBitConfig) input.getValue(FIELD_CONFIG);
-
-      if(config == null)
+      ////////////////////////////////////////////////////
+      // 1. Ensure index rows exist for all tables      //
+      ////////////////////////////////////////////////////
+      List<QuickSearchableTableConfig> discoveredTables = getDiscoveredTables();
+      for(QuickSearchableTableConfig tableConfig : discoveredTables)
       {
-         throw new QException("QuickSearchQBitConfig is required");
+         ensureIndexRowExists(tableConfig.getTableName(), tableConfig);
       }
 
-      List<QuickSearchIndex> indexes = loadEnabledIndexesDueForBasepull(config);
+      ////////////////////////////////////////////////////
+      // 2. Query all enabled quickSearchIndex rows     //
+      ////////////////////////////////////////////////////
+      QueryInput queryInput = new QueryInput();
+      queryInput.setTableName(QuickSearchIndex.TABLE_NAME);
+      queryInput.setFilter(new QQueryFilter()
+         .withCriteria(new QFilterCriteria("enabled", QCriteriaOperator.EQUALS, true)));
 
-      if(indexes.isEmpty())
+      QueryOutput queryOutput = new QueryAction().execute(queryInput);
+      List<QRecord> indexRecords = queryOutput.getRecords();
+
+      if(indexRecords == null || indexRecords.isEmpty())
       {
-         LOG.debug("No indexes due for basepull");
+         LOG.info("No enabled quickSearchIndex rows found; nothing to basepull");
          return;
       }
 
-      QuickSearchOpenSearchClient searchClient = new QuickSearchOpenSearchClient(config);
+      ////////////////////////////////////////////////////
+      // 3. Process each enabled index row              //
+      ////////////////////////////////////////////////////
+      for(QRecord indexRecord : indexRecords)
+      {
+         QuickSearchIndex index = new QuickSearchIndex()
+            .withId(indexRecord.getValueInteger("id"))
+            .withTableName(indexRecord.getValueString("tableName"))
+            .withEnabled(indexRecord.getValueBoolean("enabled"))
+            .withBasepullIntervalMinutes(indexRecord.getValueInteger("basepullIntervalMinutes"))
+            .withBasepullTimestampField(indexRecord.getValueString("basepullTimestampField"))
+            .withLastBasepullTime(indexRecord.getValueInstant("lastBasepullTime"));
 
-      try
-      {
-         for(QuickSearchIndex index : indexes)
+         if(!isDueForBasepull(index))
          {
-            try
-            {
-               basepullIndex(config, searchClient, index);
-            }
-            catch(Exception e)
-            {
-               LOG.warn("Basepull failed for index", logPair("tableName", index.getTableName()), e);
-            }
+            LOG.info("Index not due for basepull; skipping",
+               "tableName", index.getTableName(),
+               "lastBasepullTime", index.getLastBasepullTime());
+            continue;
          }
-      }
-      finally
-      {
-         searchClient.close();
+
+         try
+         {
+            basepullIndex(index);
+         }
+         catch(Exception e)
+         {
+            LOG.warn("Error during basepull for table; continuing with next table",
+               e, "tableName", index.getTableName());
+         }
       }
    }
 
 
 
-   /***************************************************************************
-    ** Load enabled indexes that are due for basepull.
-    ***************************************************************************/
-   private List<QuickSearchIndex> loadEnabledIndexesDueForBasepull(QuickSearchQBitConfig config) throws QException
+   /*******************************************************************************
+    ** Determine whether this index is due for a basepull run.
+    **
+    ** Returns true when lastBasepullTime is null (never run), or when the elapsed
+    ** time since the last run has exceeded the configured interval.
+    **
+    ** @param index the QuickSearchIndex row to evaluate
+    ** @return true if a basepull should be executed for this index
+    *******************************************************************************/
+   boolean isDueForBasepull(QuickSearchIndex index)
    {
-      String indexTableName = config.applyPrefix(QuickSearchIndex.TABLE_NAME);
+      Instant lastBasepullTime = index.getLastBasepullTime();
 
-      QueryInput queryInput = new QueryInput()
-         .withTableName(indexTableName)
-         .withFilter(new QQueryFilter()
-            .withCriteria(new QFilterCriteria("isEnabled", QCriteriaOperator.EQUALS, true)));
-
-      QueryOutput queryOutput = new QueryAction().execute(queryInput);
-
-      Instant now = Instant.now();
-      List<QuickSearchIndex> dueIndexes = new ArrayList<>();
-
-      for(QRecord record : queryOutput.getRecords())
+      if(lastBasepullTime == null)
       {
-         QuickSearchIndex index = mapRecordToIndex(record);
-         if(isDueForBasepull(index, now))
-         {
-            dueIndexes.add(index);
-         }
-      }
-
-      return dueIndexes;
-   }
-
-
-
-   /***************************************************************************
-    ** Check if an index is due for basepull based on its interval.
-    ***************************************************************************/
-   private boolean isDueForBasepull(QuickSearchIndex index, Instant now)
-   {
-      if(index.getLastBasepullTime() == null)
-      {
-         return true;
+         return (true);
       }
 
       Integer intervalMinutes = index.getBasepullIntervalMinutes();
-      if(intervalMinutes == null || intervalMinutes <= 0)
+      if(intervalMinutes == null)
       {
-         intervalMinutes = 5;
+         return (true);
       }
 
-      Instant nextDue = index.getLastBasepullTime().plus(intervalMinutes, ChronoUnit.MINUTES);
-      return now.isAfter(nextDue);
+      return (lastBasepullTime.plus(intervalMinutes, ChronoUnit.MINUTES).isBefore(Instant.now()));
    }
 
 
 
-   /***************************************************************************
-    ** Perform basepull indexing for a single index.
-    ***************************************************************************/
-   private void basepullIndex(QuickSearchQBitConfig config, QuickSearchOpenSearchClient searchClient, QuickSearchIndex index) throws QException
+   /*******************************************************************************
+    ** Execute a basepull indexing run for one QuickSearchIndex row.
+    **
+    ** Steps:
+    ** 1. Resolve table config and client.
+    ** 2. Create a run record (status=RUNNING).
+    ** 3. Build an optional QQueryFilter using lastBasepullTime.
+    ** 4. Paginate through the source table, building and indexing documents.
+    ** 5. Update lastBasepullTime on the QuickSearchIndex row.
+    ** 6. Complete the run record with final status and counts.
+    **
+    ** @param index the QuickSearchIndex row driving this run
+    ** @throws QException if an error occurs that cannot be handled locally
+    *******************************************************************************/
+   void basepullIndex(QuickSearchIndex index) throws QException
    {
-      String tableName = index.getTableName();
-      LOG.debug("Starting basepull", logPair("tableName", tableName));
+      String                   tableName   = index.getTableName();
+      QuickSearchableTableConfig tableConfig = getTableConfig(tableName);
+      QuickSearchOpenSearchClient client    = getClient();
+      QuickSearchQBitConfig    config      = getConfig();
 
-      Instant startTime = Instant.now();
-      QuickSearchIndexRun run = createRunRecord(config, index, "BASEPULL", "RUNNING", startTime);
+      QuickSearchIndexRun run = createRunRecord(index.getId(), "BASEPULL");
 
-      int recordsProcessed = 0;
-      int recordsIndexed = 0;
-      String errorMessage = null;
+      Integer totalProcessed = 0;
+      Integer totalIndexed   = 0;
+      Integer totalErrors    = 0;
+      String  errorMessage   = null;
 
       try
       {
-         QTableMetaData table = QContext.getQInstance().getTable(tableName);
-         if(table == null)
+         ///////////////////////////////////////////////////////////////////
+         // Build filter: timestamp field > lastBasepullTime (if set)     //
+         ///////////////////////////////////////////////////////////////////
+         QQueryFilter filter = null;
+
+         if(index.getLastBasepullTime() != null && tableConfig != null
+            && tableConfig.getBasepullTimestampField() != null)
          {
-            throw new QException("Table not found: " + tableName);
+            filter = new QQueryFilter()
+               .withCriteria(new QFilterCriteria(
+                  tableConfig.getBasepullTimestampField(),
+                  QCriteriaOperator.GREATER_THAN,
+                  index.getLastBasepullTime()));
          }
 
-         List<String> searchableFields = parseFieldsJson(index.getSearchableFieldsJson());
-         String timestampField = index.getBasepullTimestampField();
+         Integer sourceBatchSize = config.getSourceBatchSize();
+         Integer bulkBatchSize   = config.getBulkBatchSize();
 
-         if(!StringUtils.hasContent(timestampField))
+         ///////////////////////////////////////////////////////////////////
+         // Paginate through the source table                             //
+         ///////////////////////////////////////////////////////////////////
+         int offset = 0;
+
+         while(true)
          {
-            timestampField = "modifyDate";
-         }
+            List<QRecord> batch = querySourceTableBatch(tableName, filter, sourceBatchSize, offset);
 
-         /////////////////////////////////////////////
-         // Build query for records since last run //
-         /////////////////////////////////////////////
-         QQueryFilter filter = new QQueryFilter();
-         Instant lastRun = index.getLastBasepullTime();
-
-         if(lastRun != null)
-         {
-            filter.withCriteria(new QFilterCriteria(timestampField, QCriteriaOperator.GREATER_THAN, lastRun));
-         }
-         filter.withCriteria(new QFilterCriteria(timestampField, QCriteriaOperator.LESS_THAN_OR_EQUALS, startTime));
-
-         QueryInput queryInput = new QueryInput()
-            .withTableName(tableName)
-            .withFilter(filter);
-
-         QueryOutput queryOutput = new QueryAction().execute(queryInput);
-         recordsProcessed = queryOutput.getRecords().size();
-
-         if(recordsProcessed > 0)
-         {
-            /////////////////////////////////////
-            // Build and index documents //
-            /////////////////////////////////////
-            List<OpenSearchDocument> documents = new ArrayList<>();
-            for(QRecord record : queryOutput.getRecords())
+            if(batch.isEmpty())
             {
-               OpenSearchDocument doc = IndexingUtils.buildDocument(record, table, searchableFields);
-               if(StringUtils.hasContent(doc.getSearchableText()))
+               break;
+            }
+
+            ////////////////////////////////////////////////////
+            // Build documents for this batch                 //
+            ////////////////////////////////////////////////////
+            List<OpenSearchDocument> documents = new ArrayList<>();
+
+            for(QRecord record : batch)
+            {
+               if(tableConfig != null)
                {
+                  OpenSearchDocument doc = IndexingUtils.buildDocument(
+                     record,
+                     tableName,
+                     tableConfig.getPrimaryKeyField(),
+                     tableConfig.getSearchableFields(),
+                     tableConfig.getFieldWeights(),
+                     tableConfig.getFieldIncludeLabels() != null ? tableConfig.getFieldIncludeLabels() : java.util.Collections.emptyMap());
                   documents.add(doc);
                }
             }
 
+            ////////////////////////////////////////////////////
+            // Bulk-index the batch                           //
+            ////////////////////////////////////////////////////
             if(!documents.isEmpty())
             {
-               searchClient.indexDocuments(documents);
-               recordsIndexed = documents.size();
+               BulkIndexResult result = client.indexDocuments(documents, bulkBatchSize);
+               totalIndexed   = totalIndexed + result.getSuccessCount();
+               totalErrors    = totalErrors + result.getFailureCount();
+
+               if(!result.getErrors().isEmpty() && errorMessage == null)
+               {
+                  errorMessage = result.getErrors().get(0);
+               }
             }
 
-            LOG.info("Basepull complete", logPair("tableName", tableName), logPair("recordsIndexed", recordsIndexed));
+            totalProcessed = totalProcessed + batch.size();
+            offset         = offset + batch.size();
          }
 
-         /////////////////////////////////////
-         // Update index status //
-         /////////////////////////////////////
-         updateLastBasepullTime(config, index, startTime);
+         ////////////////////////////////////////////////////
+         // Update lastBasepullTime on the index row       //
+         ////////////////////////////////////////////////////
+         QRecord updateRecord = new QRecord()
+            .withValue("id", index.getId())
+            .withValue("lastBasepullTime", Instant.now());
+
+         UpdateInput updateInput = new UpdateInput();
+         updateInput.setTableName(QuickSearchIndex.TABLE_NAME);
+         updateInput.setRecords(List.of(updateRecord));
+
+         new UpdateAction().execute(updateInput);
+
+         ////////////////////////////////////////////////////
+         // Complete the run record                        //
+         ////////////////////////////////////////////////////
+         String finalStatus = (totalErrors > 0) ? "FAILED" : "COMPLETED";
+         completeRunRecord(run, finalStatus, totalProcessed, totalIndexed, totalErrors, errorMessage);
+
+         LOG.info("Basepull complete",
+            "tableName", tableName,
+            "totalProcessed", totalProcessed,
+            "totalIndexed", totalIndexed,
+            "totalErrors", totalErrors);
       }
       catch(Exception e)
       {
-         errorMessage = e.getMessage();
-         LOG.error("Basepull failed", logPair("tableName", tableName), e);
-         throw new QException("Basepull failed for table: " + tableName, e);
+         LOG.warn("Basepull failed for table", e, "tableName", tableName);
+         completeRunRecord(run, "FAILED", totalProcessed, totalIndexed, totalErrors, e.getMessage());
+         throw e;
       }
-      finally
-      {
-         completeRunRecord(config, run, recordsProcessed, recordsIndexed, errorMessage);
-      }
-   }
-
-
-
-   /***************************************************************************
-    ** Parse searchable fields from JSON.
-    ***************************************************************************/
-   @SuppressWarnings("unchecked")
-   private List<String> parseFieldsJson(String json)
-   {
-      if(!StringUtils.hasContent(json))
-      {
-         return new ArrayList<>();
-      }
-
-      try
-      {
-         return JsonUtils.toObject(json, List.class);
-      }
-      catch(Exception e)
-      {
-         LOG.warn("Failed to parse searchable fields JSON", logPair("json", json), e);
-         return new ArrayList<>();
-      }
-   }
-
-
-
-   /***************************************************************************
-    ** Create a run record for tracking.
-    ***************************************************************************/
-   private QuickSearchIndexRun createRunRecord(QuickSearchQBitConfig config, QuickSearchIndex index, String runType, String status, Instant startTime) throws QException
-   {
-      String runTableName = config.applyPrefix(QuickSearchIndexRun.TABLE_NAME);
-
-      QRecord runRecord = new QRecord()
-         .withValue("quickSearchIndexId", index.getId())
-         .withValue("runType", runType)
-         .withValue("status", status)
-         .withValue("startTime", startTime);
-
-      InsertInput insertInput = new InsertInput()
-         .withTableName(runTableName)
-         .withRecords(List.of(runRecord));
-
-      new InsertAction().execute(insertInput);
-
-      QuickSearchIndexRun run = new QuickSearchIndexRun()
-         .withQuickSearchIndexId(index.getId())
-         .withRunType(runType)
-         .withStatus(status)
-         .withStartTime(startTime);
-      return run;
-   }
-
-
-
-   /***************************************************************************
-    ** Map a QRecord to a QuickSearchIndex entity.
-    ***************************************************************************/
-   private QuickSearchIndex mapRecordToIndex(QRecord record)
-   {
-      return new QuickSearchIndex()
-         .withId(record.getValueInteger("id"))
-         .withTableName(record.getValueString("tableName"))
-         .withIsEnabled(record.getValueBoolean("isEnabled"))
-         .withBasepullIntervalMinutes(record.getValueInteger("basepullIntervalMinutes"))
-         .withBasepullTimestampField(record.getValueString("basepullTimestampField"))
-         .withSearchableFieldsJson(record.getValueString("searchableFieldsJson"))
-         .withLastFullIndexTime(record.getValueInstant("lastFullIndexTime"))
-         .withLastBasepullTime(record.getValueInstant("lastBasepullTime"))
-         .withIndexedRecordCount(record.getValueInteger("indexedRecordCount"));
-   }
-
-
-
-   /***************************************************************************
-    ** Complete a run record with final status.
-    ***************************************************************************/
-   private void completeRunRecord(QuickSearchQBitConfig config, QuickSearchIndexRun run, int recordsProcessed, int recordsIndexed, String errorMessage) throws QException
-   {
-      String runTableName = config.applyPrefix(QuickSearchIndexRun.TABLE_NAME);
-
-      String status = errorMessage == null ? "COMPLETE" : "ERROR";
-
-      QRecord updateRecord = new QRecord()
-         .withValue("id", run.getId())
-         .withValue("status", status)
-         .withValue("endTime", Instant.now())
-         .withValue("recordsProcessed", recordsProcessed)
-         .withValue("recordsIndexed", recordsIndexed)
-         .withValue("errorMessage", errorMessage);
-
-      UpdateInput updateInput = new UpdateInput()
-         .withTableName(runTableName)
-         .withRecords(List.of(updateRecord));
-
-      new UpdateAction().execute(updateInput);
-   }
-
-
-
-   /***************************************************************************
-    ** Update the last basepull time on the index.
-    ***************************************************************************/
-   private void updateLastBasepullTime(QuickSearchQBitConfig config, QuickSearchIndex index, Instant basepullTime) throws QException
-   {
-      String indexTableName = config.applyPrefix(QuickSearchIndex.TABLE_NAME);
-
-      QRecord updateRecord = new QRecord()
-         .withValue("id", index.getId())
-         .withValue("lastBasepullTime", basepullTime)
-         .withValue("modifyDate", Instant.now());
-
-      UpdateInput updateInput = new UpdateInput()
-         .withTableName(indexTableName)
-         .withRecords(List.of(updateRecord));
-
-      new UpdateAction().execute(updateInput);
    }
 
 }

@@ -14,132 +14,115 @@
  * limitations under the License.
  */
 
-package com.kingsrook.qbits.quicksearch.actions;
+package com.kingsrook.qbits.quicksearch.opensearch;
+
+
+import java.util.ArrayList;
+import java.util.List;
 
 
 /*******************************************************************************
- ** Input DTO for the QuickSearch action.
- **
- ** Carries the search term plus optional filtering and pagination parameters.
+ ** Accumulates success and failure counts from a bulk OpenSearch index operation.
  *******************************************************************************/
-public class QuickSearchInput
+public class BulkIndexResult
 {
 
-   private String  searchTerm;
-   private String  tableName;
-   private Integer limit;
-   private Integer offset;
+   private Integer      successCount = 0;
+   private Integer      failureCount = 0;
+   private List<String> errors       = new ArrayList<>();
+
 
 
    /*******************************************************************************
-    ** Getter for searchTerm.
+    ** Increment the success counter by one.
     *******************************************************************************/
-   public String getSearchTerm()
+   public void addSuccess()
    {
-      return searchTerm;
+      successCount = successCount + 1;
    }
 
 
+
    /*******************************************************************************
-    ** Setter for searchTerm.
+    ** Increment the failure counter by one and record the error message.
     *******************************************************************************/
-   public void setSearchTerm(String searchTerm)
+   public void addFailure(String errorMessage)
    {
-      this.searchTerm = searchTerm;
+      failureCount = failureCount + 1;
+      errors.add(errorMessage);
    }
 
 
+
    /*******************************************************************************
-    ** Fluent setter for searchTerm.
+    ** Returns true when no failures have been recorded.
     *******************************************************************************/
-   public QuickSearchInput withSearchTerm(String searchTerm)
+   public Boolean isFullySuccessful()
    {
-      this.searchTerm = searchTerm;
-      return this;
+      return (failureCount == 0);
    }
 
 
+
    /*******************************************************************************
-    ** Getter for tableName.
+    ** Getter for successCount
     *******************************************************************************/
-   public String getTableName()
+   public Integer getSuccessCount()
    {
-      return tableName;
+      return (successCount);
    }
 
 
+
    /*******************************************************************************
-    ** Setter for tableName.
+    ** Fluent setter for successCount
     *******************************************************************************/
-   public void setTableName(String tableName)
+   public BulkIndexResult withSuccessCount(Integer successCount)
    {
-      this.tableName = tableName;
+      this.successCount = successCount;
+      return (this);
    }
 
 
+
    /*******************************************************************************
-    ** Fluent setter for tableName.
+    ** Getter for failureCount
     *******************************************************************************/
-   public QuickSearchInput withTableName(String tableName)
+   public Integer getFailureCount()
    {
-      this.tableName = tableName;
-      return this;
+      return (failureCount);
    }
 
 
+
    /*******************************************************************************
-    ** Getter for limit.
+    ** Fluent setter for failureCount
     *******************************************************************************/
-   public Integer getLimit()
+   public BulkIndexResult withFailureCount(Integer failureCount)
    {
-      return limit;
+      this.failureCount = failureCount;
+      return (this);
    }
 
 
+
    /*******************************************************************************
-    ** Setter for limit.
+    ** Getter for errors
     *******************************************************************************/
-   public void setLimit(Integer limit)
+   public List<String> getErrors()
    {
-      this.limit = limit;
+      return (errors);
    }
 
 
-   /*******************************************************************************
-    ** Fluent setter for limit.
-    *******************************************************************************/
-   public QuickSearchInput withLimit(Integer limit)
-   {
-      this.limit = limit;
-      return this;
-   }
-
 
    /*******************************************************************************
-    ** Getter for offset.
+    ** Fluent setter for errors
     *******************************************************************************/
-   public Integer getOffset()
+   public BulkIndexResult withErrors(List<String> errors)
    {
-      return offset;
-   }
-
-
-   /*******************************************************************************
-    ** Setter for offset.
-    *******************************************************************************/
-   public void setOffset(Integer offset)
-   {
-      this.offset = offset;
-   }
-
-
-   /*******************************************************************************
-    ** Fluent setter for offset.
-    *******************************************************************************/
-   public QuickSearchInput withOffset(Integer offset)
-   {
-      this.offset = offset;
-      return this;
+      this.errors = errors;
+      return (this);
    }
 
 }

@@ -5,7 +5,7 @@
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
  *
- *     http://www.apache.org/licenses/LICENSE-2.0
+ *     https://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -13,6 +13,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+
 package com.kingsrook.qbits.quicksearch.model;
 
 
@@ -27,9 +28,9 @@ import static org.assertj.core.api.Assertions.assertThat;
 class QuickSearchIndexTest
 {
 
-   /***************************************************************************
-    ** Test TABLE_NAME constant.
-    ***************************************************************************/
+   /*******************************************************************************
+    ** Test that TABLE_NAME constant has expected value.
+    *******************************************************************************/
    @Test
    void testTableNameConstant()
    {
@@ -38,98 +39,92 @@ class QuickSearchIndexTest
 
 
 
-   /***************************************************************************
-    ** Test all getters and fluent setters.
-    ***************************************************************************/
+   /*******************************************************************************
+    ** Test that fluent setters return this (fluent chaining).
+    *******************************************************************************/
    @Test
-   void testGettersAndSetters()
+   void testFluentSettersReturnThis()
    {
+      QuickSearchIndex entity = new QuickSearchIndex();
       Instant now = Instant.now();
 
-      QuickSearchIndex index = new QuickSearchIndex()
-         .withId(1)
-         .withTableName("orders")
-         .withIsEnabled(true)
-         .withBasepullIntervalMinutes(5)
-         .withBasepullTimestampField("modifyDate")
+      assertThat(entity.withId(1)).isSameAs(entity);
+      assertThat(entity.withTableName("myTable")).isSameAs(entity);
+      assertThat(entity.withEnabled(true)).isSameAs(entity);
+      assertThat(entity.withBasepullIntervalMinutes(60)).isSameAs(entity);
+      assertThat(entity.withBasepullTimestampField("modifyDate")).isSameAs(entity);
+      assertThat(entity.withSearchableFieldsJson("[]")).isSameAs(entity);
+      assertThat(entity.withLastBasepullTime(now)).isSameAs(entity);
+      assertThat(entity.withLastFullReindexTime(now)).isSameAs(entity);
+      assertThat(entity.withRecordCount(100)).isSameAs(entity);
+      assertThat(entity.withStatus("active")).isSameAs(entity);
+      assertThat(entity.withCreateDate(now)).isSameAs(entity);
+      assertThat(entity.withModifyDate(now)).isSameAs(entity);
+   }
+
+
+
+   /*******************************************************************************
+    ** Test that getters return values set via fluent setters.
+    *******************************************************************************/
+   @Test
+   void testGettersReturnSetValues()
+   {
+      Instant basepullTime = Instant.parse("2024-01-15T10:00:00Z");
+      Instant reindexTime = Instant.parse("2024-01-16T12:00:00Z");
+      Instant createDate = Instant.parse("2024-01-01T00:00:00Z");
+      Instant modifyDate = Instant.parse("2024-01-17T08:30:00Z");
+
+      QuickSearchIndex entity = new QuickSearchIndex()
+         .withId(42)
+         .withTableName("orderTable")
+         .withEnabled(true)
+         .withBasepullIntervalMinutes(30)
+         .withBasepullTimestampField("lastModified")
          .withSearchableFieldsJson("[\"name\",\"description\"]")
-         .withLastFullIndexTime(now)
-         .withLastBasepullTime(now)
-         .withIndexedRecordCount(100)
-         .withCreateDate(now)
-         .withModifyDate(now);
+         .withLastBasepullTime(basepullTime)
+         .withLastFullReindexTime(reindexTime)
+         .withRecordCount(9999)
+         .withStatus("active")
+         .withCreateDate(createDate)
+         .withModifyDate(modifyDate);
 
-      assertThat(index.getId()).isEqualTo(1);
-      assertThat(index.getTableName()).isEqualTo("orders");
-      assertThat(index.getIsEnabled()).isTrue();
-      assertThat(index.getBasepullIntervalMinutes()).isEqualTo(5);
-      assertThat(index.getBasepullTimestampField()).isEqualTo("modifyDate");
-      assertThat(index.getSearchableFieldsJson()).isEqualTo("[\"name\",\"description\"]");
-      assertThat(index.getLastFullIndexTime()).isEqualTo(now);
-      assertThat(index.getLastBasepullTime()).isEqualTo(now);
-      assertThat(index.getIndexedRecordCount()).isEqualTo(100);
-      assertThat(index.getCreateDate()).isEqualTo(now);
-      assertThat(index.getModifyDate()).isEqualTo(now);
+      assertThat(entity.getId()).isEqualTo(42);
+      assertThat(entity.getTableName()).isEqualTo("orderTable");
+      assertThat(entity.getEnabled()).isTrue();
+      assertThat(entity.getBasepullIntervalMinutes()).isEqualTo(30);
+      assertThat(entity.getBasepullTimestampField()).isEqualTo("lastModified");
+      assertThat(entity.getSearchableFieldsJson()).isEqualTo("[\"name\",\"description\"]");
+      assertThat(entity.getLastBasepullTime()).isEqualTo(basepullTime);
+      assertThat(entity.getLastFullReindexTime()).isEqualTo(reindexTime);
+      assertThat(entity.getRecordCount()).isEqualTo(9999);
+      assertThat(entity.getStatus()).isEqualTo("active");
+      assertThat(entity.getCreateDate()).isEqualTo(createDate);
+      assertThat(entity.getModifyDate()).isEqualTo(modifyDate);
    }
 
 
 
-   /***************************************************************************
-    ** Test standard setters.
-    ***************************************************************************/
+   /*******************************************************************************
+    ** Test that all fields default to null on a new instance.
+    *******************************************************************************/
    @Test
-   void testStandardSetters()
+   void testDefaultsAreNull()
    {
-      Instant now = Instant.now();
+      QuickSearchIndex entity = new QuickSearchIndex();
 
-      QuickSearchIndex index = new QuickSearchIndex();
-      index.setId(2);
-      index.setTableName("customers");
-      index.setIsEnabled(false);
-      index.setBasepullIntervalMinutes(10);
-      index.setBasepullTimestampField("updatedAt");
-      index.setSearchableFieldsJson("[]");
-      index.setLastFullIndexTime(now);
-      index.setLastBasepullTime(now);
-      index.setIndexedRecordCount(50);
-      index.setCreateDate(now);
-      index.setModifyDate(now);
-
-      assertThat(index.getId()).isEqualTo(2);
-      assertThat(index.getTableName()).isEqualTo("customers");
-      assertThat(index.getIsEnabled()).isFalse();
-      assertThat(index.getBasepullIntervalMinutes()).isEqualTo(10);
-      assertThat(index.getBasepullTimestampField()).isEqualTo("updatedAt");
-      assertThat(index.getSearchableFieldsJson()).isEqualTo("[]");
-      assertThat(index.getLastFullIndexTime()).isEqualTo(now);
-      assertThat(index.getLastBasepullTime()).isEqualTo(now);
-      assertThat(index.getIndexedRecordCount()).isEqualTo(50);
-      assertThat(index.getCreateDate()).isEqualTo(now);
-      assertThat(index.getModifyDate()).isEqualTo(now);
-   }
-
-
-
-   /***************************************************************************
-    ** Test fluent setters return this.
-    ***************************************************************************/
-   @Test
-   void testFluentSetters_returnThis()
-   {
-      QuickSearchIndex index = new QuickSearchIndex();
-      Instant now = Instant.now();
-
-      assertThat(index.withId(1)).isSameAs(index);
-      assertThat(index.withTableName("t")).isSameAs(index);
-      assertThat(index.withIsEnabled(true)).isSameAs(index);
-      assertThat(index.withBasepullIntervalMinutes(5)).isSameAs(index);
-      assertThat(index.withBasepullTimestampField("f")).isSameAs(index);
-      assertThat(index.withSearchableFieldsJson("[]")).isSameAs(index);
-      assertThat(index.withLastFullIndexTime(now)).isSameAs(index);
-      assertThat(index.withLastBasepullTime(now)).isSameAs(index);
-      assertThat(index.withIndexedRecordCount(0)).isSameAs(index);
-      assertThat(index.withCreateDate(now)).isSameAs(index);
-      assertThat(index.withModifyDate(now)).isSameAs(index);
+      assertThat(entity.getId()).isNull();
+      assertThat(entity.getTableName()).isNull();
+      assertThat(entity.getEnabled()).isNull();
+      assertThat(entity.getBasepullIntervalMinutes()).isNull();
+      assertThat(entity.getBasepullTimestampField()).isNull();
+      assertThat(entity.getSearchableFieldsJson()).isNull();
+      assertThat(entity.getLastBasepullTime()).isNull();
+      assertThat(entity.getLastFullReindexTime()).isNull();
+      assertThat(entity.getRecordCount()).isNull();
+      assertThat(entity.getStatus()).isNull();
+      assertThat(entity.getCreateDate()).isNull();
+      assertThat(entity.getModifyDate()).isNull();
    }
 
 }

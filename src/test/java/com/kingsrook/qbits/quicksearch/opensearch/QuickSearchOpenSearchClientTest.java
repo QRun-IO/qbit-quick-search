@@ -5,7 +5,7 @@
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
  *
- *     http://www.apache.org/licenses/LICENSE-2.0
+ *     https://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -13,13 +13,13 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+
 package com.kingsrook.qbits.quicksearch.opensearch;
 
 
-import java.time.Instant;
 import java.util.List;
-import com.kingsrook.qbits.quicksearch.QuickSearchQBitConfig;
 import com.kingsrook.qqq.backend.core.exceptions.QException;
+import com.kingsrook.qbits.quicksearch.QuickSearchQBitConfig;
 import org.junit.jupiter.api.Test;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -27,245 +27,238 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /*******************************************************************************
  ** Tests for QuickSearchOpenSearchClient.
+ **
+ ** All tests use localhost:19876 where nothing is listening, so they exercise
+ ** constructor success, error-handling paths, and lifecycle behaviour without
+ ** requiring a live OpenSearch instance.
  *******************************************************************************/
 class QuickSearchOpenSearchClientTest
 {
+   private static final String TEST_HOST  = "localhost";
+   private static final int    TEST_PORT  = 19876;
+   private static final String TEST_INDEX = "test-index";
 
-   /***************************************************************************
-    ** Test constructor with valid config creates client.
-    ***************************************************************************/
-   @Test
-   void testConstructor_validConfig_createsClient() throws Exception
+
+
+   /*******************************************************************************
+    ** Helper to build a minimal plain-HTTP config.
+    *******************************************************************************/
+   private QuickSearchQBitConfig plainConfig()
    {
-      QuickSearchQBitConfig config = createTestConfig();
-      QuickSearchOpenSearchClient client = new QuickSearchOpenSearchClient(config);
+      return (new QuickSearchQBitConfig()
+         .withOpensearchHost(TEST_HOST)
+         .withOpensearchPort(TEST_PORT)
+         .withOpensearchIndexName(TEST_INDEX)
+         .withUseSsl(false));
+   }
 
-      assertThat(client).isNotNull();
+
+
+   /*******************************************************************************
+    ** Constructor succeeds for plain HTTP (no credentials).
+    *******************************************************************************/
+   @Test
+   void testConstructor_plainHttp_succeeds() throws QException
+   {
+      QuickSearchOpenSearchClient client = new QuickSearchOpenSearchClient(plainConfig());
       client.close();
    }
 
 
 
-   /***************************************************************************
-    ** Test constructor with SSL enabled.
-    ***************************************************************************/
+   /*******************************************************************************
+    ** Constructor succeeds when useSsl is true.
+    *******************************************************************************/
    @Test
-   void testConstructor_withSsl_createsClient() throws Exception
+   void testConstructor_withSsl_succeeds() throws QException
    {
-      QuickSearchQBitConfig config = createTestConfig()
-         .withUseSsl(true)
-         .withOpensearchPort(443);
-
+      QuickSearchQBitConfig config = plainConfig().withUseSsl(true);
       QuickSearchOpenSearchClient client = new QuickSearchOpenSearchClient(config);
-
-      assertThat(client).isNotNull();
       client.close();
    }
 
 
 
-   /***************************************************************************
-    ** Test constructor with credentials.
-    ***************************************************************************/
+   /*******************************************************************************
+    ** Constructor succeeds when both username and password are provided.
+    *******************************************************************************/
    @Test
-   void testConstructor_withCredentials_createsClient() throws Exception
+   void testConstructor_withCredentials_succeeds() throws QException
    {
-      QuickSearchQBitConfig config = createTestConfig()
-         .withOpensearchUsername("testuser")
-         .withOpensearchPassword("testpass");
-
+      QuickSearchQBitConfig config = plainConfig()
+         .withOpensearchUsername("admin")
+         .withOpensearchPassword("secret");
       QuickSearchOpenSearchClient client = new QuickSearchOpenSearchClient(config);
-
-      assertThat(client).isNotNull();
       client.close();
    }
 
 
 
-   /***************************************************************************
-    ** Test ensureIndexExists throws when server unavailable.
-    ***************************************************************************/
+   /*******************************************************************************
+    ** close() does not throw any exception.
+    *******************************************************************************/
    @Test
-   void testEnsureIndexExists_serverUnavailable_throws() throws Exception
+   void testClose_doesNotThrow() throws QException
    {
-      QuickSearchQBitConfig config = createTestConfig();
-      QuickSearchOpenSearchClient client = new QuickSearchOpenSearchClient(config);
-
-      assertThatThrownBy(() -> client.ensureIndexExists())
-         .isInstanceOf(QException.class)
-         .hasMessageContaining("Failed to ensure index exists");
-
+      QuickSearchOpenSearchClient client = new QuickSearchOpenSearchClient(plainConfig());
       client.close();
    }
 
 
 
-   /***************************************************************************
-    ** Test indexDocument throws when server unavailable.
-    ***************************************************************************/
+   /*******************************************************************************
+    ** close() is idempotent: calling it twice must not throw.
+    *******************************************************************************/
    @Test
-   void testIndexDocument_serverUnavailable_throws() throws Exception
+   void testClose_idempotent() throws QException
    {
-      QuickSearchQBitConfig config = createTestConfig();
-      QuickSearchOpenSearchClient client = new QuickSearchOpenSearchClient(config);
+      QuickSearchOpenSearchClient client = new QuickSearchOpenSearchClient(plainConfig());
+      client.close();
+      client.close();
+   }
 
-      OpenSearchDocument document = new OpenSearchDocument()
-         .withSourceTable("test")
+
+
+   /*******************************************************************************
+    ** indexDocuments with a null list returns an empty, fully-successful result.
+    *******************************************************************************/
+   @Test
+   void testIndexDocuments_nullList_returnsEmptyResult() throws QException
+   {
+      QuickSearchOpenSearchClient client = new QuickSearchOpenSearchClient(plainConfig());
+
+      try
+      {
+         BulkIndexResult result = client.indexDocuments(null, 100);
+
+         assertThat(result).isNotNull();
+         assertThat(result.getSuccessCount()).isEqualTo(0);
+         assertThat(result.getFailureCount()).isEqualTo(0);
+         assertThat(result.isFullySuccessful()).isTrue();
+      }
+      finally
+      {
+         client.close();
+      }
+   }
+
+
+
+   /*******************************************************************************
+    ** indexDocuments with an empty list returns an empty, fully-successful result.
+    *******************************************************************************/
+   @Test
+   void testIndexDocuments_emptyList_returnsEmptyResult() throws QException
+   {
+      QuickSearchOpenSearchClient client = new QuickSearchOpenSearchClient(plainConfig());
+
+      try
+      {
+         BulkIndexResult result = client.indexDocuments(List.of(), 100);
+
+         assertThat(result).isNotNull();
+         assertThat(result.getSuccessCount()).isEqualTo(0);
+         assertThat(result.getFailureCount()).isEqualTo(0);
+         assertThat(result.isFullySuccessful()).isTrue();
+      }
+      finally
+      {
+         client.close();
+      }
+   }
+
+
+
+   /*******************************************************************************
+    ** ensureIndexExists throws QException when the server is unavailable.
+    *******************************************************************************/
+   @Test
+   void testEnsureIndexExists_serverUnavailable_throwsQException() throws QException
+   {
+      QuickSearchOpenSearchClient client = new QuickSearchOpenSearchClient(plainConfig());
+
+      try
+      {
+         assertThatThrownBy(client::ensureIndexExists)
+            .isInstanceOf(QException.class)
+            .hasMessageContaining(TEST_INDEX);
+      }
+      finally
+      {
+         client.close();
+      }
+   }
+
+
+
+   /*******************************************************************************
+    ** indexDocument throws QException when the server is unavailable.
+    *******************************************************************************/
+   @Test
+   void testIndexDocument_serverUnavailable_throwsQException() throws QException
+   {
+      QuickSearchOpenSearchClient client = new QuickSearchOpenSearchClient(plainConfig());
+
+      OpenSearchDocument doc = new OpenSearchDocument()
+         .withSourceTable("orders")
          .withRecordId("1")
-         .withSearchableText("test content")
-         .withIndexedAt(Instant.now());
+         .withRecordLabel("Order #1")
+         .withSearchableText("test order");
 
-      assertThatThrownBy(() -> client.indexDocument(document))
-         .isInstanceOf(Exception.class);
-
-      client.close();
+      try
+      {
+         assertThatThrownBy(() -> client.indexDocument(doc))
+            .isInstanceOf(QException.class)
+            .hasMessageContaining("orders:1");
+      }
+      finally
+      {
+         client.close();
+      }
    }
 
 
 
-   /***************************************************************************
-    ** Test indexDocuments with empty list does nothing.
-    ***************************************************************************/
+   /*******************************************************************************
+    ** search throws QException when the server is unavailable.
+    *******************************************************************************/
    @Test
-   void testIndexDocuments_emptyList_doesNothing() throws Exception
+   void testSearch_serverUnavailable_throwsQException() throws QException
    {
-      QuickSearchQBitConfig config = createTestConfig();
-      QuickSearchOpenSearchClient client = new QuickSearchOpenSearchClient(config);
+      QuickSearchOpenSearchClient client = new QuickSearchOpenSearchClient(plainConfig());
 
-      // Should not throw even though server is unavailable
-      client.indexDocuments(List.of());
-
-      client.close();
+      try
+      {
+         assertThatThrownBy(() -> client.search("hello", null, 10, 0, List.of()))
+            .isInstanceOf(QException.class)
+            .hasMessageContaining("hello");
+      }
+      finally
+      {
+         client.close();
+      }
    }
 
 
 
-   /***************************************************************************
-    ** Test indexDocuments throws when server unavailable.
-    ***************************************************************************/
+   /*******************************************************************************
+    ** deleteDocument throws QException when the server is unavailable.
+    *******************************************************************************/
    @Test
-   void testIndexDocuments_serverUnavailable_throws() throws Exception
+   void testDeleteDocument_serverUnavailable_throwsQException() throws QException
    {
-      QuickSearchQBitConfig config = createTestConfig();
-      QuickSearchOpenSearchClient client = new QuickSearchOpenSearchClient(config);
+      QuickSearchOpenSearchClient client = new QuickSearchOpenSearchClient(plainConfig());
 
-      List<OpenSearchDocument> documents = List.of(
-         new OpenSearchDocument()
-            .withSourceTable("test")
-            .withRecordId("1")
-            .withSearchableText("test")
-            .withIndexedAt(Instant.now())
-      );
-
-      assertThatThrownBy(() -> client.indexDocuments(documents))
-         .isInstanceOf(Exception.class);
-
-      client.close();
-   }
-
-
-
-   /***************************************************************************
-    ** Test deleteDocument throws when server unavailable.
-    ***************************************************************************/
-   @Test
-   void testDeleteDocument_serverUnavailable_throws() throws Exception
-   {
-      QuickSearchQBitConfig config = createTestConfig();
-      QuickSearchOpenSearchClient client = new QuickSearchOpenSearchClient(config);
-
-      assertThatThrownBy(() -> client.deleteDocument("test", "1"))
-         .isInstanceOf(QException.class)
-         .hasMessageContaining("Failed to delete document");
-
-      client.close();
-   }
-
-
-
-   /***************************************************************************
-    ** Test deleteDocumentsForTable throws when server unavailable.
-    ***************************************************************************/
-   @Test
-   void testDeleteDocumentsForTable_serverUnavailable_throws() throws Exception
-   {
-      QuickSearchQBitConfig config = createTestConfig();
-      QuickSearchOpenSearchClient client = new QuickSearchOpenSearchClient(config);
-
-      assertThatThrownBy(() -> client.deleteDocumentsForTable("test"))
-         .isInstanceOf(QException.class)
-         .hasMessageContaining("Failed to delete documents for table");
-
-      client.close();
-   }
-
-
-
-   /***************************************************************************
-    ** Test search with no table filter throws when server unavailable.
-    ***************************************************************************/
-   @Test
-   void testSearch_noTableFilter_serverUnavailable_throws() throws Exception
-   {
-      QuickSearchQBitConfig config = createTestConfig();
-      QuickSearchOpenSearchClient client = new QuickSearchOpenSearchClient(config);
-
-      assertThatThrownBy(() -> client.search("test query", 10))
-         .isInstanceOf(QException.class)
-         .hasMessageContaining("Failed to search documents");
-
-      client.close();
-   }
-
-
-
-   /***************************************************************************
-    ** Test search with table filter throws when server unavailable.
-    ***************************************************************************/
-   @Test
-   void testSearch_withTableFilter_serverUnavailable_throws() throws Exception
-   {
-      QuickSearchQBitConfig config = createTestConfig();
-      QuickSearchOpenSearchClient client = new QuickSearchOpenSearchClient(config);
-
-      assertThatThrownBy(() -> client.search("test query", "orders", 10))
-         .isInstanceOf(QException.class)
-         .hasMessageContaining("Failed to search documents");
-
-      client.close();
-   }
-
-
-
-   /***************************************************************************
-    ** Test search with null limit uses default.
-    ***************************************************************************/
-   @Test
-   void testSearch_nullLimit_serverUnavailable_throws() throws Exception
-   {
-      QuickSearchQBitConfig config = createTestConfig();
-      QuickSearchOpenSearchClient client = new QuickSearchOpenSearchClient(config);
-
-      assertThatThrownBy(() -> client.search("test query", null, null))
-         .isInstanceOf(QException.class)
-         .hasMessageContaining("Failed to search documents");
-
-      client.close();
-   }
-
-
-
-   /***************************************************************************
-    ** Helper to create test configuration.
-    ***************************************************************************/
-   private QuickSearchQBitConfig createTestConfig()
-   {
-      return new QuickSearchQBitConfig()
-         .withBackendName("memory")
-         .withOpensearchHost("localhost")
-         .withOpensearchPort(9200)
-         .withOpensearchIndexName("test-quick-search")
-         .withUseSsl(false);
+      try
+      {
+         assertThatThrownBy(() -> client.deleteDocument("orders", "1"))
+            .isInstanceOf(QException.class)
+            .hasMessageContaining("orders:1");
+      }
+      finally
+      {
+         client.close();
+      }
    }
 
 }

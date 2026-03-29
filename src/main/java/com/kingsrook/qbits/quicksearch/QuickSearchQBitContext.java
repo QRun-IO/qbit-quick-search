@@ -20,12 +20,31 @@ import java.util.List;
 
 
 /*******************************************************************************
- ** Static context for Quick Search QBit runtime state.
+ ** Static holder for Quick Search QBit runtime state.
+ **
+ ** Provides access to the active configuration, the OpenSearch client, the
+ ** index-event publisher, and the list of tables discovered at startup.
+ **
+ ** Note: client is typed as Object until QuickSearchOpenSearchClient is
+ ** wired in; publisher is typed as Object until IndexEventPublisher is
+ ** created in Task 7.
+ **
+ ** Call clear() in test @AfterEach / @BeforeEach to reset all state.
  *******************************************************************************/
 public class QuickSearchQBitContext
 {
-   private static QuickSearchQBitConfig              config;
+   private static QuickSearchQBitConfig             config;
    private static List<QuickSearchableTableConfig>  discoveredTables;
+
+   /////////////////////////////////////////////////////////////////////////
+   // Typed as Object until QuickSearchOpenSearchClient is set here.      //
+   /////////////////////////////////////////////////////////////////////////
+   private static Object client;
+
+   /////////////////////////////////////////////////////////////////////////
+   // Typed as Object until IndexEventPublisher interface exists (Task 7) //
+   /////////////////////////////////////////////////////////////////////////
+   private static Object publisher;
 
 
 
@@ -65,6 +84,87 @@ public class QuickSearchQBitContext
    public static void setDiscoveredTables(List<QuickSearchableTableConfig> discoveredTables)
    {
       QuickSearchQBitContext.discoveredTables = discoveredTables;
+   }
+
+
+
+   /***************************************************************************
+    ** Find a table config by table name from the discovered tables list.
+    **
+    ** Returns null if discoveredTables is null or no match is found.
+    ***************************************************************************/
+   public static QuickSearchableTableConfig getTableConfig(String tableName)
+   {
+      if(discoveredTables == null)
+      {
+         return null;
+      }
+
+      for(QuickSearchableTableConfig tableConfig : discoveredTables)
+      {
+         if(tableName.equals(tableConfig.getTableName()))
+         {
+            return tableConfig;
+         }
+      }
+
+      return null;
+   }
+
+
+
+   /***************************************************************************
+    ** Getter for client
+    ***************************************************************************/
+   public static Object getClient()
+   {
+      return client;
+   }
+
+
+
+   /***************************************************************************
+    ** Setter for client
+    ***************************************************************************/
+   public static void setClient(Object client)
+   {
+      QuickSearchQBitContext.client = client;
+   }
+
+
+
+   /***************************************************************************
+    ** Getter for publisher
+    ***************************************************************************/
+   public static Object getPublisher()
+   {
+      return publisher;
+   }
+
+
+
+   /***************************************************************************
+    ** Setter for publisher
+    ***************************************************************************/
+   public static void setPublisher(Object publisher)
+   {
+      QuickSearchQBitContext.publisher = publisher;
+   }
+
+
+
+   /***************************************************************************
+    ** Reset all static state to null.
+    **
+    ** Call in test @BeforeEach or @AfterEach to prevent state leakage
+    ** between tests.
+    ***************************************************************************/
+   public static void clear()
+   {
+      config = null;
+      discoveredTables = null;
+      client = null;
+      publisher = null;
    }
 
 }

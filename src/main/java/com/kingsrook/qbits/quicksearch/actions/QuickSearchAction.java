@@ -5,7 +5,7 @@
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
  *
- *     http://www.apache.org/licenses/LICENSE-2.0
+ *     https://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -13,77 +13,115 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+
 package com.kingsrook.qbits.quicksearch.actions;
 
 
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
+import java.util.Map;
+import com.kingsrook.qqq.backend.core.exceptions.QException;
+import com.kingsrook.qqq.backend.core.logging.QLogger;
 import com.kingsrook.qbits.quicksearch.QuickSearchQBitContext;
+import com.kingsrook.qbits.quicksearch.QuickSearchableTableConfig;
 import com.kingsrook.qbits.quicksearch.opensearch.OpenSearchDocument;
 import com.kingsrook.qbits.quicksearch.opensearch.QuickSearchOpenSearchClient;
 import com.kingsrook.qbits.quicksearch.processes.IndexingUtils;
-import com.kingsrook.qqq.backend.core.exceptions.QException;
-import com.kingsrook.qqq.backend.core.logging.QLogger;
-import com.kingsrook.qqq.backend.core.utils.StringUtils;
-import static com.kingsrook.qqq.backend.core.logging.LogUtils.logPair;
+import org.opensearch.client.opensearch.core.SearchResponse;
+import org.opensearch.client.opensearch.core.search.Hit;
 
 
 /*******************************************************************************
- ** Executes quick search queries against OpenSearch.
+ ** Action that executes a quick-search query against OpenSearch and returns
+ ** normalized, paginated results.
+ **
+ ** Validates and normalizes the input, delegates to the
+ ** QuickSearchOpenSearchClient, maps each hit to a QuickSearchResult, and
+ ** computes pagination metadata (totalHits, hasMore).
  *******************************************************************************/
 public class QuickSearchAction
 {
-   private static final QLogger LOG = QLogger.getLogger(QuickSearchAction.class);
+   private static final QLogger LOG             = QLogger.getLogger(QuickSearchAction.class);
+   private static final int     DEFAULT_LIMIT   = 25;
+   private static final int     DEFAULT_OFFSET  = 0;
 
 
 
-   /***************************************************************************
-    ** Execute a quick search.
-    ***************************************************************************/
+   /*******************************************************************************
+    ** Execute a quick-search for the given input.
+    **
+    ** Returns an empty output (totalHits=0, hasMore=false, empty results list)
+    ** when the search term is null or blank.  Otherwise normalizes the term,
+    ** applies default pagination values, calls the OpenSearch client, and maps
+    ** hits to QuickSearchResult objects.
+    **
+    ** @param input the search parameters; must not be null
+    ** @return populated QuickSearchOutput
+    ** @throws QException if the OpenSearch call fails
+    *******************************************************************************/
    public QuickSearchOutput execute(QuickSearchInput input) throws QException
    {
-      String searchTerm = IndexingUtils.normalizeSearchText(input.getSearchTerm());
+      String searchTerm = input.getSearchTerm();
 
-      if(!StringUtils.hasContent(searchTerm))
+      if(searchTerm == null || searchTerm.isBlank())
       {
-         return new QuickSearchOutput()
+         LOG.debug("QuickSearch called with blank/null search term - returning empty output");
+         return (new QuickSearchOutput()
             .withResults(Collections.emptyList())
-            .withTotalCount(0);
+            .withTotalHits(0L)
+            .withHasMore(false));
       }
 
-      Integer limit = input.getLimit();
-      if(limit == null || limit <= 0)
+      String normalizedTerm = IndexingUtils.normalizeSearchText(searchTerm);
+
+      int limit  = (input.getLimit() == null || input.getLimit() <= 0) ? DEFAULT_LIMIT : input.getLimit();
+      int offset = (input.getOffset() == null || input.getOffset() < 0) ? DEFAULT_OFFSET : input.getOffset();
+
+      QuickSearchOpenSearchClient       client       = (QuickSearchOpenSearchClient) QuickSearchQBitContext.getClient();
+      List<QuickSearchableTableConfig>  tableConfigs = QuickSearchQBitContext.getDiscoveredTables();
+
+      LOG.debug("Executing quick search", "term", normalizedTerm, "tableName", input.getTableName(), "limit", limit, "offset", offset);
+
+      SearchResponse<OpenSearchDocument> response = client.search(normalizedTerm, input.getTableName(), limit, offset, tableConfigs);
+
+      List<QuickSearchResult> results = new ArrayList<>();
+
+      for(Hit<OpenSearchDocument> hit : response.hits().hits())
       {
-         limit = 50;
-      }
+         OpenSearchDocument source = hit.source();
 
-      LOG.debug("Executing quick search", logPair("term", searchTerm), logPair("limit", limit), logPair("table", input.getTableName()));
+         String highlightSnippet = null;
+         Map<String, List<String>> highlight = hit.highlight();
 
-      QuickSearchOpenSearchClient client = new QuickSearchOpenSearchClient(QuickSearchQBitContext.getConfig());
-
-      try
-      {
-         List<OpenSearchDocument> documents = client.search(searchTerm, input.getTableName(), limit);
-
-         List<QuickSearchResult> results = new ArrayList<>();
-         for(OpenSearchDocument doc : documents)
+         if(highlight != null)
          {
-            results.add(new QuickSearchResult()
-               .withTableName(doc.getSourceTable())
-               .withRecordId(doc.getRecordId())
-               .withRecordLabel(doc.getRecordLabel())
-               .withMatchedText(doc.getSearchableText()));
+            List<String> fragments = highlight.get("searchableText");
+
+            if(fragments != null && !fragments.isEmpty())
+            {
+               highlightSnippet = String.join("...", fragments);
+            }
          }
 
-         return new QuickSearchOutput()
-            .withResults(results)
-            .withTotalCount(results.size());
+         Double rawScore = hit.score();
+         Float  score    = rawScore != null ? rawScore.floatValue() : null;
+
+         results.add(new QuickSearchResult()
+            .withTableName(source.getSourceTable())
+            .withRecordId(source.getRecordId())
+            .withRecordLabel(source.getRecordLabel())
+            .withScore(score)
+            .withHighlightSnippet(highlightSnippet));
       }
-      finally
-      {
-         client.close();
-      }
+
+      long    totalHits = response.hits().total().value();
+      boolean hasMore   = (offset + results.size()) < totalHits;
+
+      return (new QuickSearchOutput()
+         .withResults(results)
+         .withTotalHits(totalHits)
+         .withHasMore(hasMore));
    }
 
 }

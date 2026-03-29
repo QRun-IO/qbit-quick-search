@@ -5,7 +5,7 @@
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
  *
- *     http://www.apache.org/licenses/LICENSE-2.0
+ *     https://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -13,29 +13,19 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+
 package com.kingsrook.qbits.quicksearch.processes;
 
 
-import java.io.Serializable;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
-import java.util.Map;
-import com.kingsrook.qbits.quicksearch.QuickSearchQBitConfig;
-import com.kingsrook.qbits.quicksearch.model.QuickSearchIndex;
-import com.kingsrook.qbits.quicksearch.model.QuickSearchIndexRun;
-import com.kingsrook.qbits.quicksearch.opensearch.OpenSearchDocument;
-import com.kingsrook.qbits.quicksearch.opensearch.QuickSearchOpenSearchClient;
-import com.kingsrook.qqq.backend.core.actions.processes.BackendStep;
-import com.kingsrook.qqq.backend.core.actions.tables.InsertAction;
 import com.kingsrook.qqq.backend.core.actions.tables.QueryAction;
 import com.kingsrook.qqq.backend.core.actions.tables.UpdateAction;
-import com.kingsrook.qqq.backend.core.context.QContext;
 import com.kingsrook.qqq.backend.core.exceptions.QException;
 import com.kingsrook.qqq.backend.core.logging.QLogger;
 import com.kingsrook.qqq.backend.core.model.actions.processes.RunBackendStepInput;
 import com.kingsrook.qqq.backend.core.model.actions.processes.RunBackendStepOutput;
-import com.kingsrook.qqq.backend.core.model.actions.tables.insert.InsertInput;
 import com.kingsrook.qqq.backend.core.model.actions.tables.query.QCriteriaOperator;
 import com.kingsrook.qqq.backend.core.model.actions.tables.query.QFilterCriteria;
 import com.kingsrook.qqq.backend.core.model.actions.tables.query.QQueryFilter;
@@ -43,287 +33,190 @@ import com.kingsrook.qqq.backend.core.model.actions.tables.query.QueryInput;
 import com.kingsrook.qqq.backend.core.model.actions.tables.query.QueryOutput;
 import com.kingsrook.qqq.backend.core.model.actions.tables.update.UpdateInput;
 import com.kingsrook.qqq.backend.core.model.data.QRecord;
-import com.kingsrook.qqq.backend.core.model.metadata.tables.QTableMetaData;
-import com.kingsrook.qqq.backend.core.utils.JsonUtils;
-import com.kingsrook.qqq.backend.core.utils.StringUtils;
-import static com.kingsrook.qqq.backend.core.logging.LogUtils.logPair;
+import com.kingsrook.qbits.quicksearch.QuickSearchQBitConfig;
+import com.kingsrook.qbits.quicksearch.QuickSearchableTableConfig;
+import com.kingsrook.qbits.quicksearch.model.QuickSearchIndex;
+import com.kingsrook.qbits.quicksearch.model.QuickSearchIndexRun;
+import com.kingsrook.qbits.quicksearch.opensearch.BulkIndexResult;
+import com.kingsrook.qbits.quicksearch.opensearch.OpenSearchDocument;
+import com.kingsrook.qbits.quicksearch.opensearch.QuickSearchOpenSearchClient;
 
 
 /*******************************************************************************
- ** Step that performs full reindexing of Quick Search indexes.
+ ** Process step that performs a full reindex of one or all tables.
+ **
+ ** Deletes all existing OpenSearch documents for each target table, then
+ ** re-fetches and re-indexes every record in batches. Updates the
+ ** QuickSearchIndex row with lastFullReindexTime and recordCount when done.
+ **
+ ** An optional "tableName" input field narrows the run to a single table.
+ ** When absent, all discovered tables are reindexed.
  *******************************************************************************/
-public class FullReindexStep implements BackendStep
+public class FullReindexStep extends AbstractIndexingStep
 {
    private static final QLogger LOG = QLogger.getLogger(FullReindexStep.class);
 
-   public static final String FIELD_TABLE_NAME = "tableName";
-   public static final String FIELD_CONFIG     = "quickSearchConfig";
 
 
-
-   /***************************************************************************
-    ** Execute the full reindex.
-    ***************************************************************************/
+   /*******************************************************************************
+    ** Run the full reindex step.
+    **
+    ** Reads the optional "tableName" field from the input.  When present, only
+    ** that table is reindexed; otherwise every discovered table is processed.
+    **
+    ** @param input  the backend step input (may contain "tableName")
+    ** @param output the backend step output (unused but required by interface)
+    ** @throws QException if a fatal error occurs preventing any reindex
+    *******************************************************************************/
    @Override
    public void run(RunBackendStepInput input, RunBackendStepOutput output) throws QException
    {
-      String               targetTableName = input.getValueString(FIELD_TABLE_NAME);
-      QuickSearchQBitConfig config          = (QuickSearchQBitConfig) input.getValue(FIELD_CONFIG);
+      String tableNameFilter = input.getValueString("tableName");
 
-      if(config == null)
+      List<QuickSearchableTableConfig> tables = getDiscoveredTables();
+
+      if(tableNameFilter != null && !tableNameFilter.isBlank())
       {
-         throw new QException("QuickSearchQBitConfig is required");
-      }
-
-      List<QuickSearchIndex> indexes = loadIndexes(config, targetTableName);
-
-      if(indexes.isEmpty())
-      {
-         LOG.info("No indexes found to reindex", logPair("targetTableName", targetTableName));
-         return;
-      }
-
-      QuickSearchOpenSearchClient searchClient = new QuickSearchOpenSearchClient(config);
-
-      try
-      {
-         for(QuickSearchIndex index : indexes)
+         List<QuickSearchableTableConfig> filtered = new ArrayList<>();
+         for(QuickSearchableTableConfig tableConfig : tables)
          {
-            reindexTable(config, searchClient, index);
+            if(tableNameFilter.equals(tableConfig.getTableName()))
+            {
+               filtered.add(tableConfig);
+            }
          }
+         tables = filtered;
       }
-      finally
+
+      for(QuickSearchableTableConfig tableConfig : tables)
       {
-         searchClient.close();
+         String tableName = tableConfig.getTableName();
+
+         ensureIndexRowExists(tableName, tableConfig);
+         reindexTable(tableName, tableConfig);
       }
    }
 
 
 
-   /***************************************************************************
-    ** Load indexes to process.
-    ***************************************************************************/
-   private List<QuickSearchIndex> loadIndexes(QuickSearchQBitConfig config, String targetTableName) throws QException
+   /*******************************************************************************
+    ** Reindex all records for a single table.
+    **
+    ** Flow:
+    ** 1. Obtain the QuickSearchIndex row for this table (to get its ID).
+    ** 2. Create a FULL_REINDEX run record.
+    ** 3. Delete all existing OpenSearch documents for the table.
+    ** 4. Paginate through all source records and index them in batches.
+    ** 5. Update lastFullReindexTime and recordCount on the QuickSearchIndex row.
+    ** 6. Complete the run record with final stats.
+    **
+    ** On any exception, the run record is marked FAILED before re-throwing.
+    **
+    ** @param tableName   the name of the source table
+    ** @param tableConfig the configuration for that table
+    ** @throws QException if a fatal indexing error occurs
+    *******************************************************************************/
+   void reindexTable(String tableName, QuickSearchableTableConfig tableConfig) throws QException
    {
-      String indexTableName = config.applyPrefix(QuickSearchIndex.TABLE_NAME);
+      QuickSearchOpenSearchClient client = getClient();
+      QuickSearchQBitConfig config = getConfig();
 
-      QQueryFilter filter = new QQueryFilter();
-      if(StringUtils.hasContent(targetTableName))
-      {
-         filter.withCriteria(new QFilterCriteria("tableName", QCriteriaOperator.EQUALS, targetTableName));
-      }
-
-      QueryInput queryInput = new QueryInput()
-         .withTableName(indexTableName)
-         .withFilter(filter);
+      ////////////////////////////////////////////////////
+      // Query for the index row to get its ID          //
+      ////////////////////////////////////////////////////
+      QueryInput queryInput = new QueryInput();
+      queryInput.setTableName(QuickSearchIndex.TABLE_NAME);
+      queryInput.setFilter(new QQueryFilter()
+         .withCriteria(new QFilterCriteria("tableName", QCriteriaOperator.EQUALS, tableName)));
 
       QueryOutput queryOutput = new QueryAction().execute(queryInput);
 
-      List<QuickSearchIndex> indexes = new ArrayList<>();
-      for(QRecord record : queryOutput.getRecords())
+      if(queryOutput.getRecords().isEmpty())
       {
-         indexes.add(mapRecordToIndex(record));
+         throw new QException("No QuickSearchIndex row found for table: " + tableName);
       }
 
-      return indexes;
-   }
+      QRecord indexRecord = queryOutput.getRecords().get(0);
+      Integer indexId = indexRecord.getValueInteger("id");
 
+      QuickSearchIndexRun run = createRunRecord(indexId, "FULL_REINDEX");
 
-
-   /***************************************************************************
-    ** Reindex a single table.
-    ***************************************************************************/
-   private void reindexTable(QuickSearchQBitConfig config, QuickSearchOpenSearchClient searchClient, QuickSearchIndex index) throws QException
-   {
-      String tableName = index.getTableName();
-      LOG.info("Starting full reindex", logPair("tableName", tableName));
-
-      Instant startTime = Instant.now();
-      QuickSearchIndexRun run = createRunRecord(config, index, "FULL", "RUNNING", startTime);
-
-      int recordsProcessed = 0;
-      int recordsIndexed = 0;
-      String errorMessage = null;
+      Integer totalProcessed = 0;
+      Integer totalIndexed = 0;
+      Integer totalErrors = 0;
 
       try
       {
-         ///////////////////////////////////////
-         // Delete existing documents for table //
-         ///////////////////////////////////////
-         searchClient.deleteDocumentsForTable(tableName);
+         ////////////////////////////////////////////////////
+         // Delete existing documents for this table       //
+         ////////////////////////////////////////////////////
+         client.deleteDocumentsForTable(tableName);
 
-         ///////////////////////////////////
-         // Query all records from source //
-         ///////////////////////////////////
-         QTableMetaData table = QContext.getQInstance().getTable(tableName);
-         if(table == null)
+         ////////////////////////////////////////////////////
+         // Paginate through all records and index them    //
+         ////////////////////////////////////////////////////
+         Integer sourceBatchSize = config.getSourceBatchSize();
+         Integer offset = 0;
+
+         while(true)
          {
-            throw new QException("Table not found: " + tableName);
-         }
+            List<QRecord> batch = querySourceTableBatch(tableName, new QQueryFilter(), sourceBatchSize, offset);
 
-         List<String> searchableFields = parseFieldsJson(index.getSearchableFieldsJson());
-
-         QueryInput queryInput = new QueryInput().withTableName(tableName);
-         QueryOutput queryOutput = new QueryAction().execute(queryInput);
-
-         recordsProcessed = queryOutput.getRecords().size();
-
-         /////////////////////////////////////
-         // Build and index documents //
-         /////////////////////////////////////
-         List<OpenSearchDocument> documents = new ArrayList<>();
-         for(QRecord record : queryOutput.getRecords())
-         {
-            OpenSearchDocument doc = IndexingUtils.buildDocument(record, table, searchableFields);
-            if(StringUtils.hasContent(doc.getSearchableText()))
+            if(batch.isEmpty())
             {
+               break;
+            }
+
+            List<OpenSearchDocument> documents = new ArrayList<>();
+            for(QRecord record : batch)
+            {
+               OpenSearchDocument doc = IndexingUtils.buildDocument(
+                  record,
+                  tableName,
+                  tableConfig.getPrimaryKeyField(),
+                  tableConfig.getSearchableFields(),
+                  tableConfig.getFieldWeights(),
+                  tableConfig.getFieldIncludeLabels() != null ? tableConfig.getFieldIncludeLabels() : java.util.Collections.emptyMap());
                documents.add(doc);
             }
+
+            BulkIndexResult result = client.indexDocuments(documents, config.getBulkBatchSize());
+
+            totalProcessed += batch.size();
+            totalIndexed += result.getSuccessCount();
+            totalErrors += result.getFailureCount();
+
+            offset += batch.size();
          }
 
-         if(!documents.isEmpty())
-         {
-            searchClient.indexDocuments(documents);
-            recordsIndexed = documents.size();
-         }
+         ////////////////////////////////////////////////////
+         // Update the QuickSearchIndex row               //
+         ////////////////////////////////////////////////////
+         QRecord updateRecord = new QRecord()
+            .withValue("id", indexId)
+            .withValue("lastFullReindexTime", Instant.now())
+            .withValue("recordCount", totalProcessed);
 
-         /////////////////////////////////////
-         // Update index status //
-         /////////////////////////////////////
-         updateIndexStatus(config, index, startTime, recordsIndexed);
+         UpdateInput updateInput = new UpdateInput();
+         updateInput.setTableName(QuickSearchIndex.TABLE_NAME);
+         updateInput.setRecords(List.of(updateRecord));
 
-         LOG.info("Full reindex complete", logPair("tableName", tableName), logPair("recordsIndexed", recordsIndexed));
+         new UpdateAction().execute(updateInput);
+
+         ////////////////////////////////////////////////////
+         // Complete the run record as success             //
+         ////////////////////////////////////////////////////
+         completeRunRecord(run, "SUCCESS", totalProcessed, totalIndexed, totalErrors, null);
+
+         LOG.info("Full reindex complete", "tableName", tableName, "totalProcessed", totalProcessed,
+            "totalIndexed", totalIndexed, "totalErrors", totalErrors);
       }
       catch(Exception e)
       {
-         errorMessage = e.getMessage();
-         LOG.error("Full reindex failed", logPair("tableName", tableName), e);
-         throw new QException("Full reindex failed for table: " + tableName, e);
+         LOG.warn("Full reindex failed", e, "tableName", tableName);
+         completeRunRecord(run, "FAILED", totalProcessed, totalIndexed, totalErrors, e.getMessage());
+         throw new QException("Full reindex failed for table [" + tableName + "]: " + e.getMessage(), e);
       }
-      finally
-      {
-         completeRunRecord(config, run, recordsProcessed, recordsIndexed, errorMessage);
-      }
-   }
-
-
-
-   /***************************************************************************
-    ** Parse searchable fields from JSON.
-    ***************************************************************************/
-   @SuppressWarnings("unchecked")
-   private List<String> parseFieldsJson(String json)
-   {
-      if(!StringUtils.hasContent(json))
-      {
-         return new ArrayList<>();
-      }
-
-      try
-      {
-         return JsonUtils.toObject(json, List.class);
-      }
-      catch(Exception e)
-      {
-         LOG.warn("Failed to parse searchable fields JSON", logPair("json", json), e);
-         return new ArrayList<>();
-      }
-   }
-
-
-
-   /***************************************************************************
-    ** Create a run record for tracking.
-    ***************************************************************************/
-   private QuickSearchIndexRun createRunRecord(QuickSearchQBitConfig config, QuickSearchIndex index, String runType, String status, Instant startTime) throws QException
-   {
-      String runTableName = config.applyPrefix(QuickSearchIndexRun.TABLE_NAME);
-
-      QRecord runRecord = new QRecord()
-         .withValue("quickSearchIndexId", index.getId())
-         .withValue("runType", runType)
-         .withValue("status", status)
-         .withValue("startTime", startTime);
-
-      InsertInput insertInput = new InsertInput()
-         .withTableName(runTableName)
-         .withRecords(List.of(runRecord));
-
-      new InsertAction().execute(insertInput);
-
-      QuickSearchIndexRun run = new QuickSearchIndexRun()
-         .withQuickSearchIndexId(index.getId())
-         .withRunType(runType)
-         .withStatus(status)
-         .withStartTime(startTime);
-      return run;
-   }
-
-
-
-   /***************************************************************************
-    ** Map a QRecord to a QuickSearchIndex entity.
-    ***************************************************************************/
-   private QuickSearchIndex mapRecordToIndex(QRecord record)
-   {
-      return new QuickSearchIndex()
-         .withId(record.getValueInteger("id"))
-         .withTableName(record.getValueString("tableName"))
-         .withIsEnabled(record.getValueBoolean("isEnabled"))
-         .withBasepullIntervalMinutes(record.getValueInteger("basepullIntervalMinutes"))
-         .withBasepullTimestampField(record.getValueString("basepullTimestampField"))
-         .withSearchableFieldsJson(record.getValueString("searchableFieldsJson"))
-         .withLastFullIndexTime(record.getValueInstant("lastFullIndexTime"))
-         .withLastBasepullTime(record.getValueInstant("lastBasepullTime"))
-         .withIndexedRecordCount(record.getValueInteger("indexedRecordCount"));
-   }
-
-
-
-   /***************************************************************************
-    ** Complete a run record with final status.
-    ***************************************************************************/
-   private void completeRunRecord(QuickSearchQBitConfig config, QuickSearchIndexRun run, int recordsProcessed, int recordsIndexed, String errorMessage) throws QException
-   {
-      String runTableName = config.applyPrefix(QuickSearchIndexRun.TABLE_NAME);
-
-      String status = errorMessage == null ? "COMPLETE" : "ERROR";
-
-      QRecord updateRecord = new QRecord()
-         .withValue("id", run.getId())
-         .withValue("status", status)
-         .withValue("endTime", Instant.now())
-         .withValue("recordsProcessed", recordsProcessed)
-         .withValue("recordsIndexed", recordsIndexed)
-         .withValue("errorMessage", errorMessage);
-
-      UpdateInput updateInput = new UpdateInput()
-         .withTableName(runTableName)
-         .withRecords(List.of(updateRecord));
-
-      new UpdateAction().execute(updateInput);
-   }
-
-
-
-   /***************************************************************************
-    ** Update the index status after successful reindex.
-    ***************************************************************************/
-   private void updateIndexStatus(QuickSearchQBitConfig config, QuickSearchIndex index, Instant fullIndexTime, int recordCount) throws QException
-   {
-      String indexTableName = config.applyPrefix(QuickSearchIndex.TABLE_NAME);
-
-      QRecord updateRecord = new QRecord()
-         .withValue("id", index.getId())
-         .withValue("lastFullIndexTime", fullIndexTime)
-         .withValue("indexedRecordCount", recordCount)
-         .withValue("modifyDate", Instant.now());
-
-      UpdateInput updateInput = new UpdateInput()
-         .withTableName(indexTableName)
-         .withRecords(List.of(updateRecord));
-
-      new UpdateAction().execute(updateInput);
    }
 
 }

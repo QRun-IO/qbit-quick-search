@@ -5,7 +5,7 @@
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
  *
- *     http://www.apache.org/licenses/LICENSE-2.0
+ *     https://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -13,10 +13,13 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+
 package com.kingsrook.qbits.quicksearch.opensearch;
 
 
 import java.time.Instant;
+import java.util.HashMap;
+import java.util.Map;
 import org.junit.jupiter.api.Test;
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -27,76 +30,70 @@ import static org.assertj.core.api.Assertions.assertThat;
 class OpenSearchDocumentTest
 {
 
-   /***************************************************************************
-    ** Test document ID generation.
-    ***************************************************************************/
+   /*******************************************************************************
+    ** Test that fluent setters return this and getters return values.
+    *******************************************************************************/
    @Test
-   void testGetDocumentId_returnsCompositeKey()
+   void testFluentSetters()
+   {
+      Instant now = Instant.now();
+      Map<String, Object> fieldValues = new HashMap<>();
+      fieldValues.put("name", "Alice");
+
+      OpenSearchDocument doc = new OpenSearchDocument()
+         .withSourceTable("users")
+         .withRecordId("7")
+         .withRecordLabel("Alice")
+         .withSearchableText("Alice Smith admin user")
+         .withIndexedAt(now)
+         .withFieldValues(fieldValues);
+
+      assertThat(doc.getSourceTable()).isEqualTo("users");
+      assertThat(doc.getRecordId()).isEqualTo("7");
+      assertThat(doc.getRecordLabel()).isEqualTo("Alice");
+      assertThat(doc.getSearchableText()).isEqualTo("Alice Smith admin user");
+      assertThat(doc.getIndexedAt()).isEqualTo(now);
+      assertThat(doc.getFieldValues()).containsEntry("name", "Alice");
+   }
+
+   /*******************************************************************************
+    ** Test that withX methods return this.
+    *******************************************************************************/
+   @Test
+   void testWithReturnsThis()
+   {
+      OpenSearchDocument doc = new OpenSearchDocument();
+      assertThat(doc.withSourceTable("t")).isSameAs(doc);
+      assertThat(doc.withRecordId("1")).isSameAs(doc);
+      assertThat(doc.withRecordLabel("l")).isSameAs(doc);
+      assertThat(doc.withSearchableText("text")).isSameAs(doc);
+      assertThat(doc.withIndexedAt(Instant.now())).isSameAs(doc);
+      assertThat(doc.withFieldValues(Map.of())).isSameAs(doc);
+   }
+
+   /*******************************************************************************
+    ** Test getDocumentId() returns "sourceTable:recordId".
+    *******************************************************************************/
+   @Test
+   void testGetDocumentId()
    {
       OpenSearchDocument doc = new OpenSearchDocument()
          .withSourceTable("orders")
-         .withRecordId("12345");
+         .withRecordId("42");
 
-      assertThat(doc.getDocumentId()).isEqualTo("orders:12345");
+      assertThat(doc.getDocumentId()).isEqualTo("orders:42");
    }
 
-
-
-   /***************************************************************************
-    ** Test document ID with null source table.
-    ***************************************************************************/
+   /*******************************************************************************
+    ** Test getDocumentId() when sourceTable is null.
+    *******************************************************************************/
    @Test
-   void testGetDocumentId_nullSourceTable_handlesGracefully()
+   void testGetDocumentIdWithNullSourceTable()
    {
       OpenSearchDocument doc = new OpenSearchDocument()
-         .withSourceTable(null)
-         .withRecordId("12345");
+         .withRecordId("10");
 
-      assertThat(doc.getDocumentId()).isEqualTo("null:12345");
-   }
-
-
-
-   /***************************************************************************
-    ** Test all getters and setters.
-    ***************************************************************************/
-   @Test
-   void testGettersAndSetters()
-   {
-      Instant now = Instant.now();
-
-      OpenSearchDocument doc = new OpenSearchDocument()
-         .withSourceTable("customers")
-         .withRecordId("999")
-         .withRecordLabel("Customer #999")
-         .withSearchableText("john doe acme corp")
-         .withIndexedAt(now);
-
-      assertThat(doc.getSourceTable()).isEqualTo("customers");
-      assertThat(doc.getRecordId()).isEqualTo("999");
-      assertThat(doc.getRecordLabel()).isEqualTo("Customer #999");
-      assertThat(doc.getSearchableText()).isEqualTo("john doe acme corp");
-      assertThat(doc.getIndexedAt()).isEqualTo(now);
-   }
-
-
-
-   /***************************************************************************
-    ** Test fluent setters return this.
-    ***************************************************************************/
-   @Test
-   void testFluentSetters_returnThis()
-   {
-      OpenSearchDocument doc = new OpenSearchDocument();
-
-      OpenSearchDocument result = doc
-         .withSourceTable("test")
-         .withRecordId("1")
-         .withRecordLabel("label")
-         .withSearchableText("text")
-         .withIndexedAt(Instant.now());
-
-      assertThat(result).isSameAs(doc);
+      assertThat(doc.getDocumentId()).isEqualTo("null:10");
    }
 
 }

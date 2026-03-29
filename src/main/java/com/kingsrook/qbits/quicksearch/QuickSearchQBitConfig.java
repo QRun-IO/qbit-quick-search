@@ -24,26 +24,47 @@ import com.kingsrook.qqq.backend.core.utils.StringUtils;
 
 /*******************************************************************************
  ** Configuration for the Quick Search QBit.
+ **
+ ** Required fields: backendName, opensearchHost, opensearchPort,
+ ** opensearchIndexName, searchableEntityClasses.
+ **
+ ** Optional: opensearchUsername and opensearchPassword (must be set together),
+ ** tableNamePrefix, useSsl (default false), enableScheduledProcesses (default
+ ** true), enableRealTimeIndexing (default true), defaultBasepullIntervalMinutes
+ ** (default 5), bulkBatchSize (default 500), sourceBatchSize (default 1000).
+ **
+ ** Note: indexEventPublisher is typed as Object until the IndexEventPublisher
+ ** interface is created in Task 7, at which point it will be properly typed.
  *******************************************************************************/
 public class QuickSearchQBitConfig implements QBitConfig
 {
-   private String  backendName;
-   private String  tableNamePrefix;
-   private String  opensearchHost;
-   private Integer opensearchPort;
-   private String  opensearchIndexName;
-   private String  opensearchUsername;
-   private String  opensearchPassword;
-   private Boolean useSsl;
-   private Boolean autoDiscoverAnnotations;
-   private Boolean enableScheduledProcesses;
-   private Integer defaultBasepullIntervalMinutes;
+   private String         backendName;
+   private String         tableNamePrefix;
+   private String         opensearchHost;
+   private Integer        opensearchPort;
+   private String         opensearchIndexName;
+   private String         opensearchUsername;
+   private String         opensearchPassword;
+   private Boolean        useSsl                        = false;
+   private Boolean        autoDiscoverAnnotations;
+   private Boolean        enableScheduledProcesses      = true;
+   private Boolean        enableRealTimeIndexing        = true;
+   private Integer        defaultBasepullIntervalMinutes = 5;
+   private Integer        bulkBatchSize                  = 500;
+   private Integer        sourceBatchSize                = 1000;
    private List<Class<?>> searchableEntityClasses;
+
+   /////////////////////////////////////////////////////////////////////////////
+   // Typed as Object until IndexEventPublisher interface exists (see Task 7) //
+   /////////////////////////////////////////////////////////////////////////////
+   private Object indexEventPublisher;
 
 
 
    /***************************************************************************
     ** Validate configuration before QBit is produced.
+    **
+    ** Collects all validation errors into the provided errors list.
     ***************************************************************************/
    @Override
    public void validate(QInstance qInstance, List<String> errors)
@@ -66,10 +87,45 @@ public class QuickSearchQBitConfig implements QBitConfig
       {
          errors.add("opensearchPort is required for QuickSearchQBit");
       }
+      else if(opensearchPort <= 0)
+      {
+         errors.add("opensearchPort must be positive for QuickSearchQBit");
+      }
 
       if(!StringUtils.hasContent(opensearchIndexName))
       {
          errors.add("opensearchIndexName is required for QuickSearchQBit");
+      }
+
+      boolean hasUsername = StringUtils.hasContent(opensearchUsername);
+      boolean hasPassword = StringUtils.hasContent(opensearchPassword);
+      if(hasUsername && !hasPassword)
+      {
+         errors.add("opensearchPassword is required when opensearchUsername is set");
+      }
+      else if(!hasUsername && hasPassword)
+      {
+         errors.add("opensearchUsername is required when opensearchPassword is set");
+      }
+
+      if(searchableEntityClasses == null || searchableEntityClasses.isEmpty())
+      {
+         errors.add("searchableEntityClasses is required for QuickSearchQBit");
+      }
+
+      if(bulkBatchSize != null && bulkBatchSize <= 0)
+      {
+         errors.add("bulkBatchSize must be positive for QuickSearchQBit");
+      }
+
+      if(sourceBatchSize != null && sourceBatchSize <= 0)
+      {
+         errors.add("sourceBatchSize must be positive for QuickSearchQBit");
+      }
+
+      if(defaultBasepullIntervalMinutes != null && defaultBasepullIntervalMinutes <= 0)
+      {
+         errors.add("defaultBasepullIntervalMinutes must be positive for QuickSearchQBit");
       }
    }
 
@@ -77,14 +133,17 @@ public class QuickSearchQBitConfig implements QBitConfig
 
    /***************************************************************************
     ** Apply table name prefix if configured.
+    **
+    ** If tableNamePrefix is non-null and non-empty, returns prefix + name.
+    ** Otherwise returns name unchanged.
     ***************************************************************************/
-   public String applyPrefix(String tableName)
+   public String applyPrefix(String name)
    {
       if(StringUtils.hasContent(tableNamePrefix))
       {
-         return tableNamePrefix + tableName;
+         return tableNamePrefix + name;
       }
-      return tableName;
+      return name;
    }
 
 
@@ -400,6 +459,37 @@ public class QuickSearchQBitConfig implements QBitConfig
 
 
    /***************************************************************************
+    ** Getter for enableRealTimeIndexing
+    ***************************************************************************/
+   public Boolean getEnableRealTimeIndexing()
+   {
+      return (this.enableRealTimeIndexing);
+   }
+
+
+
+   /***************************************************************************
+    ** Setter for enableRealTimeIndexing
+    ***************************************************************************/
+   public void setEnableRealTimeIndexing(Boolean enableRealTimeIndexing)
+   {
+      this.enableRealTimeIndexing = enableRealTimeIndexing;
+   }
+
+
+
+   /***************************************************************************
+    ** Fluent setter for enableRealTimeIndexing
+    ***************************************************************************/
+   public QuickSearchQBitConfig withEnableRealTimeIndexing(Boolean enableRealTimeIndexing)
+   {
+      this.enableRealTimeIndexing = enableRealTimeIndexing;
+      return (this);
+   }
+
+
+
+   /***************************************************************************
     ** Getter for defaultBasepullIntervalMinutes
     ***************************************************************************/
    public Integer getDefaultBasepullIntervalMinutes()
@@ -431,6 +521,68 @@ public class QuickSearchQBitConfig implements QBitConfig
 
 
    /***************************************************************************
+    ** Getter for bulkBatchSize
+    ***************************************************************************/
+   public Integer getBulkBatchSize()
+   {
+      return (this.bulkBatchSize);
+   }
+
+
+
+   /***************************************************************************
+    ** Setter for bulkBatchSize
+    ***************************************************************************/
+   public void setBulkBatchSize(Integer bulkBatchSize)
+   {
+      this.bulkBatchSize = bulkBatchSize;
+   }
+
+
+
+   /***************************************************************************
+    ** Fluent setter for bulkBatchSize
+    ***************************************************************************/
+   public QuickSearchQBitConfig withBulkBatchSize(Integer bulkBatchSize)
+   {
+      this.bulkBatchSize = bulkBatchSize;
+      return (this);
+   }
+
+
+
+   /***************************************************************************
+    ** Getter for sourceBatchSize
+    ***************************************************************************/
+   public Integer getSourceBatchSize()
+   {
+      return (this.sourceBatchSize);
+   }
+
+
+
+   /***************************************************************************
+    ** Setter for sourceBatchSize
+    ***************************************************************************/
+   public void setSourceBatchSize(Integer sourceBatchSize)
+   {
+      this.sourceBatchSize = sourceBatchSize;
+   }
+
+
+
+   /***************************************************************************
+    ** Fluent setter for sourceBatchSize
+    ***************************************************************************/
+   public QuickSearchQBitConfig withSourceBatchSize(Integer sourceBatchSize)
+   {
+      this.sourceBatchSize = sourceBatchSize;
+      return (this);
+   }
+
+
+
+   /***************************************************************************
     ** Getter for searchableEntityClasses
     ***************************************************************************/
    public List<Class<?>> getSearchableEntityClasses()
@@ -456,6 +608,43 @@ public class QuickSearchQBitConfig implements QBitConfig
    public QuickSearchQBitConfig withSearchableEntityClasses(List<Class<?>> searchableEntityClasses)
    {
       this.searchableEntityClasses = searchableEntityClasses;
+      return (this);
+   }
+
+
+
+   /***************************************************************************
+    ** Getter for indexEventPublisher
+    **
+    ** Typed as Object until IndexEventPublisher interface exists (Task 7).
+    ***************************************************************************/
+   public Object getIndexEventPublisher()
+   {
+      return (this.indexEventPublisher);
+   }
+
+
+
+   /***************************************************************************
+    ** Setter for indexEventPublisher
+    **
+    ** Typed as Object until IndexEventPublisher interface exists (Task 7).
+    ***************************************************************************/
+   public void setIndexEventPublisher(Object indexEventPublisher)
+   {
+      this.indexEventPublisher = indexEventPublisher;
+   }
+
+
+
+   /***************************************************************************
+    ** Fluent setter for indexEventPublisher
+    **
+    ** Typed as Object until IndexEventPublisher interface exists (Task 7).
+    ***************************************************************************/
+   public QuickSearchQBitConfig withIndexEventPublisher(Object indexEventPublisher)
+   {
+      this.indexEventPublisher = indexEventPublisher;
       return (this);
    }
 

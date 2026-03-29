@@ -5,7 +5,7 @@
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
  *
- *     http://www.apache.org/licenses/LICENSE-2.0
+ *     https://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -13,6 +13,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+
 package com.kingsrook.qbits.quicksearch.model;
 
 
@@ -22,50 +23,57 @@ import com.kingsrook.qqq.backend.core.model.data.QRecordEntity;
 
 
 /*******************************************************************************
- ** Entity for tracking Quick Search index configuration and status per table.
+ ** Entity bean for the quickSearchIndex table.
+ **
+ ** Tracks configuration for each table that participates in the quick search
+ ** index, including basepull scheduling, searchable field definitions, and
+ ** current indexing status.
  *******************************************************************************/
 public class QuickSearchIndex extends QRecordEntity
 {
    public static final String TABLE_NAME = "quickSearchIndex";
 
-   @QField(isPrimaryKey = true)
+   @QField()
    private Integer id;
 
-   @QField(label = "Table Name", isRequired = true, isEditable = false)
+   @QField()
    private String tableName;
 
-   @QField(label = "Enabled")
-   private Boolean isEnabled;
+   @QField()
+   private Boolean enabled;
 
-   @QField(label = "Basepull Interval (min)")
+   @QField()
    private Integer basepullIntervalMinutes;
 
-   @QField(label = "Timestamp Field")
+   @QField()
    private String basepullTimestampField;
 
-   @QField(label = "Searchable Fields")
+   @QField()
    private String searchableFieldsJson;
 
-   @QField(label = "Last Full Index Time", isEditable = false)
-   private Instant lastFullIndexTime;
-
-   @QField(label = "Last Basepull Time", isEditable = false)
+   @QField()
    private Instant lastBasepullTime;
 
-   @QField(label = "Indexed Record Count", isEditable = false)
-   private Integer indexedRecordCount;
+   @QField()
+   private Instant lastFullReindexTime;
 
-   @QField(label = "Create Date", isEditable = false)
+   @QField()
+   private Integer recordCount;
+
+   @QField()
+   private String status;
+
+   @QField()
    private Instant createDate;
 
-   @QField(label = "Modify Date", isEditable = false)
+   @QField()
    private Instant modifyDate;
 
 
 
-   /***************************************************************************
+   /*******************************************************************************
     ** Getter for id
-    ***************************************************************************/
+    *******************************************************************************/
    public Integer getId()
    {
       return (this.id);
@@ -73,19 +81,9 @@ public class QuickSearchIndex extends QRecordEntity
 
 
 
-   /***************************************************************************
-    ** Setter for id
-    ***************************************************************************/
-   public void setId(Integer id)
-   {
-      this.id = id;
-   }
-
-
-
-   /***************************************************************************
+   /*******************************************************************************
     ** Fluent setter for id
-    ***************************************************************************/
+    *******************************************************************************/
    public QuickSearchIndex withId(Integer id)
    {
       this.id = id;
@@ -94,9 +92,9 @@ public class QuickSearchIndex extends QRecordEntity
 
 
 
-   /***************************************************************************
+   /*******************************************************************************
     ** Getter for tableName
-    ***************************************************************************/
+    *******************************************************************************/
    public String getTableName()
    {
       return (this.tableName);
@@ -104,19 +102,9 @@ public class QuickSearchIndex extends QRecordEntity
 
 
 
-   /***************************************************************************
-    ** Setter for tableName
-    ***************************************************************************/
-   public void setTableName(String tableName)
-   {
-      this.tableName = tableName;
-   }
-
-
-
-   /***************************************************************************
+   /*******************************************************************************
     ** Fluent setter for tableName
-    ***************************************************************************/
+    *******************************************************************************/
    public QuickSearchIndex withTableName(String tableName)
    {
       this.tableName = tableName;
@@ -125,40 +113,30 @@ public class QuickSearchIndex extends QRecordEntity
 
 
 
-   /***************************************************************************
-    ** Getter for isEnabled
-    ***************************************************************************/
-   public Boolean getIsEnabled()
+   /*******************************************************************************
+    ** Getter for enabled
+    *******************************************************************************/
+   public Boolean getEnabled()
    {
-      return (this.isEnabled);
+      return (this.enabled);
    }
 
 
 
-   /***************************************************************************
-    ** Setter for isEnabled
-    ***************************************************************************/
-   public void setIsEnabled(Boolean isEnabled)
+   /*******************************************************************************
+    ** Fluent setter for enabled
+    *******************************************************************************/
+   public QuickSearchIndex withEnabled(Boolean enabled)
    {
-      this.isEnabled = isEnabled;
-   }
-
-
-
-   /***************************************************************************
-    ** Fluent setter for isEnabled
-    ***************************************************************************/
-   public QuickSearchIndex withIsEnabled(Boolean isEnabled)
-   {
-      this.isEnabled = isEnabled;
+      this.enabled = enabled;
       return (this);
    }
 
 
 
-   /***************************************************************************
+   /*******************************************************************************
     ** Getter for basepullIntervalMinutes
-    ***************************************************************************/
+    *******************************************************************************/
    public Integer getBasepullIntervalMinutes()
    {
       return (this.basepullIntervalMinutes);
@@ -166,19 +144,9 @@ public class QuickSearchIndex extends QRecordEntity
 
 
 
-   /***************************************************************************
-    ** Setter for basepullIntervalMinutes
-    ***************************************************************************/
-   public void setBasepullIntervalMinutes(Integer basepullIntervalMinutes)
-   {
-      this.basepullIntervalMinutes = basepullIntervalMinutes;
-   }
-
-
-
-   /***************************************************************************
+   /*******************************************************************************
     ** Fluent setter for basepullIntervalMinutes
-    ***************************************************************************/
+    *******************************************************************************/
    public QuickSearchIndex withBasepullIntervalMinutes(Integer basepullIntervalMinutes)
    {
       this.basepullIntervalMinutes = basepullIntervalMinutes;
@@ -187,9 +155,9 @@ public class QuickSearchIndex extends QRecordEntity
 
 
 
-   /***************************************************************************
+   /*******************************************************************************
     ** Getter for basepullTimestampField
-    ***************************************************************************/
+    *******************************************************************************/
    public String getBasepullTimestampField()
    {
       return (this.basepullTimestampField);
@@ -197,19 +165,9 @@ public class QuickSearchIndex extends QRecordEntity
 
 
 
-   /***************************************************************************
-    ** Setter for basepullTimestampField
-    ***************************************************************************/
-   public void setBasepullTimestampField(String basepullTimestampField)
-   {
-      this.basepullTimestampField = basepullTimestampField;
-   }
-
-
-
-   /***************************************************************************
+   /*******************************************************************************
     ** Fluent setter for basepullTimestampField
-    ***************************************************************************/
+    *******************************************************************************/
    public QuickSearchIndex withBasepullTimestampField(String basepullTimestampField)
    {
       this.basepullTimestampField = basepullTimestampField;
@@ -218,9 +176,9 @@ public class QuickSearchIndex extends QRecordEntity
 
 
 
-   /***************************************************************************
+   /*******************************************************************************
     ** Getter for searchableFieldsJson
-    ***************************************************************************/
+    *******************************************************************************/
    public String getSearchableFieldsJson()
    {
       return (this.searchableFieldsJson);
@@ -228,19 +186,9 @@ public class QuickSearchIndex extends QRecordEntity
 
 
 
-   /***************************************************************************
-    ** Setter for searchableFieldsJson
-    ***************************************************************************/
-   public void setSearchableFieldsJson(String searchableFieldsJson)
-   {
-      this.searchableFieldsJson = searchableFieldsJson;
-   }
-
-
-
-   /***************************************************************************
+   /*******************************************************************************
     ** Fluent setter for searchableFieldsJson
-    ***************************************************************************/
+    *******************************************************************************/
    public QuickSearchIndex withSearchableFieldsJson(String searchableFieldsJson)
    {
       this.searchableFieldsJson = searchableFieldsJson;
@@ -249,40 +197,9 @@ public class QuickSearchIndex extends QRecordEntity
 
 
 
-   /***************************************************************************
-    ** Getter for lastFullIndexTime
-    ***************************************************************************/
-   public Instant getLastFullIndexTime()
-   {
-      return (this.lastFullIndexTime);
-   }
-
-
-
-   /***************************************************************************
-    ** Setter for lastFullIndexTime
-    ***************************************************************************/
-   public void setLastFullIndexTime(Instant lastFullIndexTime)
-   {
-      this.lastFullIndexTime = lastFullIndexTime;
-   }
-
-
-
-   /***************************************************************************
-    ** Fluent setter for lastFullIndexTime
-    ***************************************************************************/
-   public QuickSearchIndex withLastFullIndexTime(Instant lastFullIndexTime)
-   {
-      this.lastFullIndexTime = lastFullIndexTime;
-      return (this);
-   }
-
-
-
-   /***************************************************************************
+   /*******************************************************************************
     ** Getter for lastBasepullTime
-    ***************************************************************************/
+    *******************************************************************************/
    public Instant getLastBasepullTime()
    {
       return (this.lastBasepullTime);
@@ -290,19 +207,9 @@ public class QuickSearchIndex extends QRecordEntity
 
 
 
-   /***************************************************************************
-    ** Setter for lastBasepullTime
-    ***************************************************************************/
-   public void setLastBasepullTime(Instant lastBasepullTime)
-   {
-      this.lastBasepullTime = lastBasepullTime;
-   }
-
-
-
-   /***************************************************************************
+   /*******************************************************************************
     ** Fluent setter for lastBasepullTime
-    ***************************************************************************/
+    *******************************************************************************/
    public QuickSearchIndex withLastBasepullTime(Instant lastBasepullTime)
    {
       this.lastBasepullTime = lastBasepullTime;
@@ -311,40 +218,72 @@ public class QuickSearchIndex extends QRecordEntity
 
 
 
-   /***************************************************************************
-    ** Getter for indexedRecordCount
-    ***************************************************************************/
-   public Integer getIndexedRecordCount()
+   /*******************************************************************************
+    ** Getter for lastFullReindexTime
+    *******************************************************************************/
+   public Instant getLastFullReindexTime()
    {
-      return (this.indexedRecordCount);
+      return (this.lastFullReindexTime);
    }
 
 
 
-   /***************************************************************************
-    ** Setter for indexedRecordCount
-    ***************************************************************************/
-   public void setIndexedRecordCount(Integer indexedRecordCount)
+   /*******************************************************************************
+    ** Fluent setter for lastFullReindexTime
+    *******************************************************************************/
+   public QuickSearchIndex withLastFullReindexTime(Instant lastFullReindexTime)
    {
-      this.indexedRecordCount = indexedRecordCount;
-   }
-
-
-
-   /***************************************************************************
-    ** Fluent setter for indexedRecordCount
-    ***************************************************************************/
-   public QuickSearchIndex withIndexedRecordCount(Integer indexedRecordCount)
-   {
-      this.indexedRecordCount = indexedRecordCount;
+      this.lastFullReindexTime = lastFullReindexTime;
       return (this);
    }
 
 
 
-   /***************************************************************************
+   /*******************************************************************************
+    ** Getter for recordCount
+    *******************************************************************************/
+   public Integer getRecordCount()
+   {
+      return (this.recordCount);
+   }
+
+
+
+   /*******************************************************************************
+    ** Fluent setter for recordCount
+    *******************************************************************************/
+   public QuickSearchIndex withRecordCount(Integer recordCount)
+   {
+      this.recordCount = recordCount;
+      return (this);
+   }
+
+
+
+   /*******************************************************************************
+    ** Getter for status
+    *******************************************************************************/
+   public String getStatus()
+   {
+      return (this.status);
+   }
+
+
+
+   /*******************************************************************************
+    ** Fluent setter for status
+    *******************************************************************************/
+   public QuickSearchIndex withStatus(String status)
+   {
+      this.status = status;
+      return (this);
+   }
+
+
+
+   /*******************************************************************************
     ** Getter for createDate
-    ***************************************************************************/
+    *******************************************************************************/
    public Instant getCreateDate()
    {
       return (this.createDate);
@@ -352,19 +291,9 @@ public class QuickSearchIndex extends QRecordEntity
 
 
 
-   /***************************************************************************
-    ** Setter for createDate
-    ***************************************************************************/
-   public void setCreateDate(Instant createDate)
-   {
-      this.createDate = createDate;
-   }
-
-
-
-   /***************************************************************************
+   /*******************************************************************************
     ** Fluent setter for createDate
-    ***************************************************************************/
+    *******************************************************************************/
    public QuickSearchIndex withCreateDate(Instant createDate)
    {
       this.createDate = createDate;
@@ -373,9 +302,9 @@ public class QuickSearchIndex extends QRecordEntity
 
 
 
-   /***************************************************************************
+   /*******************************************************************************
     ** Getter for modifyDate
-    ***************************************************************************/
+    *******************************************************************************/
    public Instant getModifyDate()
    {
       return (this.modifyDate);
@@ -383,19 +312,9 @@ public class QuickSearchIndex extends QRecordEntity
 
 
 
-   /***************************************************************************
-    ** Setter for modifyDate
-    ***************************************************************************/
-   public void setModifyDate(Instant modifyDate)
-   {
-      this.modifyDate = modifyDate;
-   }
-
-
-
-   /***************************************************************************
+   /*******************************************************************************
     ** Fluent setter for modifyDate
-    ***************************************************************************/
+    *******************************************************************************/
    public QuickSearchIndex withModifyDate(Instant modifyDate)
    {
       this.modifyDate = modifyDate;

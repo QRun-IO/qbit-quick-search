@@ -5,7 +5,7 @@
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
  *
- *     http://www.apache.org/licenses/LICENSE-2.0
+ *     https://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -13,6 +13,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+
 package com.kingsrook.qbits.quicksearch.model;
 
 
@@ -22,47 +23,57 @@ import com.kingsrook.qqq.backend.core.model.data.QRecordEntity;
 
 
 /*******************************************************************************
- ** Entity for tracking Quick Search indexing job history.
+ ** Entity bean for the quickSearchIndexRun table.
+ **
+ ** Records a single execution of the indexing process for a given
+ ** QuickSearchIndex, capturing run type, timing, record counts, and any errors
+ ** encountered during the run.
  *******************************************************************************/
 public class QuickSearchIndexRun extends QRecordEntity
 {
    public static final String TABLE_NAME = "quickSearchIndexRun";
 
-   @QField(isPrimaryKey = true)
+   @QField()
    private Integer id;
 
-   @QField(label = "Index", isRequired = true)
+   @QField()
    private Integer quickSearchIndexId;
 
-   @QField(label = "Run Type", isRequired = true)
+   @QField()
    private String runType;
 
-   @QField(label = "Status", isRequired = true)
+   @QField()
    private String status;
 
-   @QField(label = "Start Time")
+   @QField()
    private Instant startTime;
 
-   @QField(label = "End Time")
+   @QField()
    private Instant endTime;
 
-   @QField(label = "Records Processed")
+   @QField()
    private Integer recordsProcessed;
 
-   @QField(label = "Records Indexed")
+   @QField()
    private Integer recordsIndexed;
 
-   @QField(label = "Error Count")
+   @QField()
    private Integer errorCount;
 
-   @QField(label = "Error Message")
+   @QField()
    private String errorMessage;
 
+   @QField()
+   private Instant createDate;
+
+   @QField()
+   private Instant modifyDate;
 
 
-   /***************************************************************************
+
+   /*******************************************************************************
     ** Getter for id
-    ***************************************************************************/
+    *******************************************************************************/
    public Integer getId()
    {
       return (this.id);
@@ -70,19 +81,9 @@ public class QuickSearchIndexRun extends QRecordEntity
 
 
 
-   /***************************************************************************
-    ** Setter for id
-    ***************************************************************************/
-   public void setId(Integer id)
-   {
-      this.id = id;
-   }
-
-
-
-   /***************************************************************************
+   /*******************************************************************************
     ** Fluent setter for id
-    ***************************************************************************/
+    *******************************************************************************/
    public QuickSearchIndexRun withId(Integer id)
    {
       this.id = id;
@@ -91,9 +92,9 @@ public class QuickSearchIndexRun extends QRecordEntity
 
 
 
-   /***************************************************************************
+   /*******************************************************************************
     ** Getter for quickSearchIndexId
-    ***************************************************************************/
+    *******************************************************************************/
    public Integer getQuickSearchIndexId()
    {
       return (this.quickSearchIndexId);
@@ -101,19 +102,9 @@ public class QuickSearchIndexRun extends QRecordEntity
 
 
 
-   /***************************************************************************
-    ** Setter for quickSearchIndexId
-    ***************************************************************************/
-   public void setQuickSearchIndexId(Integer quickSearchIndexId)
-   {
-      this.quickSearchIndexId = quickSearchIndexId;
-   }
-
-
-
-   /***************************************************************************
+   /*******************************************************************************
     ** Fluent setter for quickSearchIndexId
-    ***************************************************************************/
+    *******************************************************************************/
    public QuickSearchIndexRun withQuickSearchIndexId(Integer quickSearchIndexId)
    {
       this.quickSearchIndexId = quickSearchIndexId;
@@ -122,9 +113,9 @@ public class QuickSearchIndexRun extends QRecordEntity
 
 
 
-   /***************************************************************************
+   /*******************************************************************************
     ** Getter for runType
-    ***************************************************************************/
+    *******************************************************************************/
    public String getRunType()
    {
       return (this.runType);
@@ -132,19 +123,9 @@ public class QuickSearchIndexRun extends QRecordEntity
 
 
 
-   /***************************************************************************
-    ** Setter for runType
-    ***************************************************************************/
-   public void setRunType(String runType)
-   {
-      this.runType = runType;
-   }
-
-
-
-   /***************************************************************************
+   /*******************************************************************************
     ** Fluent setter for runType
-    ***************************************************************************/
+    *******************************************************************************/
    public QuickSearchIndexRun withRunType(String runType)
    {
       this.runType = runType;
@@ -153,9 +134,9 @@ public class QuickSearchIndexRun extends QRecordEntity
 
 
 
-   /***************************************************************************
+   /*******************************************************************************
     ** Getter for status
-    ***************************************************************************/
+    *******************************************************************************/
    public String getStatus()
    {
       return (this.status);
@@ -163,19 +144,9 @@ public class QuickSearchIndexRun extends QRecordEntity
 
 
 
-   /***************************************************************************
-    ** Setter for status
-    ***************************************************************************/
-   public void setStatus(String status)
-   {
-      this.status = status;
-   }
-
-
-
-   /***************************************************************************
+   /*******************************************************************************
     ** Fluent setter for status
-    ***************************************************************************/
+    *******************************************************************************/
    public QuickSearchIndexRun withStatus(String status)
    {
       this.status = status;
@@ -184,9 +155,9 @@ public class QuickSearchIndexRun extends QRecordEntity
 
 
 
-   /***************************************************************************
+   /*******************************************************************************
     ** Getter for startTime
-    ***************************************************************************/
+    *******************************************************************************/
    public Instant getStartTime()
    {
       return (this.startTime);
@@ -194,19 +165,9 @@ public class QuickSearchIndexRun extends QRecordEntity
 
 
 
-   /***************************************************************************
-    ** Setter for startTime
-    ***************************************************************************/
-   public void setStartTime(Instant startTime)
-   {
-      this.startTime = startTime;
-   }
-
-
-
-   /***************************************************************************
+   /*******************************************************************************
     ** Fluent setter for startTime
-    ***************************************************************************/
+    *******************************************************************************/
    public QuickSearchIndexRun withStartTime(Instant startTime)
    {
       this.startTime = startTime;
@@ -215,9 +176,9 @@ public class QuickSearchIndexRun extends QRecordEntity
 
 
 
-   /***************************************************************************
+   /*******************************************************************************
     ** Getter for endTime
-    ***************************************************************************/
+    *******************************************************************************/
    public Instant getEndTime()
    {
       return (this.endTime);
@@ -225,19 +186,9 @@ public class QuickSearchIndexRun extends QRecordEntity
 
 
 
-   /***************************************************************************
-    ** Setter for endTime
-    ***************************************************************************/
-   public void setEndTime(Instant endTime)
-   {
-      this.endTime = endTime;
-   }
-
-
-
-   /***************************************************************************
+   /*******************************************************************************
     ** Fluent setter for endTime
-    ***************************************************************************/
+    *******************************************************************************/
    public QuickSearchIndexRun withEndTime(Instant endTime)
    {
       this.endTime = endTime;
@@ -246,9 +197,9 @@ public class QuickSearchIndexRun extends QRecordEntity
 
 
 
-   /***************************************************************************
+   /*******************************************************************************
     ** Getter for recordsProcessed
-    ***************************************************************************/
+    *******************************************************************************/
    public Integer getRecordsProcessed()
    {
       return (this.recordsProcessed);
@@ -256,19 +207,9 @@ public class QuickSearchIndexRun extends QRecordEntity
 
 
 
-   /***************************************************************************
-    ** Setter for recordsProcessed
-    ***************************************************************************/
-   public void setRecordsProcessed(Integer recordsProcessed)
-   {
-      this.recordsProcessed = recordsProcessed;
-   }
-
-
-
-   /***************************************************************************
+   /*******************************************************************************
     ** Fluent setter for recordsProcessed
-    ***************************************************************************/
+    *******************************************************************************/
    public QuickSearchIndexRun withRecordsProcessed(Integer recordsProcessed)
    {
       this.recordsProcessed = recordsProcessed;
@@ -277,9 +218,9 @@ public class QuickSearchIndexRun extends QRecordEntity
 
 
 
-   /***************************************************************************
+   /*******************************************************************************
     ** Getter for recordsIndexed
-    ***************************************************************************/
+    *******************************************************************************/
    public Integer getRecordsIndexed()
    {
       return (this.recordsIndexed);
@@ -287,19 +228,9 @@ public class QuickSearchIndexRun extends QRecordEntity
 
 
 
-   /***************************************************************************
-    ** Setter for recordsIndexed
-    ***************************************************************************/
-   public void setRecordsIndexed(Integer recordsIndexed)
-   {
-      this.recordsIndexed = recordsIndexed;
-   }
-
-
-
-   /***************************************************************************
+   /*******************************************************************************
     ** Fluent setter for recordsIndexed
-    ***************************************************************************/
+    *******************************************************************************/
    public QuickSearchIndexRun withRecordsIndexed(Integer recordsIndexed)
    {
       this.recordsIndexed = recordsIndexed;
@@ -308,9 +239,9 @@ public class QuickSearchIndexRun extends QRecordEntity
 
 
 
-   /***************************************************************************
+   /*******************************************************************************
     ** Getter for errorCount
-    ***************************************************************************/
+    *******************************************************************************/
    public Integer getErrorCount()
    {
       return (this.errorCount);
@@ -318,19 +249,9 @@ public class QuickSearchIndexRun extends QRecordEntity
 
 
 
-   /***************************************************************************
-    ** Setter for errorCount
-    ***************************************************************************/
-   public void setErrorCount(Integer errorCount)
-   {
-      this.errorCount = errorCount;
-   }
-
-
-
-   /***************************************************************************
+   /*******************************************************************************
     ** Fluent setter for errorCount
-    ***************************************************************************/
+    *******************************************************************************/
    public QuickSearchIndexRun withErrorCount(Integer errorCount)
    {
       this.errorCount = errorCount;
@@ -339,9 +260,9 @@ public class QuickSearchIndexRun extends QRecordEntity
 
 
 
-   /***************************************************************************
+   /*******************************************************************************
     ** Getter for errorMessage
-    ***************************************************************************/
+    *******************************************************************************/
    public String getErrorMessage()
    {
       return (this.errorMessage);
@@ -349,22 +270,54 @@ public class QuickSearchIndexRun extends QRecordEntity
 
 
 
-   /***************************************************************************
-    ** Setter for errorMessage
-    ***************************************************************************/
-   public void setErrorMessage(String errorMessage)
+   /*******************************************************************************
+    ** Fluent setter for errorMessage
+    *******************************************************************************/
+   public QuickSearchIndexRun withErrorMessage(String errorMessage)
    {
       this.errorMessage = errorMessage;
+      return (this);
    }
 
 
 
-   /***************************************************************************
-    ** Fluent setter for errorMessage
-    ***************************************************************************/
-   public QuickSearchIndexRun withErrorMessage(String errorMessage)
+   /*******************************************************************************
+    ** Getter for createDate
+    *******************************************************************************/
+   public Instant getCreateDate()
    {
-      this.errorMessage = errorMessage;
+      return (this.createDate);
+   }
+
+
+
+   /*******************************************************************************
+    ** Fluent setter for createDate
+    *******************************************************************************/
+   public QuickSearchIndexRun withCreateDate(Instant createDate)
+   {
+      this.createDate = createDate;
+      return (this);
+   }
+
+
+
+   /*******************************************************************************
+    ** Getter for modifyDate
+    *******************************************************************************/
+   public Instant getModifyDate()
+   {
+      return (this.modifyDate);
+   }
+
+
+
+   /*******************************************************************************
+    ** Fluent setter for modifyDate
+    *******************************************************************************/
+   public QuickSearchIndexRun withModifyDate(Instant modifyDate)
+   {
+      this.modifyDate = modifyDate;
       return (this);
    }
 
