@@ -1,36 +1,83 @@
-# QBit Quick Search
+# QBit: Quick Search
 
-OpenSearch-backed full-text search for QQQ applications. Annotate your entity classes, configure a connection, call `produce()`, and your QQQ instance gains real-time indexing, basepull catch-up, and a pagination-aware search API.
+[![Version](https://img.shields.io/badge/version-0.1.0-blue.svg)](https://github.com/QRun-IO/qbit-quick-search)
+[![License](https://img.shields.io/badge/license-GNU%20Affero%20GPL%20v3-green.svg)](https://www.gnu.org/licenses/agpl-3.0.en.html)
+[![Java](https://img.shields.io/badge/java-21+-blue.svg)](https://adoptium.net/)
 
-## Features
+> **OpenSearch-Powered Full-Text Search for QQQ Applications**
 
-- Real-time indexing via post-insert, post-update, and post-delete customizers
-- Basepull safety net catches records missed during downtime
-- Per-field boost weights for relevance tuning
-- Edge-ngram analyzer for typeahead (prefix) search
-- Paginated search results via `QuickSearchAction`
-- Extensible `IndexEventPublisher` interface (swap in RabbitMQ, Kafka, etc.)
-- Admin app with run history tables produced automatically
+This QBit provides global search across QQQ application tables via OpenSearch. Annotate entity classes, configure a connection, produce the QBit, and gain real-time indexing, scheduled basepull catch-up, per-field relevance boosting, and a pagination-aware search API.
 
-## Requirements
+## Core Capabilities
 
-- Java 21
-- OpenSearch 2.x
-- QQQ 0.40+
+- **Real-Time Indexing**: Post-insert, post-update, and post-delete customizers index records immediately on write
+- **Basepull Safety Net**: Scheduled process catches records missed during downtime or bulk imports
+- **Field-Level Boosting**: `@QuickSearchField(weight = N)` controls relevance ranking per field
+- **Edge-Ngram Typeahead**: Custom analyzer enables prefix matching ("ord" finds "order")
+- **Paginated Search**: `QuickSearchAction` returns results with scores, highlights, total hits, and hasMore flag
+- **Extensible Publisher**: `IndexEventPublisher` interface allows swapping in RabbitMQ, Kafka, or any async transport
+- **Admin Observability**: Operational tables track index status and run history
 
-## Quick Start
+## Open Source & Full Control
 
-### 1. Add the Maven dependency
+QBit Quick Search is 100% open source under AGPL v3. All data stays in your OpenSearch cluster.
+
+## Architecture
+
+### Design Principles
+
+1. **Real-time first, basepull as safety net**: Table customizers index records synchronously on every insert, update, and delete. The basepull process runs on a schedule as a catch-up mechanism for bulk imports, OpenSearch downtime, or any records the real-time path missed.
+
+2. **Annotation-driven discovery**: Entity classes marked with `@QuickSearchable` and `@QuickSearchField` are discovered at produce time. No manual registration of fields or tables required.
+
+3. **Extensible transport**: The `IndexEventPublisher` strategy interface decouples the write path from the indexing path. The default `SynchronousIndexEventPublisher` writes directly to OpenSearch. Consumers can provide a queue-backed implementation for async indexing.
+
+### Technology Stack
+
+- **Java 21** with QQQ backend modules
+- **OpenSearch 2.x** for full-text search with custom edge-ngram analyzer
+- **QQQ Framework**: Entities, processes, customizers, permissions, API layer
+
+### Module Organization
+
+```
+qbit-quick-search/
+  src/main/java/com/kingsrook/qbits/quicksearch/
+    QuickSearchQBitConfig.java        -- Configuration and validation
+    QuickSearchQBitProducer.java      -- Produces tables, processes, customizers
+    QuickSearchQBitContext.java       -- Static runtime context
+    QuickSearchableTableConfig.java   -- Per-table index configuration
+    annotations/                      -- @QuickSearchable, @QuickSearchField
+    model/                            -- QuickSearchIndex, QuickSearchIndexRun entities
+    opensearch/                       -- OpenSearch client, document model, bulk results
+    actions/                          -- QuickSearchAction, input/output DTOs
+    processes/                        -- AbstractIndexingStep, BasepullIndexStep, FullReindexStep
+    customizers/                      -- Post-insert, post-update, post-delete customizers
+    publisher/                        -- IndexEventPublisher interface, SynchronousIndexEventPublisher
+```
+
+## Getting Started
+
+### Prerequisites
+
+- **Java 21+**
+- **Maven 3.8+**
+- **OpenSearch 2.x** instance
+- **QQQ Application** (this is a QBit, not a standalone application)
+
+### Usage
+
+#### Maven dependency
 
 ```xml
 <dependency>
     <groupId>com.kingsrook.qbits</groupId>
     <artifactId>qbit-quick-search</artifactId>
-    <version>0.1.0</version>
+    <version>0.1.0-SNAPSHOT</version>
 </dependency>
 ```
 
-### 2. Annotate an entity class
+#### Annotate entity classes
 
 ```java
 @QuickSearchable(tableName = "customer")
@@ -42,18 +89,16 @@ public class Customer
    @QuickSearchField(weight = 1)
    private String email;
 
-   @QuickSearchField(weight = 1, includeLabel = true)
+   @QuickSearchField(weight = 2, includeLabel = true)
    private String accountNumber;
-
-   // ... other fields
 }
 ```
 
-### 3. Build the config and produce the QBit
+#### Minimal setup
 
 ```java
 QuickSearchQBitConfig config = new QuickSearchQBitConfig()
-   .withBackendName("myRdbmsBackend")
+   .withBackendName("yourBackendName")
    .withOpensearchHost("localhost")
    .withOpensearchPort(9200)
    .withOpensearchIndexName("my-app-search")
@@ -64,111 +109,132 @@ new QuickSearchQBitProducer()
    .produce(qInstance);
 ```
 
-The producer registers tables, processes, and customizers into the `QInstance`. No further wiring is needed.
+#### With authentication and SSL
+
+```java
+QuickSearchQBitConfig config = new QuickSearchQBitConfig()
+   .withBackendName("yourBackendName")
+   .withOpensearchHost("search.example.com")
+   .withOpensearchPort(443)
+   .withUseSsl(true)
+   .withOpensearchUsername("admin")
+   .withOpensearchPassword("secretPassword")
+   .withOpensearchIndexName("my-app-search")
+   .withSearchableEntityClasses(List.of(Customer.class));
+```
+
+#### With custom publisher (async indexing)
+
+```java
+QuickSearchQBitConfig config = new QuickSearchQBitConfig()
+   .withBackendName("yourBackendName")
+   .withOpensearchHost("localhost")
+   .withOpensearchPort(9200)
+   .withOpensearchIndexName("my-app-search")
+   .withSearchableEntityClasses(List.of(Customer.class))
+   .withIndexEventPublisher(new RabbitMqIndexEventPublisher(connectionFactory));
+```
+
+## Data Model
+
+### Tables (2)
+
+| Table | Description |
+|-------|-------------|
+| `quickSearchIndex` | Per-table index configuration, status, and basepull tracking |
+| `quickSearchIndexRun` | Individual indexing run history with record counts and error tracking |
+
+### Processes (2)
+
+| Process | Description |
+|---------|-------------|
+| Basepull Index | Scheduled: queries each source table for records modified since last run, indexes in batches |
+| Full Reindex | On-demand: deletes and re-indexes all records for one or all tables |
 
 ## Configuration Reference
 
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
-| `backendName` | `String` | required | Name of the QQQ backend for operational tables |
-| `opensearchHost` | `String` | required | OpenSearch hostname or IP |
-| `opensearchPort` | `Integer` | required | OpenSearch port (e.g. 9200) |
-| `opensearchIndexName` | `String` | required | Name of the OpenSearch index |
-| `searchableEntityClasses` | `List<Class<?>>` | required | Entity classes annotated with `@QuickSearchable` |
-| `opensearchUsername` | `String` | none | Username for HTTP basic auth (must pair with password) |
-| `opensearchPassword` | `String` | none | Password for HTTP basic auth (must pair with username) |
-| `useSsl` | `Boolean` | `false` | Use HTTPS for OpenSearch connections |
-| `tableNamePrefix` | `String` | none | Prefix applied to all produced table and process names |
-| `enableRealTimeIndexing` | `Boolean` | `true` | Register post-insert/update/delete customizers on source tables |
-| `enableScheduledProcesses` | `Boolean` | `true` | Register scheduled basepull and full-reindex processes |
-| `defaultBasepullIntervalMinutes` | `Integer` | `5` | Default interval for basepull polling |
+| `backendName` | `String` | required | QQQ backend for operational tables |
+| `opensearchHost` | `String` | required | OpenSearch hostname |
+| `opensearchPort` | `Integer` | required | OpenSearch port |
+| `opensearchIndexName` | `String` | required | OpenSearch index name |
+| `searchableEntityClasses` | `List<Class<?>>` | required | Entity classes with `@QuickSearchable` |
+| `opensearchUsername` | `String` | none | HTTP basic auth username |
+| `opensearchPassword` | `String` | none | HTTP basic auth password |
+| `useSsl` | `Boolean` | `false` | Use HTTPS |
+| `tableNamePrefix` | `String` | none | Prefix for produced table names |
+| `enableRealTimeIndexing` | `Boolean` | `true` | Register post-insert/update/delete customizers |
+| `enableScheduledProcesses` | `Boolean` | `true` | Register scheduled basepull process |
+| `defaultBasepullIntervalMinutes` | `Integer` | `5` | Default basepull schedule |
 | `bulkBatchSize` | `Integer` | `500` | Documents per OpenSearch bulk request |
-| `sourceBatchSize` | `Integer` | `1000` | Records fetched per QQQ query during reindex |
-| `indexEventPublisher` | `IndexEventPublisher` | built-in sync | Override the publisher (see Extending below) |
+| `sourceBatchSize` | `Integer` | `1000` | Records per source table query batch |
+| `indexEventPublisher` | `IndexEventPublisher` | sync | Custom publisher for async transport |
 
 ## Annotations
 
 ### `@QuickSearchable`
 
-Applied to an entity class. Tells the producer which QQQ table this class maps to and how to configure basepull.
-
 | Attribute | Type | Default | Description |
 |-----------|------|---------|-------------|
 | `tableName` | `String` | required | QQQ table name |
-| `fields` | `String[]` | `{}` | Field names to index (fallback if no `@QuickSearchField` annotations present) |
-| `basepullIntervalMinutes` | `int` | `5` | How often the basepull process checks for new/modified records |
-| `basepullTimestampField` | `String` | `"modifyDate"` | Field queried for changes since last basepull |
-| `enabledByDefault` | `boolean` | `true` | Whether this table is enabled in the `quickSearchIndex` table on first run |
+| `fields` | `String[]` | `{}` | Fallback field list if no `@QuickSearchField` annotations |
+| `basepullIntervalMinutes` | `int` | `5` | Basepull schedule for this table |
+| `basepullTimestampField` | `String` | `"modifyDate"` | Field for change detection |
+| `enabledByDefault` | `boolean` | `true` | Active on first produce |
 
 ### `@QuickSearchField`
 
-Applied to individual fields within a `@QuickSearchable` class. Takes precedence over the `fields` array when present.
-
 | Attribute | Type | Default | Description |
 |-----------|------|---------|-------------|
-| `weight` | `int` | `1` | Boost factor in OpenSearch query scoring. Higher values rank this field higher. |
-| `includeLabel` | `boolean` | `false` | Prefix the field value with its QQQ field label in the indexed text (useful for codes or numbers that benefit from context) |
+| `weight` | `int` | `1` | Boost factor for search relevance |
+| `includeLabel` | `boolean` | `false` | Prefix value with field label in indexed text |
 
-Example using both annotations together:
+## Companion QBit Integration
 
-```java
-@QuickSearchable(tableName = "order")
-public class Order
-{
-   @QuickSearchField(weight = 5)
-   private String orderNumber;
+### qbit-crm
 
-   @QuickSearchField(weight = 2, includeLabel = true)
-   private String status;
+Index `crmContact`, `crmCompany`, and `crmDeal` for full-text global search across CRM records.
 
-   @QuickSearchField(weight = 1)
-   private String customerName;
-}
+### qbit-wms
+
+Index `wmsItem` and `wmsLocation` for warehouse item and location search.
+
+## Testing
+
+```bash
+mvn test                    # Run all 174 unit tests
+mvn verify                  # Run unit tests + integration tests (requires Docker)
+mvn test -Dtest=ClassName   # Run single test class
 ```
 
-## How It Works
+### Coverage
 
-**Indexing** happens through two complementary paths. When `enableRealTimeIndexing` is true, the producer attaches `QuickSearchPostInsertCustomizer`, `QuickSearchPostUpdateCustomizer`, and `QuickSearchPostDeleteCustomizer` to every source table. These customizers fire after each write and immediately dispatch index or delete events through the configured `IndexEventPublisher`. The basepull process (`BasepullIndexStep`) runs on a schedule and queries each source table for records modified since the last run, re-indexing them. Full reindexing is available via `FullReindexStep`.
+- **70%+ instruction coverage** (JaCoCo enforced)
+- **90%+ class coverage** (JaCoCo enforced)
+- All unit tests run in-memory via MemoryRecordStore (no OpenSearch required)
+- Integration tests use Testcontainers with real OpenSearch
 
-**Searching** is performed through `QuickSearchAction`. Pass a `QuickSearchInput` with a query string and optional pagination parameters. The action issues a multi-match query across all indexed fields with per-field boost weights applied, and returns a `QuickSearchOutput` containing a list of `QuickSearchResult` objects with table name, record ID, and a display label.
+## Documentation
 
-## Extending
+- **[QQQ Wiki](https://github.com/Kingsrook/qqq/wiki)** - Framework documentation
+- **[QBit Development Guide](https://github.com/Kingsrook/qqq/wiki/QBit-Development)** - How QBits work
 
-To replace the default synchronous publisher, implement `IndexEventPublisher` and supply it in config:
+## Contributing
 
-```java
-public class RabbitMqIndexEventPublisher implements IndexEventPublisher
-{
-   @Override
-   public void publishIndexEvents(List<IndexEvent> events) throws QException
-   {
-      // serialize events and publish to exchange
-   }
+QBit Quick Search is open source and welcomes contributions.
 
-   @Override
-   public void publishDeleteEvents(List<IndexEvent> events) throws QException
-   {
-      // serialize events and publish to exchange
-   }
+- **[Report Issues](https://github.com/QRun-IO/qqq/issues)** - Bug reports and feature requests
+- **[QQQ Contribution Guide](https://github.com/Kingsrook/qqq/wiki/Contribution-Guidelines)** - How to contribute
 
-   @Override
-   public void close() throws QException
-   {
-      // release connection resources
-   }
-}
-```
+## About Kingsrook
 
-Then wire it in:
+QBit Quick Search is built by **[Kingsrook](https://qrun.io)** - making engineers more productive through intelligent automation and developer tools.
 
-```java
-QuickSearchQBitConfig config = new QuickSearchQBitConfig()
-   // ... connection fields ...
-   .withIndexEventPublisher(new RabbitMqIndexEventPublisher(connectionFactory));
-```
-
-A separate consumer process reads from the queue and calls `QuickSearchOpenSearchClient` directly to perform the actual bulk index operations.
+- **Website**: [https://qrun.io](https://qrun.io)
+- **Contact**: [contact@kingsrook.com](mailto:contact@kingsrook.com)
+- **GitHub**: [https://github.com/QRun-IO](https://github.com/QRun-IO)
 
 ## License
 
-Apache License, Version 2.0. See [LICENSE](LICENSE).
+This project is licensed under the **GNU Affero General Public License v3.0** - see the [LICENSE](LICENSE) file for details.
