@@ -34,7 +34,23 @@
       "Bash(unzip -p /Users/james.maes/.m2/repository/com/kingsrook/qqq/qqq-backend-core/0.40.0-SNAPSHOT/qqq-backend-core-0.40.0-SNAPSHOT.jar com/kingsrook/qqq/backend/core/actions/customizers/TableCustomizerInterface.java)",
       "Bash(sed -i '' 's/postInsertRecord/postInsert/g' src/test/java/com/kingsrook/qbits/quicksearch/customizers/QuickSearchPostInsertCustomizerTest.java)",
       "Bash(sed -i '' 's/postUpdateRecord/postUpdate/g' src/test/java/com/kingsrook/qbits/quicksearch/customizers/QuickSearchPostUpdateCustomizerTest.java)",
-      "Bash(sed -i '' 's/postDeleteRecord/postDelete/g' src/test/java/com/kingsrook/qbits/quicksearch/customizers/QuickSearchPostDeleteCustomizerTest.java)"
+      "Bash(sed -i '' 's/postDeleteRecord/postDelete/g' src/test/java/com/kingsrook/qbits/quicksearch/customizers/QuickSearchPostDeleteCustomizerTest.java)",
+      "Bash(docker info:*)",
+      "Bash(docker run:*)",
+      "Read(//var/run/**)",
+      "Read(//Users/james.maes/**)",
+      "Bash(echo \"DOCKER_HOST=$DOCKER_HOST\")",
+      "Bash(echo \"TESTCONTAINERS_DOCKER_SOCKET_OVERRIDE=$TESTCONTAINERS_DOCKER_SOCKET_OVERRIDE\")",
+      "Bash(DOCKER_HOST=unix:///var/run/docker.sock TESTCONTAINERS_RYUK_DISABLED=true mvn verify -Dit.test=OpenSearchIntegrationTest)",
+      "Bash(docker version:*)",
+      "Bash(DOCKER_HOST=unix:///var/run/docker.sock mvn verify -Dit.test=OpenSearchIntegrationTest)",
+      "Bash(curl -s --unix-socket /var/run/docker.sock http://localhost/v1.24/info)",
+      "Bash(python3 -c \"import sys,json; d=json.load\\(sys.stdin\\); print\\(f''''ServerVersion: {d.get\\(ServerVersion,?\\)}  OS: {d.get\\(OperatingSystem,?\\)}''''\\)\")",
+      "Bash(curl -s --unix-socket /Users/james.maes/Library/Containers/com.docker.docker/Data/docker-cli.sock http://localhost/v1.47/info)",
+      "Bash(python3 -c \"import sys,json; d=json.load\\(sys.stdin\\); print\\(f''''ServerVersion: {d.get\\(ServerVersion,?\\)}  OS: {d.get\\(OperatingSystem,?\\)}  Containers: {d.get\\(Containers,?\\)}''''\\)\")",
+      "Bash(curl -s --unix-socket /Users/james.maes/.docker/run/docker.sock http://localhost/v1.47/info)",
+      "Bash(python3 -c \"import sys,json; d=json.load\\(sys.stdin\\); print\\(f''''ServerVersion: {d.get\\(ServerVersion,?\\)}  NCPU: {d.get\\(NCPU,?\\)}  OSType: {d.get\\(OSType,?\\)}''''\\)\")",
+      "Bash(DOCKER_HOST=unix:///Users/james.maes/.docker/run/docker.sock DOCKER_API_VERSION=1.47 mvn verify -Dit.test=OpenSearchIntegrationTest -pl .)"
     ]
   }
 }
