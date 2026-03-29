@@ -86,10 +86,6 @@ class BasepullIndexStepTest extends BaseQuickSearchTest
          .withValue("lastBasepullTime", lastBasepullTime)
          .withValue("status", "ACTIVE");
 
-      InsertInput insertInput = new InsertInput();
-      insertInput.setTableName(QuickSearchIndex.TABLE_NAME);
-      insertInput.setRecords(List.of(record));
-
       InsertInput input = new InsertInput();
       input.setTableName(QuickSearchIndex.TABLE_NAME);
       input.setRecords(List.of(record));
