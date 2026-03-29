@@ -56,7 +56,8 @@
       "Bash(gh pr:*)",
       "Bash(gh repo:*)",
       "Bash(gh api:*)",
-      "Bash(python3 -c \":*)"
+      "Bash(python3 -c \":*)",
+      "mcp__circleci-mcp-server__get_job_test_results"
     ]
   }
 }
