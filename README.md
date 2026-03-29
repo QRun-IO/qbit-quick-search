@@ -1,7 +1,7 @@
 # QBit: Quick Search
 
 [![Version](https://img.shields.io/badge/version-0.1.0-blue.svg)](https://github.com/QRun-IO/qbit-quick-search)
-[![License](https://img.shields.io/badge/license-GNU%20Affero%20GPL%20v3-green.svg)](https://www.gnu.org/licenses/agpl-3.0.en.html)
+[![License](https://img.shields.io/badge/license-Apache%202.0-green.svg)](https://www.apache.org/licenses/LICENSE-2.0)
 [![Java](https://img.shields.io/badge/java-21+-blue.svg)](https://adoptium.net/)
 
 > **OpenSearch-Powered Full-Text Search for QQQ Applications**
@@ -20,7 +20,7 @@ This QBit provides global search across QQQ application tables via OpenSearch. A
 
 ## Open Source & Full Control
 
-QBit Quick Search is 100% open source under AGPL v3. All data stays in your OpenSearch cluster.
+QBit Quick Search is 100% open source under Apache 2.0. All data stays in your OpenSearch cluster.
 
 ## Architecture
 
@@ -237,4 +237,4 @@ QBit Quick Search is built by **[Kingsrook](https://qrun.io)** - making engineer
 
 ## License
 
-This project is licensed under the **GNU Affero General Public License v3.0** - see the [LICENSE](LICENSE) file for details.
+This project is licensed under the **Apache License, Version 2.0** - see the [LICENSE](LICENSE) file for details.
