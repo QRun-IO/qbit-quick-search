@@ -19,6 +19,8 @@ package com.kingsrook.qbits.quicksearch;
 import java.time.Instant;
 import java.util.List;
 import com.kingsrook.qqq.backend.core.actions.tables.InsertAction;
+import com.kingsrook.qqq.backend.core.actions.tables.QueryAction;
+import com.kingsrook.qqq.backend.core.model.actions.tables.query.QueryInput;
 import com.kingsrook.qqq.backend.core.context.QContext;
 import com.kingsrook.qqq.backend.core.model.actions.processes.RunBackendStepInput;
 import com.kingsrook.qqq.backend.core.model.actions.processes.RunBackendStepOutput;
@@ -34,6 +36,8 @@ import com.kingsrook.qqq.backend.core.model.metadata.tables.QTableMetaData;
 import com.kingsrook.qqq.backend.core.model.session.QSession;
 import com.kingsrook.qqq.backend.core.modules.backend.implementations.memory.MemoryBackendModule;
 import com.kingsrook.qqq.backend.core.modules.backend.implementations.memory.MemoryRecordStore;
+import com.kingsrook.qbits.quicksearch.model.QuickSearchIndex;
+import com.kingsrook.qbits.quicksearch.model.QuickSearchIndexRun;
 import com.kingsrook.qbits.quicksearch.actions.QuickSearchAction;
 import com.kingsrook.qbits.quicksearch.actions.QuickSearchInput;
 import com.kingsrook.qbits.quicksearch.actions.QuickSearchOutput;
@@ -204,6 +208,34 @@ class OpenSearchIntegrationTest
       new InsertAction().execute(insertInput);
 
       ////////////////////////////////////////////////////
+      // Diagnostic: verify records are in memory store //
+      ////////////////////////////////////////////////////
+      QueryInput verifyInput = new QueryInput();
+      verifyInput.setTableName(TABLE_NAME);
+      List<QRecord> sourceRecords = new QueryAction().execute(verifyInput).getRecords();
+      System.out.println("[DIAG] Source records in memory: " + sourceRecords.size());
+      assertThat(sourceRecords).hasSize(5);
+
+      ////////////////////////////////////////////////////
+      // Diagnostic: verify discovered tables in context//
+      ////////////////////////////////////////////////////
+      List<QuickSearchableTableConfig> tables = QuickSearchQBitContext.getDiscoveredTables();
+      System.out.println("[DIAG] Discovered tables: " + (tables != null ? tables.size() : "null"));
+      if(tables != null)
+      {
+         for(QuickSearchableTableConfig t : tables)
+         {
+            System.out.println("[DIAG]   Table: " + t.getTableName() + ", fields: " + t.getSearchableFields() + ", pk: " + t.getPrimaryKeyField());
+         }
+      }
+
+      ////////////////////////////////////////////////////
+      // Diagnostic: verify OpenSearch client in context //
+      ////////////////////////////////////////////////////
+      Object client = QuickSearchQBitContext.getClient();
+      System.out.println("[DIAG] Client is null: " + (client == null));
+
+      ////////////////////////////////////////////////////
       // Run the full reindex step                      //
       ////////////////////////////////////////////////////
       RunBackendStepInput  input  = new RunBackendStepInput();
@@ -216,10 +248,39 @@ class OpenSearchIntegrationTest
       ((QuickSearchOpenSearchClient) QuickSearchQBitContext.getClient()).refreshIndex();
 
       ////////////////////////////////////////////////////
+      // Diagnostic: verify quickSearchIndex rows       //
+      ////////////////////////////////////////////////////
+      QueryInput indexQueryInput = new QueryInput();
+      indexQueryInput.setTableName(QuickSearchIndex.TABLE_NAME);
+      List<QRecord> indexRows = new QueryAction().execute(indexQueryInput).getRecords();
+      System.out.println("[DIAG] QuickSearchIndex rows: " + indexRows.size());
+      for(QRecord row : indexRows)
+      {
+         System.out.println("[DIAG]   Index row: tableName=" + row.getValueString("tableName") + ", enabled=" + row.getValue("enabled") + ", status=" + row.getValueString("status"));
+      }
+
+      ////////////////////////////////////////////////////
+      // Diagnostic: verify quickSearchIndexRun rows    //
+      ////////////////////////////////////////////////////
+      QueryInput runQueryInput = new QueryInput();
+      runQueryInput.setTableName(QuickSearchIndexRun.TABLE_NAME);
+      List<QRecord> runRows = new QueryAction().execute(runQueryInput).getRecords();
+      System.out.println("[DIAG] QuickSearchIndexRun rows: " + runRows.size());
+      for(QRecord row : runRows)
+      {
+         System.out.println("[DIAG]   Run: type=" + row.getValueString("runType") + ", status=" + row.getValueString("status")
+            + ", processed=" + row.getValue("recordsProcessed") + ", indexed=" + row.getValue("recordsIndexed")
+            + ", errors=" + row.getValue("errorCount") + ", errorMsg=" + row.getValueString("errorMessage"));
+      }
+
+      ////////////////////////////////////////////////////
       // Verify at least one result for "widget"        //
       ////////////////////////////////////////////////////
       QuickSearchOutput searchOutput = new QuickSearchAction().execute(
          new QuickSearchInput().withSearchTerm("widget"));
+
+      System.out.println("[DIAG] Search totalHits: " + searchOutput.getTotalHits());
+      System.out.println("[DIAG] Search results: " + searchOutput.getResults().size());
 
       assertThat(searchOutput.getTotalHits()).isGreaterThan(0L);
       assertThat(searchOutput.getResults()).isNotEmpty();
