@@ -135,6 +135,52 @@ QuickSearchQBitConfig config = new QuickSearchQBitConfig()
    .withIndexEventPublisher(new RabbitMqIndexEventPublisher(connectionFactory));
 ```
 
+## Searching
+
+Once the QBit is produced, use `QuickSearchAction` to execute searches:
+
+```java
+QuickSearchOutput output = new QuickSearchAction().execute(
+   new QuickSearchInput()
+      .withSearchTerm("widget")
+      .withLimit(25)
+      .withOffset(0));
+
+// Check results
+System.out.println("Total hits: " + output.getTotalHits());
+System.out.println("Has more: " + output.getHasMore());
+
+for(QuickSearchResult result : output.getResults())
+{
+   System.out.println(result.getTableName() + ":" + result.getRecordId()
+      + " - " + result.getRecordLabel()
+      + " (score: " + result.getScore() + ")");
+}
+```
+
+To filter results to a single table:
+
+```java
+QuickSearchOutput output = new QuickSearchAction().execute(
+   new QuickSearchInput()
+      .withSearchTerm("blue")
+      .withTableName("customer")
+      .withLimit(10));
+```
+
+### Triggering a Full Reindex
+
+The full reindex process can be triggered programmatically:
+
+```java
+RunBackendStepInput input = new RunBackendStepInput();
+input.addValue("tableName", "customer"); // optional: omit to reindex all tables
+RunBackendStepOutput output = new RunBackendStepOutput();
+new FullReindexStep().run(input, output);
+```
+
+Or through the QQQ admin UI via the "Full Reindex" process.
+
 ## Data Model
 
 ### Tables (2)
