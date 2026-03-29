@@ -94,6 +94,7 @@ public class QuickSearchOpenSearchClient
 
          ObjectMapper objectMapper = new ObjectMapper();
          objectMapper.registerModule(new JavaTimeModule());
+         objectMapper.disable(com.fasterxml.jackson.databind.SerializationFeature.WRITE_DATES_AS_TIMESTAMPS);
 
          ApacheHttpClient5TransportBuilder builder = ApacheHttpClient5TransportBuilder
             .builder(httpHost)
