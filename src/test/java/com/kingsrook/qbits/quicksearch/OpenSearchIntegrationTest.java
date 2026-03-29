@@ -211,9 +211,9 @@ class OpenSearchIntegrationTest
       new FullReindexStep().run(input, output);
 
       ////////////////////////////////////////////////////
-      // Give OpenSearch time to refresh its index      //
+      // Force index refresh so documents are searchable//
       ////////////////////////////////////////////////////
-      Thread.sleep(2000);
+      ((QuickSearchOpenSearchClient) QuickSearchQBitContext.getClient()).refreshIndex();
 
       ////////////////////////////////////////////////////
       // Verify at least one result for "widget"        //

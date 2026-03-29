@@ -450,6 +450,26 @@ public class QuickSearchOpenSearchClient
 
 
    /*******************************************************************************
+    ** Force a refresh of the OpenSearch index, making all indexed documents
+    ** searchable immediately. Primarily used in tests.
+    **
+    ** @throws QException if the refresh call fails
+    *******************************************************************************/
+   public void refreshIndex() throws QException
+   {
+      try
+      {
+         client.indices().refresh(r -> r.index(indexName));
+      }
+      catch(IOException e)
+      {
+         throw new QException("Failed to refresh index [" + indexName + "]: " + e.getMessage(), e);
+      }
+   }
+
+
+
+   /*******************************************************************************
     ** Close the underlying transport.
     **
     ** Safe to call multiple times; subsequent calls after the first are no-ops.

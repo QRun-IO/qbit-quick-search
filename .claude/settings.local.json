@@ -52,7 +52,11 @@
       "Bash(python3 -c \"import sys,json; d=json.load\\(sys.stdin\\); print\\(f''''ServerVersion: {d.get\\(ServerVersion,?\\)}  NCPU: {d.get\\(NCPU,?\\)}  OSType: {d.get\\(OSType,?\\)}''''\\)\")",
       "Bash(DOCKER_HOST=unix:///Users/james.maes/.docker/run/docker.sock DOCKER_API_VERSION=1.47 mvn verify -Dit.test=OpenSearchIntegrationTest -pl .)",
       "Bash(cp /Users/james.maes/Git.Local/QRun-IO/qbit-webhooks/LICENSE /Users/james.maes/Git.Local/QRun-IO/qbit-quick-search/LICENSE)",
-      "Bash(cp -r /Users/james.maes/Git.Local/QRun-IO/qbit-webhooks/checkstyle/* /Users/james.maes/Git.Local/QRun-IO/qbit-quick-search/checkstyle/)"
+      "Bash(cp -r /Users/james.maes/Git.Local/QRun-IO/qbit-webhooks/checkstyle/* /Users/james.maes/Git.Local/QRun-IO/qbit-quick-search/checkstyle/)",
+      "Bash(gh pr:*)",
+      "Bash(gh repo:*)",
+      "Bash(gh api:*)",
+      "Bash(python3 -c \":*)"
     ]
   }
 }
