@@ -36,6 +36,8 @@ import com.kingsrook.qqq.backend.core.model.metadata.tables.QTableMetaData;
 import com.kingsrook.qqq.backend.core.model.session.QSession;
 import com.kingsrook.qqq.backend.core.modules.backend.implementations.memory.MemoryBackendModule;
 import com.kingsrook.qqq.backend.core.modules.backend.implementations.memory.MemoryRecordStore;
+import com.kingsrook.qbits.quicksearch.opensearch.OpenSearchDocument;
+import com.kingsrook.qbits.quicksearch.opensearch.BulkIndexResult;
 import com.kingsrook.qbits.quicksearch.model.QuickSearchIndex;
 import com.kingsrook.qbits.quicksearch.model.QuickSearchIndexRun;
 import com.kingsrook.qbits.quicksearch.actions.QuickSearchAction;
@@ -236,6 +238,22 @@ class OpenSearchIntegrationTest
       System.out.println("[DIAG] Client is null: " + (client == null));
 
       ////////////////////////////////////////////////////
+      // Diagnostic: try indexing one doc directly      //
+      ////////////////////////////////////////////////////
+      QuickSearchOpenSearchClient osClient = (QuickSearchOpenSearchClient) client;
+      OpenSearchDocument testDoc = new OpenSearchDocument()
+         .withSourceTable("testProduct")
+         .withRecordId("1")
+         .withRecordLabel("Blue Widget")
+         .withSearchableText("Blue Widget A fine widget for all uses sku: BW-001")
+         .withIndexedAt(Instant.now())
+         .withFieldValues(java.util.Map.of("name", "Blue Widget", "description", "A fine widget for all uses", "sku", "BW-001"));
+      BulkIndexResult directResult = osClient.indexDocuments(List.of(testDoc), 10);
+      String directDiag = "directIndex{success=" + directResult.getSuccessCount()
+         + ",failures=" + directResult.getFailureCount()
+         + ",errors=" + directResult.getErrors() + "}";
+
+      ////////////////////////////////////////////////////
       // Run the full reindex step                      //
       ////////////////////////////////////////////////////
       RunBackendStepInput  input  = new RunBackendStepInput();
@@ -299,6 +317,7 @@ class OpenSearchIntegrationTest
             .append("}");
       }
       diag.append(", searchTotalHits=").append(searchOutput.getTotalHits());
+      diag.append(", ").append(directDiag);
 
       assertThat(searchOutput.getTotalHits())
          .as("Search should find results. Diagnostics: " + diag)
