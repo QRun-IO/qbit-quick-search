@@ -19,12 +19,10 @@ package com.kingsrook.qbits.quicksearch;
 import java.time.Instant;
 import java.util.List;
 import com.kingsrook.qqq.backend.core.actions.tables.InsertAction;
-import com.kingsrook.qqq.backend.core.actions.tables.QueryAction;
-import com.kingsrook.qqq.backend.core.model.actions.tables.query.QueryInput;
+import com.kingsrook.qqq.backend.core.model.actions.tables.insert.InsertInput;
 import com.kingsrook.qqq.backend.core.context.QContext;
 import com.kingsrook.qqq.backend.core.model.actions.processes.RunBackendStepInput;
 import com.kingsrook.qqq.backend.core.model.actions.processes.RunBackendStepOutput;
-import com.kingsrook.qqq.backend.core.model.actions.tables.insert.InsertInput;
 import com.kingsrook.qqq.backend.core.model.data.QRecord;
 import com.kingsrook.qqq.backend.core.model.metadata.QAuthenticationType;
 import com.kingsrook.qqq.backend.core.model.metadata.QBackendMetaData;
@@ -36,10 +34,6 @@ import com.kingsrook.qqq.backend.core.model.metadata.tables.QTableMetaData;
 import com.kingsrook.qqq.backend.core.model.session.QSession;
 import com.kingsrook.qqq.backend.core.modules.backend.implementations.memory.MemoryBackendModule;
 import com.kingsrook.qqq.backend.core.modules.backend.implementations.memory.MemoryRecordStore;
-import com.kingsrook.qbits.quicksearch.opensearch.OpenSearchDocument;
-import com.kingsrook.qbits.quicksearch.opensearch.BulkIndexResult;
-import com.kingsrook.qbits.quicksearch.model.QuickSearchIndex;
-import com.kingsrook.qbits.quicksearch.model.QuickSearchIndexRun;
 import com.kingsrook.qbits.quicksearch.actions.QuickSearchAction;
 import com.kingsrook.qbits.quicksearch.actions.QuickSearchInput;
 import com.kingsrook.qbits.quicksearch.actions.QuickSearchOutput;
@@ -210,50 +204,6 @@ class OpenSearchIntegrationTest
       new InsertAction().execute(insertInput);
 
       ////////////////////////////////////////////////////
-      // Diagnostic: verify records are in memory store //
-      ////////////////////////////////////////////////////
-      QueryInput verifyInput = new QueryInput();
-      verifyInput.setTableName(TABLE_NAME);
-      List<QRecord> sourceRecords = new QueryAction().execute(verifyInput).getRecords();
-      System.out.println("[DIAG] Source records in memory: " + sourceRecords.size());
-      assertThat(sourceRecords).hasSize(5);
-
-      ////////////////////////////////////////////////////
-      // Diagnostic: verify discovered tables in context//
-      ////////////////////////////////////////////////////
-      List<QuickSearchableTableConfig> tables = QuickSearchQBitContext.getDiscoveredTables();
-      System.out.println("[DIAG] Discovered tables: " + (tables != null ? tables.size() : "null"));
-      if(tables != null)
-      {
-         for(QuickSearchableTableConfig t : tables)
-         {
-            System.out.println("[DIAG]   Table: " + t.getTableName() + ", fields: " + t.getSearchableFields() + ", pk: " + t.getPrimaryKeyField());
-         }
-      }
-
-      ////////////////////////////////////////////////////
-      // Diagnostic: verify OpenSearch client in context //
-      ////////////////////////////////////////////////////
-      Object client = QuickSearchQBitContext.getClient();
-      System.out.println("[DIAG] Client is null: " + (client == null));
-
-      ////////////////////////////////////////////////////
-      // Diagnostic: try indexing one doc directly      //
-      ////////////////////////////////////////////////////
-      QuickSearchOpenSearchClient osClient = (QuickSearchOpenSearchClient) client;
-      OpenSearchDocument testDoc = new OpenSearchDocument()
-         .withSourceTable("testProduct")
-         .withRecordId("1")
-         .withRecordLabel("Blue Widget")
-         .withSearchableText("Blue Widget A fine widget for all uses sku: BW-001")
-         .withIndexedAt(Instant.now())
-         .withFieldValues(java.util.Map.of("name", "Blue Widget", "description", "A fine widget for all uses", "sku", "BW-001"));
-      BulkIndexResult directResult = osClient.indexDocuments(List.of(testDoc), 10);
-      String directDiag = "directIndex{success=" + directResult.getSuccessCount()
-         + ",failures=" + directResult.getFailureCount()
-         + ",errors=" + directResult.getErrors() + "}";
-
-      ////////////////////////////////////////////////////
       // Run the full reindex step                      //
       ////////////////////////////////////////////////////
       RunBackendStepInput  input  = new RunBackendStepInput();
@@ -266,61 +216,13 @@ class OpenSearchIntegrationTest
       ((QuickSearchOpenSearchClient) QuickSearchQBitContext.getClient()).refreshIndex();
 
       ////////////////////////////////////////////////////
-      // Diagnostic: verify quickSearchIndex rows       //
-      ////////////////////////////////////////////////////
-      QueryInput indexQueryInput = new QueryInput();
-      indexQueryInput.setTableName(QuickSearchIndex.TABLE_NAME);
-      List<QRecord> indexRows = new QueryAction().execute(indexQueryInput).getRecords();
-      System.out.println("[DIAG] QuickSearchIndex rows: " + indexRows.size());
-      for(QRecord row : indexRows)
-      {
-         System.out.println("[DIAG]   Index row: tableName=" + row.getValueString("tableName") + ", enabled=" + row.getValue("enabled") + ", status=" + row.getValueString("status"));
-      }
-
-      ////////////////////////////////////////////////////
-      // Diagnostic: verify quickSearchIndexRun rows    //
-      ////////////////////////////////////////////////////
-      QueryInput runQueryInput = new QueryInput();
-      runQueryInput.setTableName(QuickSearchIndexRun.TABLE_NAME);
-      List<QRecord> runRows = new QueryAction().execute(runQueryInput).getRecords();
-      System.out.println("[DIAG] QuickSearchIndexRun rows: " + runRows.size());
-      for(QRecord row : runRows)
-      {
-         System.out.println("[DIAG]   Run: type=" + row.getValueString("runType") + ", status=" + row.getValueString("status")
-            + ", processed=" + row.getValue("recordsProcessed") + ", indexed=" + row.getValue("recordsIndexed")
-            + ", errors=" + row.getValue("errorCount") + ", errorMsg=" + row.getValueString("errorMessage"));
-      }
-
-      ////////////////////////////////////////////////////
       // Verify at least one result for "widget"        //
       ////////////////////////////////////////////////////
       QuickSearchOutput searchOutput = new QuickSearchAction().execute(
          new QuickSearchInput().withSearchTerm("widget"));
 
-      ////////////////////////////////////////////////////
-      // Build diagnostic string for assertion message //
-      ////////////////////////////////////////////////////
-      StringBuilder diag = new StringBuilder();
-      diag.append("sourceRecords=").append(sourceRecords.size());
-      diag.append(", discoveredTables=").append(tables != null ? tables.size() : "null");
-      diag.append(", clientNull=").append(client == null);
-      diag.append(", indexRows=").append(indexRows.size());
-      diag.append(", runRows=").append(runRows.size());
-      for(QRecord row : runRows)
-      {
-         diag.append(", run{type=").append(row.getValueString("runType"))
-            .append(",status=").append(row.getValueString("status"))
-            .append(",processed=").append(row.getValue("recordsProcessed"))
-            .append(",indexed=").append(row.getValue("recordsIndexed"))
-            .append(",errors=").append(row.getValue("errorCount"))
-            .append(",errMsg=").append(row.getValueString("errorMessage"))
-            .append("}");
-      }
-      diag.append(", searchTotalHits=").append(searchOutput.getTotalHits());
-      diag.append(", ").append(directDiag);
-
       assertThat(searchOutput.getTotalHits())
-         .as("Search should find results. Diagnostics: " + diag)
+         .as("search for 'widget' should return results after full reindex")
          .isGreaterThan(0L);
    }
 
@@ -337,7 +239,7 @@ class OpenSearchIntegrationTest
          new QuickSearchInput().withSearchTerm("widget"));
 
       assertThat(output.getTotalHits())
-         .as("testSearchReturnsResults: depends on testFullReindex having indexed documents. totalHits=" + output.getTotalHits())
+         .as("search for 'widget' should return results")
          .isGreaterThan(0L);
 
       ////////////////////////////////////////////////////
