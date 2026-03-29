@@ -71,8 +71,8 @@ public class QuickSearchPostDeleteCustomizer implements TableCustomizerInterface
          return records;
       }
 
-      Object publisherObject = QuickSearchQBitContext.getPublisher();
-      if(publisherObject == null)
+      IndexEventPublisher publisher = QuickSearchQBitContext.getPublisher();
+      if(publisher == null)
       {
          LOG.warn("QuickSearch publisher is null; skipping post-delete indexing", logPair("tableName", deleteInput.getTableName()));
          return records;
@@ -80,7 +80,6 @@ public class QuickSearchPostDeleteCustomizer implements TableCustomizerInterface
 
       try
       {
-         IndexEventPublisher publisher = (IndexEventPublisher) publisherObject;
          String tableName = deleteInput.getTableName();
          String primaryKeyField = QContext.getQInstance().getTable(tableName).getPrimaryKeyField();
 

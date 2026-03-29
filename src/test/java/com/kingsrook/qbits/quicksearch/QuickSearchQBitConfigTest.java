@@ -21,8 +21,10 @@ import java.util.List;
 import com.kingsrook.qqq.backend.core.model.metadata.QBackendMetaData;
 import com.kingsrook.qqq.backend.core.model.metadata.QInstance;
 import com.kingsrook.qqq.backend.core.modules.backend.implementations.memory.MemoryBackendModule;
+import com.kingsrook.qbits.quicksearch.publisher.IndexEventPublisher;
 import org.junit.jupiter.api.Test;
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.mockito.Mockito.mock;
 
 
 /*******************************************************************************
@@ -494,7 +496,7 @@ class QuickSearchQBitConfigTest
    void testFluentSetters_returnThis()
    {
       List<Class<?>> entityClasses = List.of(String.class);
-      Object dummyPublisher = new Object();
+      IndexEventPublisher dummyPublisher = mock(IndexEventPublisher.class);
 
       QuickSearchQBitConfig config = new QuickSearchQBitConfig();
 
@@ -506,7 +508,6 @@ class QuickSearchQBitConfigTest
       assertThat(config.withOpensearchUsername("u")).isSameAs(config);
       assertThat(config.withOpensearchPassword("pw")).isSameAs(config);
       assertThat(config.withUseSsl(true)).isSameAs(config);
-      assertThat(config.withAutoDiscoverAnnotations(true)).isSameAs(config);
       assertThat(config.withEnableScheduledProcesses(false)).isSameAs(config);
       assertThat(config.withEnableRealTimeIndexing(false)).isSameAs(config);
       assertThat(config.withDefaultBasepullIntervalMinutes(10)).isSameAs(config);
@@ -525,7 +526,7 @@ class QuickSearchQBitConfigTest
    void testFluentSetters_gettersReturnCorrectValues()
    {
       List<Class<?>> entityClasses = List.of(String.class, Integer.class);
-      Object dummyPublisher = new Object();
+      IndexEventPublisher dummyPublisher = mock(IndexEventPublisher.class);
 
       QuickSearchQBitConfig config = new QuickSearchQBitConfig()
          .withBackendName("testBackend")
@@ -536,7 +537,6 @@ class QuickSearchQBitConfigTest
          .withOpensearchUsername("user")
          .withOpensearchPassword("pass")
          .withUseSsl(true)
-         .withAutoDiscoverAnnotations(true)
          .withEnableScheduledProcesses(false)
          .withEnableRealTimeIndexing(false)
          .withDefaultBasepullIntervalMinutes(10)
@@ -553,7 +553,6 @@ class QuickSearchQBitConfigTest
       assertThat(config.getOpensearchUsername()).isEqualTo("user");
       assertThat(config.getOpensearchPassword()).isEqualTo("pass");
       assertThat(config.getUseSsl()).isTrue();
-      assertThat(config.getAutoDiscoverAnnotations()).isTrue();
       assertThat(config.getEnableScheduledProcesses()).isFalse();
       assertThat(config.getEnableRealTimeIndexing()).isFalse();
       assertThat(config.getDefaultBasepullIntervalMinutes()).isEqualTo(10);

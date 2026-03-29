@@ -173,6 +173,10 @@ public class OpenSearchDocument
    @JsonIgnore
    public String getDocumentId()
    {
+      if(sourceTable == null || recordId == null)
+      {
+         throw new IllegalStateException("Cannot generate document ID: sourceTable=" + sourceTable + ", recordId=" + recordId);
+      }
       return (sourceTable + ":" + recordId);
    }
 

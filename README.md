@@ -224,7 +224,7 @@ mvn test -Dtest=ClassName   # Run single test class
 
 QBit Quick Search is open source and welcomes contributions.
 
-- **[Report Issues](https://github.com/QRun-IO/qqq/issues)** - Bug reports and feature requests
+- **[Report Issues](https://github.com/QRun-IO/qbit-quick-search/issues)** - Bug reports and feature requests
 - **[QQQ Contribution Guide](https://github.com/Kingsrook/qqq/wiki/Contribution-Guidelines)** - How to contribute
 
 ## About Kingsrook

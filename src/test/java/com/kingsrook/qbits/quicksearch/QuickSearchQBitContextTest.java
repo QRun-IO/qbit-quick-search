@@ -17,10 +17,13 @@ package com.kingsrook.qbits.quicksearch;
 
 
 import java.util.List;
+import com.kingsrook.qbits.quicksearch.opensearch.QuickSearchOpenSearchClient;
+import com.kingsrook.qbits.quicksearch.publisher.IndexEventPublisher;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.mockito.Mockito.mock;
 
 
 /*******************************************************************************
@@ -92,7 +95,7 @@ class QuickSearchQBitContextTest
    @Test
    void testSetAndGetClient()
    {
-      Object dummyClient = new Object();
+      QuickSearchOpenSearchClient dummyClient = mock(QuickSearchOpenSearchClient.class);
       QuickSearchQBitContext.setClient(dummyClient);
 
       assertThat(QuickSearchQBitContext.getClient()).isSameAs(dummyClient);
@@ -106,7 +109,7 @@ class QuickSearchQBitContextTest
    @Test
    void testSetAndGetPublisher()
    {
-      Object dummyPublisher = new Object();
+      IndexEventPublisher dummyPublisher = mock(IndexEventPublisher.class);
       QuickSearchQBitContext.setPublisher(dummyPublisher);
 
       assertThat(QuickSearchQBitContext.getPublisher()).isSameAs(dummyPublisher);
@@ -164,8 +167,8 @@ class QuickSearchQBitContextTest
    {
       QuickSearchQBitContext.setConfig(new QuickSearchQBitConfig());
       QuickSearchQBitContext.setDiscoveredTables(List.of(new QuickSearchableTableConfig()));
-      QuickSearchQBitContext.setClient(new Object());
-      QuickSearchQBitContext.setPublisher(new Object());
+      QuickSearchQBitContext.setClient(mock(QuickSearchOpenSearchClient.class));
+      QuickSearchQBitContext.setPublisher(mock(IndexEventPublisher.class));
 
       QuickSearchQBitContext.clear();
 

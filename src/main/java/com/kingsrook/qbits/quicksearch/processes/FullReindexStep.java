@@ -195,6 +195,7 @@ public class FullReindexStep extends AbstractIndexingStep
          QRecord updateRecord = new QRecord()
             .withValue("id", indexId)
             .withValue("lastFullReindexTime", Instant.now())
+            .withValue("lastBasepullTime", Instant.now())
             .withValue("recordCount", totalProcessed);
 
          UpdateInput updateInput = new UpdateInput();

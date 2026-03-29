@@ -51,8 +51,10 @@ import com.kingsrook.qbits.quicksearch.publisher.SynchronousIndexEventPublisher;
  ** Central orchestrator for the Quick Search QBit.
  **
  ** Validates config, discovers annotated tables, produces QQQ metadata
- ** (tables, processes, possible value sources, app), initializes the
- ** OpenSearch client, and registers real-time customizers on source tables.
+ ** (tables, processes, app), initializes the OpenSearch client, and registers
+ ** real-time customizers on source tables.
+ **
+ ** Entry point: {@link #produce(QInstance)}.
  *******************************************************************************/
 public class QuickSearchQBitProducer
 {
@@ -156,7 +158,7 @@ public class QuickSearchQBitProducer
       IndexEventPublisher publisher = null;
       if(config.getIndexEventPublisher() != null)
       {
-         publisher = (IndexEventPublisher) config.getIndexEventPublisher();
+         publisher = config.getIndexEventPublisher();
       }
       else if(client != null)
       {
@@ -264,7 +266,14 @@ public class QuickSearchQBitProducer
          Map<String, Integer> fieldWeights     = new LinkedHashMap<>();
          Map<String, Boolean> fieldIncludeLabels = new LinkedHashMap<>();
 
-         for(Field field : entityClass.getDeclaredFields())
+         List<Field> allFields = new ArrayList<>();
+         Class<?> current = entityClass;
+         while(current != null && current != Object.class)
+         {
+            allFields.addAll(java.util.Arrays.asList(current.getDeclaredFields()));
+            current = current.getSuperclass();
+         }
+         for(Field field : allFields)
          {
             QuickSearchField fieldAnnotation = field.getAnnotation(QuickSearchField.class);
             if(fieldAnnotation != null)

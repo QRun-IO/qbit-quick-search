@@ -17,6 +17,7 @@
 package com.kingsrook.qbits.quicksearch.opensearch;
 
 
+import java.io.Closeable;
 import java.io.IOException;
 import java.util.ArrayList;
 import java.util.List;
@@ -63,7 +64,7 @@ import org.opensearch.client.transport.httpclient5.ApacheHttpClient5TransportBui
  ** support. Provides helpers for index creation with edge-ngram mappings, single
  ** and bulk document indexing, deletion, and boosted multi-match search.
  *******************************************************************************/
-public class QuickSearchOpenSearchClient
+public class QuickSearchOpenSearchClient implements Closeable
 {
    private static final QLogger LOG = QLogger.getLogger(QuickSearchOpenSearchClient.class);
 
@@ -152,12 +153,6 @@ public class QuickSearchOpenSearchClient
             .index(indexName)
             .settings(s -> s
                .analysis(a -> a
-                  .tokenizer("edge_ngram_tokenizer", t -> t
-                     .definition(d -> d
-                        .edgeNgram(en -> en
-                           .minGram(2)
-                           .maxGram(20)
-                           .tokenChars(List.of()))))
                   .analyzer("quick_search_analyzer", an -> an
                      .custom(c -> c
                         .tokenizer("standard")

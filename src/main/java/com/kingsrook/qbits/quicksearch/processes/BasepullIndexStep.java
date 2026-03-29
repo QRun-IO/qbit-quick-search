@@ -267,16 +267,20 @@ public class BasepullIndexStep extends AbstractIndexingStep
 
          ////////////////////////////////////////////////////
          // Update lastBasepullTime on the index row       //
+         // only when no indexing errors occurred           //
          ////////////////////////////////////////////////////
-         QRecord updateRecord = new QRecord()
-            .withValue("id", index.getId())
-            .withValue("lastBasepullTime", Instant.now());
+         if(totalErrors.equals(0))
+         {
+            QRecord updateRecord = new QRecord()
+               .withValue("id", index.getId())
+               .withValue("lastBasepullTime", Instant.now());
 
-         UpdateInput updateInput = new UpdateInput();
-         updateInput.setTableName(QuickSearchIndex.TABLE_NAME);
-         updateInput.setRecords(List.of(updateRecord));
+            UpdateInput updateInput = new UpdateInput();
+            updateInput.setTableName(QuickSearchIndex.TABLE_NAME);
+            updateInput.setRecords(List.of(updateRecord));
 
-         new UpdateAction().execute(updateInput);
+            new UpdateAction().execute(updateInput);
+         }
 
          ////////////////////////////////////////////////////
          // Complete the run record                        //

@@ -20,6 +20,7 @@ import java.util.List;
 import com.kingsrook.qqq.backend.core.model.metadata.QInstance;
 import com.kingsrook.qqq.backend.core.model.metadata.qbits.QBitConfig;
 import com.kingsrook.qqq.backend.core.utils.StringUtils;
+import com.kingsrook.qbits.quicksearch.publisher.IndexEventPublisher;
 
 
 /*******************************************************************************
@@ -33,8 +34,6 @@ import com.kingsrook.qqq.backend.core.utils.StringUtils;
  ** true), enableRealTimeIndexing (default true), defaultBasepullIntervalMinutes
  ** (default 5), bulkBatchSize (default 500), sourceBatchSize (default 1000).
  **
- ** Note: indexEventPublisher is typed as Object until the IndexEventPublisher
- ** interface is created in Task 7, at which point it will be properly typed.
  *******************************************************************************/
 public class QuickSearchQBitConfig implements QBitConfig
 {
@@ -46,7 +45,6 @@ public class QuickSearchQBitConfig implements QBitConfig
    private String         opensearchUsername;
    private String         opensearchPassword;
    private Boolean        useSsl                        = false;
-   private Boolean        autoDiscoverAnnotations;
    private Boolean        enableScheduledProcesses      = true;
    private Boolean        enableRealTimeIndexing        = true;
    private Integer        defaultBasepullIntervalMinutes = 5;
@@ -54,10 +52,7 @@ public class QuickSearchQBitConfig implements QBitConfig
    private Integer        sourceBatchSize                = 1000;
    private List<Class<?>> searchableEntityClasses;
 
-   /////////////////////////////////////////////////////////////////////////////
-   // Typed as Object until IndexEventPublisher interface exists (see Task 7) //
-   /////////////////////////////////////////////////////////////////////////////
-   private Object indexEventPublisher;
+   private IndexEventPublisher indexEventPublisher;
 
 
 
@@ -397,37 +392,6 @@ public class QuickSearchQBitConfig implements QBitConfig
 
 
    /***************************************************************************
-    ** Getter for autoDiscoverAnnotations
-    ***************************************************************************/
-   public Boolean getAutoDiscoverAnnotations()
-   {
-      return (this.autoDiscoverAnnotations);
-   }
-
-
-
-   /***************************************************************************
-    ** Setter for autoDiscoverAnnotations
-    ***************************************************************************/
-   public void setAutoDiscoverAnnotations(Boolean autoDiscoverAnnotations)
-   {
-      this.autoDiscoverAnnotations = autoDiscoverAnnotations;
-   }
-
-
-
-   /***************************************************************************
-    ** Fluent setter for autoDiscoverAnnotations
-    ***************************************************************************/
-   public QuickSearchQBitConfig withAutoDiscoverAnnotations(Boolean autoDiscoverAnnotations)
-   {
-      this.autoDiscoverAnnotations = autoDiscoverAnnotations;
-      return (this);
-   }
-
-
-
-   /***************************************************************************
     ** Getter for enableScheduledProcesses
     ***************************************************************************/
    public Boolean getEnableScheduledProcesses()
@@ -615,10 +579,8 @@ public class QuickSearchQBitConfig implements QBitConfig
 
    /***************************************************************************
     ** Getter for indexEventPublisher
-    **
-    ** Typed as Object until IndexEventPublisher interface exists (Task 7).
     ***************************************************************************/
-   public Object getIndexEventPublisher()
+   public IndexEventPublisher getIndexEventPublisher()
    {
       return (this.indexEventPublisher);
    }
@@ -627,10 +589,8 @@ public class QuickSearchQBitConfig implements QBitConfig
 
    /***************************************************************************
     ** Setter for indexEventPublisher
-    **
-    ** Typed as Object until IndexEventPublisher interface exists (Task 7).
     ***************************************************************************/
-   public void setIndexEventPublisher(Object indexEventPublisher)
+   public void setIndexEventPublisher(IndexEventPublisher indexEventPublisher)
    {
       this.indexEventPublisher = indexEventPublisher;
    }
@@ -639,10 +599,8 @@ public class QuickSearchQBitConfig implements QBitConfig
 
    /***************************************************************************
     ** Fluent setter for indexEventPublisher
-    **
-    ** Typed as Object until IndexEventPublisher interface exists (Task 7).
     ***************************************************************************/
-   public QuickSearchQBitConfig withIndexEventPublisher(Object indexEventPublisher)
+   public QuickSearchQBitConfig withIndexEventPublisher(IndexEventPublisher indexEventPublisher)
    {
       this.indexEventPublisher = indexEventPublisher;
       return (this);

@@ -17,6 +17,8 @@ package com.kingsrook.qbits.quicksearch;
 
 
 import java.util.List;
+import com.kingsrook.qbits.quicksearch.opensearch.QuickSearchOpenSearchClient;
+import com.kingsrook.qbits.quicksearch.publisher.IndexEventPublisher;
 
 
 /*******************************************************************************
@@ -25,26 +27,14 @@ import java.util.List;
  ** Provides access to the active configuration, the OpenSearch client, the
  ** index-event publisher, and the list of tables discovered at startup.
  **
- ** Note: client is typed as Object until QuickSearchOpenSearchClient is
- ** wired in; publisher is typed as Object until IndexEventPublisher is
- ** created in Task 7.
- **
  ** Call clear() in test @AfterEach / @BeforeEach to reset all state.
  *******************************************************************************/
 public class QuickSearchQBitContext
 {
-   private static QuickSearchQBitConfig             config;
-   private static List<QuickSearchableTableConfig>  discoveredTables;
-
-   /////////////////////////////////////////////////////////////////////////
-   // Typed as Object until QuickSearchOpenSearchClient is set here.      //
-   /////////////////////////////////////////////////////////////////////////
-   private static Object client;
-
-   /////////////////////////////////////////////////////////////////////////
-   // Typed as Object until IndexEventPublisher interface exists (Task 7) //
-   /////////////////////////////////////////////////////////////////////////
-   private static Object publisher;
+   private static volatile QuickSearchQBitConfig             config;
+   private static volatile List<QuickSearchableTableConfig>  discoveredTables;
+   private static volatile QuickSearchOpenSearchClient       client;
+   private static volatile IndexEventPublisher               publisher;
 
 
 
@@ -116,7 +106,7 @@ public class QuickSearchQBitContext
    /***************************************************************************
     ** Getter for client
     ***************************************************************************/
-   public static Object getClient()
+   public static QuickSearchOpenSearchClient getClient()
    {
       return client;
    }
@@ -126,7 +116,7 @@ public class QuickSearchQBitContext
    /***************************************************************************
     ** Setter for client
     ***************************************************************************/
-   public static void setClient(Object client)
+   public static void setClient(QuickSearchOpenSearchClient client)
    {
       QuickSearchQBitContext.client = client;
    }
@@ -136,7 +126,7 @@ public class QuickSearchQBitContext
    /***************************************************************************
     ** Getter for publisher
     ***************************************************************************/
-   public static Object getPublisher()
+   public static IndexEventPublisher getPublisher()
    {
       return publisher;
    }
@@ -146,7 +136,7 @@ public class QuickSearchQBitContext
    /***************************************************************************
     ** Setter for publisher
     ***************************************************************************/
-   public static void setPublisher(Object publisher)
+   public static void setPublisher(IndexEventPublisher publisher)
    {
       QuickSearchQBitContext.publisher = publisher;
    }

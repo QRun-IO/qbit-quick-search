@@ -78,8 +78,13 @@ public class QuickSearchAction
       int limit  = (input.getLimit() == null || input.getLimit() <= 0) ? DEFAULT_LIMIT : input.getLimit();
       int offset = (input.getOffset() == null || input.getOffset() < 0) ? DEFAULT_OFFSET : input.getOffset();
 
-      QuickSearchOpenSearchClient       client       = (QuickSearchOpenSearchClient) QuickSearchQBitContext.getClient();
+      QuickSearchOpenSearchClient       client       = QuickSearchQBitContext.getClient();
       List<QuickSearchableTableConfig>  tableConfigs = QuickSearchQBitContext.getDiscoveredTables();
+
+      if(client == null)
+      {
+         throw new QException("QuickSearch client is not initialized. The QBit may not have connected to OpenSearch during startup.");
+      }
 
       LOG.debug("Executing quick search", "term", normalizedTerm, "tableName", input.getTableName(), "limit", limit, "offset", offset);
 
@@ -115,7 +120,7 @@ public class QuickSearchAction
             .withHighlightSnippet(highlightSnippet));
       }
 
-      long    totalHits = response.hits().total().value();
+      long    totalHits = response.hits().total() != null ? response.hits().total().value() : results.size();
       boolean hasMore   = (offset + results.size()) < totalHits;
 
       return (new QuickSearchOutput()

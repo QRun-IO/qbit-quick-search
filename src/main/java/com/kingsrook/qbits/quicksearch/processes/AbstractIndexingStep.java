@@ -85,12 +85,12 @@ public abstract class AbstractIndexingStep implements BackendStep
     *******************************************************************************/
    protected QuickSearchOpenSearchClient getClient() throws QException
    {
-      Object client = QuickSearchQBitContext.getClient();
+      QuickSearchOpenSearchClient client = QuickSearchQBitContext.getClient();
       if(client == null)
       {
          throw new QException("QuickSearchOpenSearchClient is not initialized in QuickSearchQBitContext");
       }
-      return ((QuickSearchOpenSearchClient) client);
+      return (client);
    }
 
 
@@ -159,23 +159,33 @@ public abstract class AbstractIndexingStep implements BackendStep
       }
 
       //////////////////////////////////////////////////////////////////////////////
-      // Build and insert a new index row                                         //
+      // Build and insert a new index row. Wrapped in try/catch to handle the   //
+      // race condition where another thread inserts between our check and our  //
+      // insert -- a duplicate key exception in that case is harmless.          //
       //////////////////////////////////////////////////////////////////////////////
-      String searchableFieldsJson = buildSearchableFieldsJson(tableConfig);
+      try
+      {
+         String searchableFieldsJson = buildSearchableFieldsJson(tableConfig);
 
-      QRecord record = new QRecord()
-         .withValue("tableName", tableName)
-         .withValue("enabled", tableConfig.getEnabledByDefault())
-         .withValue("basepullIntervalMinutes", tableConfig.getBasepullIntervalMinutes())
-         .withValue("basepullTimestampField", tableConfig.getBasepullTimestampField())
-         .withValue("searchableFieldsJson", searchableFieldsJson)
-         .withValue("status", "ACTIVE");
+         QRecord record = new QRecord()
+            .withValue("tableName", tableName)
+            .withValue("enabled", tableConfig.getEnabledByDefault())
+            .withValue("basepullIntervalMinutes", tableConfig.getBasepullIntervalMinutes())
+            .withValue("basepullTimestampField", tableConfig.getBasepullTimestampField())
+            .withValue("searchableFieldsJson", searchableFieldsJson)
+            .withValue("status", "ACTIVE");
 
-      InsertInput insertInput = new InsertInput();
-      insertInput.setTableName(QuickSearchIndex.TABLE_NAME);
-      insertInput.setRecords(List.of(record));
+         InsertInput insertInput = new InsertInput();
+         insertInput.setTableName(QuickSearchIndex.TABLE_NAME);
+         insertInput.setRecords(List.of(record));
 
-      new InsertAction().execute(insertInput);
+         new InsertAction().execute(insertInput);
+      }
+      catch(Exception e)
+      {
+         LOG.info("Insert of index row may have hit a duplicate key (another thread likely created it); continuing",
+            "tableName", tableName, "message", e.getMessage());
+      }
    }
 
 
@@ -220,7 +230,9 @@ public abstract class AbstractIndexingStep implements BackendStep
             includeLabel = tableConfig.getFieldIncludeLabels().get(fieldName);
          }
 
-         sb.append("{\"fieldName\":\"").append(fieldName).append("\"")
+         String escapedName = fieldName.replace("\\", "\\\\").replace("\"", "\\\"");
+
+         sb.append("{\"fieldName\":\"").append(escapedName).append("\"")
            .append(",\"weight\":").append(weight)
            .append(",\"includeLabel\":").append(includeLabel)
            .append("}");
@@ -329,7 +341,14 @@ public abstract class AbstractIndexingStep implements BackendStep
     *******************************************************************************/
    protected List<QRecord> querySourceTableBatch(String tableName, QQueryFilter filter, Integer limit, Integer offset) throws QException
    {
-      QQueryFilter effectiveFilter = (filter != null) ? filter : new QQueryFilter();
+      QQueryFilter effectiveFilter = new QQueryFilter();
+      if(filter != null && filter.getCriteria() != null)
+      {
+         for(QFilterCriteria criteria : filter.getCriteria())
+         {
+            effectiveFilter.withCriteria(criteria);
+         }
+      }
       effectiveFilter.setLimit(limit);
       effectiveFilter.setSkip(offset);
 

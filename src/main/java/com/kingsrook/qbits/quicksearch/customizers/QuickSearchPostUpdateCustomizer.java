@@ -72,8 +72,8 @@ public class QuickSearchPostUpdateCustomizer implements TableCustomizerInterface
          return records;
       }
 
-      Object publisherObject = QuickSearchQBitContext.getPublisher();
-      if(publisherObject == null)
+      IndexEventPublisher publisher = QuickSearchQBitContext.getPublisher();
+      if(publisher == null)
       {
          LOG.warn("QuickSearch publisher is null; skipping post-update indexing", logPair("tableName", updateInput.getTableName()));
          return records;
@@ -81,7 +81,6 @@ public class QuickSearchPostUpdateCustomizer implements TableCustomizerInterface
 
       try
       {
-         IndexEventPublisher publisher = (IndexEventPublisher) publisherObject;
          String tableName = updateInput.getTableName();
          String primaryKeyField = QContext.getQInstance().getTable(tableName).getPrimaryKeyField();
 
