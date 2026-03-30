@@ -22,6 +22,7 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import com.kingsrook.qqq.backend.core.model.data.QRecord;
+import com.kingsrook.qbits.quicksearch.QuickSearchableTableConfig;
 import com.kingsrook.qbits.quicksearch.opensearch.OpenSearchDocument;
 
 
@@ -162,6 +163,44 @@ public class IndexingUtils
          .withSearchableText(searchableText)
          .withIndexedAt(Instant.now())
          .withFieldValues(fieldValues));
+   }
+
+
+
+   /*******************************************************************************
+    ** Build an OpenSearchDocument from a QRecord using a QuickSearchableTableConfig.
+    **
+    ** Delegates to the existing buildDocument overload for core document
+    ** construction. When recordLabelFormat is set on the table config, overrides
+    ** the record label by formatting the specified field values using
+    ** String.format. Falls back to QRecord.getRecordLabel() when no format is set.
+    **
+    ** @param record      the source QRecord
+    ** @param tableConfig the table configuration containing fields, weights, and label format
+    ** @return a fully populated OpenSearchDocument, or null if the primary key is null
+    *******************************************************************************/
+   public static OpenSearchDocument buildDocument(QRecord record, QuickSearchableTableConfig tableConfig)
+   {
+      OpenSearchDocument doc = buildDocument(
+         record,
+         tableConfig.getTableName(),
+         tableConfig.getPrimaryKeyField(),
+         tableConfig.getSearchableFields(),
+         tableConfig.getFieldWeights(),
+         tableConfig.getFieldIncludeLabels() != null ? tableConfig.getFieldIncludeLabels() : java.util.Collections.emptyMap());
+
+      if(doc != null && tableConfig.getRecordLabelFormat() != null && tableConfig.getRecordLabelFields() != null)
+      {
+         Object[] labelValues = new Object[tableConfig.getRecordLabelFields().size()];
+         for(int i = 0; i < tableConfig.getRecordLabelFields().size(); i++)
+         {
+            Object v = record.getValue(tableConfig.getRecordLabelFields().get(i));
+            labelValues[i] = v != null ? v : "";
+         }
+         doc.withRecordLabel(String.format(tableConfig.getRecordLabelFormat(), labelValues));
+      }
+
+      return (doc);
    }
 
 }

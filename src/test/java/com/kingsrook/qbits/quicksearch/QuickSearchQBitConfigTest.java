@@ -310,7 +310,8 @@ class QuickSearchQBitConfigTest
 
 
    /***************************************************************************
-    ** Test validation with empty searchableEntityClasses list.
+    ** Test validation with empty searchableEntityClasses list and no
+    ** searchableTables.
     ***************************************************************************/
    @Test
    void testValidate_emptySearchableEntityClasses_addsError()
@@ -327,13 +328,13 @@ class QuickSearchQBitConfigTest
       List<String> errors = new ArrayList<>();
       config.validate(qInstance, errors);
 
-      assertThat(errors).anyMatch(e -> e.contains("searchableEntityClasses is required"));
+      assertThat(errors).anyMatch(e -> e.contains("At least one of searchableEntityClasses or searchableTables is required"));
    }
 
 
 
    /***************************************************************************
-    ** Test validation with null searchableEntityClasses.
+    ** Test validation with null searchableEntityClasses and no searchableTables.
     ***************************************************************************/
    @Test
    void testValidate_nullSearchableEntityClasses_addsError()
@@ -349,7 +350,7 @@ class QuickSearchQBitConfigTest
       List<String> errors = new ArrayList<>();
       config.validate(qInstance, errors);
 
-      assertThat(errors).anyMatch(e -> e.contains("searchableEntityClasses is required"));
+      assertThat(errors).anyMatch(e -> e.contains("At least one of searchableEntityClasses or searchableTables is required"));
    }
 
 
@@ -560,6 +561,241 @@ class QuickSearchQBitConfigTest
       assertThat(config.getSourceBatchSize()).isEqualTo(500);
       assertThat(config.getSearchableEntityClasses()).isEqualTo(entityClasses);
       assertThat(config.getIndexEventPublisher()).isSameAs(dummyPublisher);
+   }
+
+
+
+   /***************************************************************************
+    ** Test validation passes with searchableTables only (no entity classes).
+    ***************************************************************************/
+   @Test
+   void testValidate_searchableTablesOnly_noErrors()
+   {
+      QInstance qInstance = createQInstanceWithBackend();
+
+      QuickSearchQBitConfig config = new QuickSearchQBitConfig()
+         .withBackendName("memory")
+         .withOpensearchHost("localhost")
+         .withOpensearchPort(9200)
+         .withOpensearchIndexName("test-index")
+         .withSearchableTable("myTable", List.of(new SearchableFieldConfig("name")));
+
+      List<String> errors = new ArrayList<>();
+      config.validate(qInstance, errors);
+
+      assertThat(errors).noneMatch(e -> e.contains("searchableEntityClasses") || e.contains("searchableTables"));
+   }
+
+
+
+   /***************************************************************************
+    ** Test validation fails when neither searchableEntityClasses nor
+    ** searchableTables is configured.
+    ***************************************************************************/
+   @Test
+   void testValidate_neitherSource_addsError()
+   {
+      QInstance qInstance = createQInstanceWithBackend();
+
+      QuickSearchQBitConfig config = new QuickSearchQBitConfig()
+         .withBackendName("memory")
+         .withOpensearchHost("localhost")
+         .withOpensearchPort(9200)
+         .withOpensearchIndexName("test-index");
+
+      List<String> errors = new ArrayList<>();
+      config.validate(qInstance, errors);
+
+      assertThat(errors).anyMatch(e -> e.contains("At least one of searchableEntityClasses or searchableTables is required"));
+   }
+
+
+
+   /***************************************************************************
+    ** Test validation passes when both searchableEntityClasses and
+    ** searchableTables are configured.
+    ***************************************************************************/
+   @Test
+   void testValidate_bothSources_noErrors()
+   {
+      QInstance qInstance = createQInstanceWithBackend();
+
+      QuickSearchQBitConfig config = new QuickSearchQBitConfig()
+         .withBackendName("memory")
+         .withOpensearchHost("localhost")
+         .withOpensearchPort(9200)
+         .withOpensearchIndexName("test-index")
+         .withSearchableEntityClasses(List.of(String.class))
+         .withSearchableTable("myTable", List.of(new SearchableFieldConfig("name")));
+
+      List<String> errors = new ArrayList<>();
+      config.validate(qInstance, errors);
+
+      assertThat(errors).noneMatch(e -> e.contains("searchableEntityClasses") || e.contains("At least one of"));
+   }
+
+
+
+   /***************************************************************************
+    ** Test withSearchableTable adder lazy-initializes list and adds entry.
+    ***************************************************************************/
+   @Test
+   void testWithSearchableTable_adder_lazyInitsAndAdds()
+   {
+      QuickSearchQBitConfig config = new QuickSearchQBitConfig();
+      assertThat(config.getSearchableTables()).isNull();
+
+      SearchableTableConfig tableConfig = new SearchableTableConfig("t1",
+         List.of(new SearchableFieldConfig("f1")));
+
+      QuickSearchQBitConfig result = config.withSearchableTable(tableConfig);
+
+      assertThat(result).isSameAs(config);
+      assertThat(config.getSearchableTables()).hasSize(1);
+      assertThat(config.getSearchableTables().get(0).getTableName()).isEqualTo("t1");
+   }
+
+
+
+   /***************************************************************************
+    ** Test withSearchableTable shorthand creates a SearchableTableConfig
+    ** with defaults.
+    ***************************************************************************/
+   @Test
+   void testWithSearchableTable_shorthand_createsConfigWithDefaults()
+   {
+      QuickSearchQBitConfig config = new QuickSearchQBitConfig()
+         .withSearchableTable("myTable", List.of(new SearchableFieldConfig("name")));
+
+      assertThat(config.getSearchableTables()).hasSize(1);
+      assertThat(config.getSearchableTables().get(0).getTableName()).isEqualTo("myTable");
+      assertThat(config.getSearchableTables().get(0).getFields()).hasSize(1);
+      assertThat(config.getSearchableTables().get(0).getBasepullTimestampField()).isEqualTo("modifyDate");
+      assertThat(config.getSearchableTables().get(0).getEnabledByDefault()).isTrue();
+   }
+
+
+
+   /***************************************************************************
+    ** Test chaining multiple withSearchableTable calls accumulates entries.
+    ***************************************************************************/
+   @Test
+   void testWithSearchableTable_chaining_accumulatesEntries()
+   {
+      QuickSearchQBitConfig config = new QuickSearchQBitConfig()
+         .withSearchableTable("t1", List.of(new SearchableFieldConfig("f1")))
+         .withSearchableTable("t2", List.of(new SearchableFieldConfig("f2")));
+
+      assertThat(config.getSearchableTables()).hasSize(2);
+      assertThat(config.getSearchableTables().get(0).getTableName()).isEqualTo("t1");
+      assertThat(config.getSearchableTables().get(1).getTableName()).isEqualTo("t2");
+   }
+
+
+
+   /***************************************************************************
+    ** Test withSearchableTables bulk setter replaces the list.
+    ***************************************************************************/
+   @Test
+   void testWithSearchableTables_bulkSetter_replacesList()
+   {
+      SearchableTableConfig t1 = new SearchableTableConfig("t1", List.of(new SearchableFieldConfig("f1")));
+      SearchableTableConfig t2 = new SearchableTableConfig("t2", List.of(new SearchableFieldConfig("f2")));
+      List<SearchableTableConfig> tables = List.of(t1, t2);
+
+      QuickSearchQBitConfig config = new QuickSearchQBitConfig()
+         .withSearchableTables(tables);
+
+      assertThat(config.getSearchableTables()).isSameAs(tables);
+      assertThat(config.getSearchableTables()).hasSize(2);
+   }
+
+
+
+   /***************************************************************************
+    ** Test getter/setter round-trip for searchableTables.
+    ***************************************************************************/
+   @Test
+   void testSearchableTables_getterSetterRoundTrip()
+   {
+      SearchableTableConfig t1 = new SearchableTableConfig("t1", List.of(new SearchableFieldConfig("f1")));
+      List<SearchableTableConfig> tables = List.of(t1);
+
+      QuickSearchQBitConfig config = new QuickSearchQBitConfig();
+      config.setSearchableTables(new ArrayList<>(tables));
+
+      assertThat(config.getSearchableTables()).hasSize(1);
+      assertThat(config.getSearchableTables().get(0).getTableName()).isEqualTo("t1");
+   }
+
+
+
+   /***************************************************************************
+    ** Test validation detects empty tableName on a SearchableTableConfig.
+    ***************************************************************************/
+   @Test
+   void testValidate_searchableTableMissingTableName_addsError()
+   {
+      QInstance qInstance = createQInstanceWithBackend();
+
+      QuickSearchQBitConfig config = new QuickSearchQBitConfig()
+         .withBackendName("memory")
+         .withOpensearchHost("localhost")
+         .withOpensearchPort(9200)
+         .withOpensearchIndexName("test-index")
+         .withSearchableTable(new SearchableTableConfig("", List.of(new SearchableFieldConfig("f1"))));
+
+      List<String> errors = new ArrayList<>();
+      config.validate(qInstance, errors);
+
+      assertThat(errors).anyMatch(e -> e.contains("tableName is required on each SearchableTableConfig"));
+   }
+
+
+
+   /***************************************************************************
+    ** Test validation detects empty fields on a SearchableTableConfig.
+    ***************************************************************************/
+   @Test
+   void testValidate_searchableTableEmptyFields_addsError()
+   {
+      QInstance qInstance = createQInstanceWithBackend();
+
+      QuickSearchQBitConfig config = new QuickSearchQBitConfig()
+         .withBackendName("memory")
+         .withOpensearchHost("localhost")
+         .withOpensearchPort(9200)
+         .withOpensearchIndexName("test-index")
+         .withSearchableTable(new SearchableTableConfig("myTable", List.of()));
+
+      List<String> errors = new ArrayList<>();
+      config.validate(qInstance, errors);
+
+      assertThat(errors).anyMatch(e -> e.contains("fields is required and must be non-empty"));
+   }
+
+
+
+   /***************************************************************************
+    ** Verify that duplicate table names within searchableTables are rejected.
+    ***************************************************************************/
+   @Test
+   void testValidate_duplicateTableNameInSearchableTables_addsError()
+   {
+      QInstance qInstance = createQInstanceWithBackend();
+
+      QuickSearchQBitConfig config = new QuickSearchQBitConfig()
+         .withBackendName("memory")
+         .withOpensearchHost("localhost")
+         .withOpensearchPort(9200)
+         .withOpensearchIndexName("test-index")
+         .withSearchableTable("myTable", List.of(new SearchableFieldConfig("name")))
+         .withSearchableTable("myTable", List.of(new SearchableFieldConfig("email")));
+
+      List<String> errors = new ArrayList<>();
+      config.validate(qInstance, errors);
+
+      assertThat(errors).anyMatch(e -> e.contains("Duplicate tableName in searchableTables: myTable"));
    }
 
 

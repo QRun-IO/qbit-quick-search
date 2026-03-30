@@ -16,9 +16,11 @@
 package com.kingsrook.qbits.quicksearch;
 
 
+import java.util.ArrayList;
 import java.util.List;
 import com.kingsrook.qqq.backend.core.model.metadata.QInstance;
 import com.kingsrook.qqq.backend.core.model.metadata.qbits.QBitConfig;
+import com.kingsrook.qqq.backend.core.utils.CollectionUtils;
 import com.kingsrook.qqq.backend.core.utils.StringUtils;
 import com.kingsrook.qbits.quicksearch.model.QuickSearchIndex;
 import com.kingsrook.qbits.quicksearch.model.QuickSearchIndexRun;
@@ -29,12 +31,15 @@ import com.kingsrook.qbits.quicksearch.publisher.IndexEventPublisher;
  ** Configuration for the Quick Search QBit.
  **
  ** Required fields: backendName, opensearchHost, opensearchPort,
- ** opensearchIndexName, searchableEntityClasses.
+ ** opensearchIndexName. At least one of searchableEntityClasses or
+ ** searchableTables must also be provided.
  **
  ** Optional: opensearchUsername and opensearchPassword (must be set together),
  ** tableNamePrefix, useSsl (default false), enableScheduledProcesses (default
  ** true), enableRealTimeIndexing (default true), defaultBasepullIntervalMinutes
- ** (default 5), bulkBatchSize (default 500), sourceBatchSize (default 1000).
+ ** (default 5), bulkBatchSize (default 500), sourceBatchSize (default 1000),
+ ** searchableTables (config-driven table definitions for tables from external
+ ** QBit jars that do not have @QuickSearchable annotations).
  **
  *******************************************************************************/
 public class QuickSearchQBitConfig implements QBitConfig
@@ -52,7 +57,8 @@ public class QuickSearchQBitConfig implements QBitConfig
    private Integer        defaultBasepullIntervalMinutes = 5;
    private Integer        bulkBatchSize                  = 500;
    private Integer        sourceBatchSize                = 1000;
-   private List<Class<?>> searchableEntityClasses;
+   private List<Class<?>>           searchableEntityClasses;
+   private List<SearchableTableConfig> searchableTables;
 
    private IndexEventPublisher indexEventPublisher;
 
@@ -105,9 +111,35 @@ public class QuickSearchQBitConfig implements QBitConfig
          errors.add("opensearchUsername is required when opensearchPassword is set");
       }
 
-      if(searchableEntityClasses == null || searchableEntityClasses.isEmpty())
+      boolean hasEntityClasses  = !CollectionUtils.nullSafeIsEmpty(searchableEntityClasses);
+      boolean hasSearchableTables = !CollectionUtils.nullSafeIsEmpty(searchableTables);
+
+      if(!hasEntityClasses && !hasSearchableTables)
       {
-         errors.add("searchableEntityClasses is required for QuickSearchQBit");
+         errors.add("At least one of searchableEntityClasses or searchableTables is required for QuickSearchQBit");
+      }
+
+      if(hasSearchableTables)
+      {
+         java.util.Set<String> seenTableNames = new java.util.HashSet<>();
+         for(SearchableTableConfig tableConfig : searchableTables)
+         {
+            if(!StringUtils.hasContent(tableConfig.getTableName()))
+            {
+               errors.add("tableName is required on each SearchableTableConfig for QuickSearchQBit");
+            }
+            else if(!seenTableNames.add(tableConfig.getTableName()))
+            {
+               errors.add("Duplicate tableName in searchableTables: " + tableConfig.getTableName());
+            }
+
+            if(CollectionUtils.nullSafeIsEmpty(tableConfig.getFields()))
+            {
+               errors.add("fields is required and must be non-empty on SearchableTableConfig"
+                  + (StringUtils.hasContent(tableConfig.getTableName()) ? " [" + tableConfig.getTableName() + "]" : "")
+                  + " for QuickSearchQBit");
+            }
+         }
       }
 
       if(bulkBatchSize != null && bulkBatchSize <= 0)
@@ -626,6 +658,63 @@ public class QuickSearchQBitConfig implements QBitConfig
    {
       this.indexEventPublisher = indexEventPublisher;
       return (this);
+   }
+
+
+
+   /***************************************************************************
+    ** Getter for searchableTables
+    ***************************************************************************/
+   public List<SearchableTableConfig> getSearchableTables()
+   {
+      return (this.searchableTables);
+   }
+
+
+
+   /***************************************************************************
+    ** Setter for searchableTables
+    ***************************************************************************/
+   public void setSearchableTables(List<SearchableTableConfig> searchableTables)
+   {
+      this.searchableTables = searchableTables;
+   }
+
+
+
+   /***************************************************************************
+    ** Fluent setter for searchableTables
+    ***************************************************************************/
+   public QuickSearchQBitConfig withSearchableTables(List<SearchableTableConfig> searchableTables)
+   {
+      this.searchableTables = searchableTables;
+      return (this);
+   }
+
+
+
+   /***************************************************************************
+    ** Add a single config-driven searchable table. Lazy-initializes the list.
+    ***************************************************************************/
+   public QuickSearchQBitConfig withSearchableTable(SearchableTableConfig tableConfig)
+   {
+      if(this.searchableTables == null)
+      {
+         this.searchableTables = new ArrayList<>();
+      }
+      this.searchableTables.add(tableConfig);
+      return (this);
+   }
+
+
+
+   /***************************************************************************
+    ** Convenience shorthand to add a config-driven searchable table with
+    ** default settings.
+    ***************************************************************************/
+   public QuickSearchQBitConfig withSearchableTable(String tableName, List<SearchableFieldConfig> fields)
+   {
+      return withSearchableTable(new SearchableTableConfig(tableName, fields));
    }
 
 }

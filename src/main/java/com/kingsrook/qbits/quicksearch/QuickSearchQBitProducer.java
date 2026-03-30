@@ -122,7 +122,34 @@ public class QuickSearchQBitProducer
       ////////////////////////////////////////////////////
       // 2. Discover searchable tables from annotations //
       ////////////////////////////////////////////////////
-      List<QuickSearchableTableConfig> discoveredTables = discoverSearchableTables(qInstance);
+      List<QuickSearchableTableConfig> annotationTables = discoverSearchableTables(qInstance);
+
+      ////////////////////////////////////////////////////
+      // 2b. Convert config-driven searchable tables    //
+      ////////////////////////////////////////////////////
+      List<QuickSearchableTableConfig> configTables = convertConfigDrivenTables(qInstance);
+
+      ////////////////////////////////////////////////////
+      // 2c. Detect duplicate table names across both   //
+      //     annotation-based and config-driven sources //
+      ////////////////////////////////////////////////////
+      for(QuickSearchableTableConfig annotationTable : annotationTables)
+      {
+         for(QuickSearchableTableConfig configTable : configTables)
+         {
+            if(annotationTable.getTableName().equals(configTable.getTableName()))
+            {
+               throw new QException("Duplicate table name found in both annotation-based and config-driven searchable tables: " + annotationTable.getTableName());
+            }
+         }
+      }
+
+      ////////////////////////////////////////////////////
+      // 2d. Merge both lists into discoveredTables     //
+      ////////////////////////////////////////////////////
+      List<QuickSearchableTableConfig> discoveredTables = new ArrayList<>();
+      discoveredTables.addAll(annotationTables);
+      discoveredTables.addAll(configTables);
 
       ////////////////////////////////////////////////////
       // 3. Create OpenSearch client                    //
@@ -329,6 +356,86 @@ public class QuickSearchQBitProducer
             .withBasepullIntervalMinutes(basepullIntervalMinutes)
             .withBasepullTimestampField(basepullTimestampField)
             .withEnabledByDefault(enabledByDefault);
+
+         tables.add(tableConfig);
+      }
+
+      return (tables);
+   }
+
+
+
+   /***************************************************************************
+    ** Convert config-driven SearchableTableConfig entries into
+    ** QuickSearchableTableConfig objects.
+    **
+    ** Maps each SearchableFieldConfig into the searchableFields list,
+    ** fieldWeights map, and fieldIncludeLabels map. Resolves the primary
+    ** key field from the QInstance table metadata (falls back to "id").
+    ** Applies the default basepullIntervalMinutes from QBit config when
+    ** the table-level value is null. Transfers recordLabelFormat and
+    ** recordLabelFields.
+    **
+    ** @param qInstance the QInstance to look up table primary keys
+    ** @return list of converted table configurations, empty if none configured
+    ***************************************************************************/
+   private List<QuickSearchableTableConfig> convertConfigDrivenTables(QInstance qInstance)
+   {
+      List<QuickSearchableTableConfig> tables = new ArrayList<>();
+      List<SearchableTableConfig> searchableTables = config.getSearchableTables();
+
+      if(searchableTables == null || searchableTables.isEmpty())
+      {
+         return (tables);
+      }
+
+      for(SearchableTableConfig stc : searchableTables)
+      {
+         List<String> searchableFields           = new ArrayList<>();
+         Map<String, Integer> fieldWeights        = new LinkedHashMap<>();
+         Map<String, Boolean> fieldIncludeLabels  = new LinkedHashMap<>();
+
+         if(stc.getFields() != null)
+         {
+            for(SearchableFieldConfig fieldConfig : stc.getFields())
+            {
+               String fieldName = fieldConfig.getFieldName();
+               searchableFields.add(fieldName);
+               fieldWeights.put(fieldName, fieldConfig.getWeight() != null ? fieldConfig.getWeight() : 1);
+               fieldIncludeLabels.put(fieldName, fieldConfig.getIncludeLabel() != null ? fieldConfig.getIncludeLabel() : false);
+            }
+         }
+
+         //////////////////////////////////////////////////////////
+         // Resolve primary key from QInstance table metadata     //
+         //////////////////////////////////////////////////////////
+         String primaryKeyField = "id";
+         QTableMetaData table = qInstance.getTable(stc.getTableName());
+         if(table != null)
+         {
+            primaryKeyField = table.getPrimaryKeyField();
+         }
+
+         //////////////////////////////////////////////////////////
+         // Apply default basepullIntervalMinutes from config    //
+         //////////////////////////////////////////////////////////
+         Integer basepullInterval = stc.getBasepullIntervalMinutes();
+         if(basepullInterval == null)
+         {
+            basepullInterval = config.getDefaultBasepullIntervalMinutes();
+         }
+
+         QuickSearchableTableConfig tableConfig = new QuickSearchableTableConfig()
+            .withTableName(stc.getTableName())
+            .withPrimaryKeyField(primaryKeyField)
+            .withSearchableFields(searchableFields)
+            .withFieldWeights(fieldWeights)
+            .withFieldIncludeLabels(fieldIncludeLabels)
+            .withBasepullIntervalMinutes(basepullInterval)
+            .withBasepullTimestampField(stc.getBasepullTimestampField())
+            .withEnabledByDefault(stc.getEnabledByDefault())
+            .withRecordLabelFormat(stc.getRecordLabelFormat())
+            .withRecordLabelFields(stc.getRecordLabelFields());
 
          tables.add(tableConfig);
       }
