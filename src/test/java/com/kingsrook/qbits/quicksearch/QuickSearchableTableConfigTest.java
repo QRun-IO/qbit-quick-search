@@ -119,4 +119,62 @@ class QuickSearchableTableConfigTest
       assertThat(config.getFieldIncludeLabels()).isNull();
    }
 
+
+
+   /***************************************************************************
+    ** Test recordLabelFormat defaults to null.
+    ***************************************************************************/
+   @Test
+   void testRecordLabelFormat_defaultsToNull()
+   {
+      QuickSearchableTableConfig config = new QuickSearchableTableConfig();
+
+      assertThat(config.getRecordLabelFormat()).isNull();
+      assertThat(config.getRecordLabelFields()).isNull();
+   }
+
+
+
+   /***************************************************************************
+    ** Test recordLabelFormat fluent setter and getter round-trip.
+    ***************************************************************************/
+   @Test
+   void testRecordLabelFormat_fluentSetterAndGetter()
+   {
+      QuickSearchableTableConfig config = new QuickSearchableTableConfig()
+         .withRecordLabelFormat("%s - %s");
+
+      assertThat(config.getRecordLabelFormat()).isEqualTo("%s - %s");
+   }
+
+
+
+   /***************************************************************************
+    ** Test recordLabelFields fluent setter and getter round-trip.
+    ***************************************************************************/
+   @Test
+   void testRecordLabelFields_fluentSetterAndGetter()
+   {
+      List<String> labelFields = List.of("firstName", "lastName");
+
+      QuickSearchableTableConfig config = new QuickSearchableTableConfig()
+         .withRecordLabelFields(labelFields);
+
+      assertThat(config.getRecordLabelFields()).isEqualTo(labelFields);
+   }
+
+
+
+   /***************************************************************************
+    ** Test recordLabelFormat and recordLabelFields fluent setters return this.
+    ***************************************************************************/
+   @Test
+   void testRecordLabelSetters_returnThis()
+   {
+      QuickSearchableTableConfig config = new QuickSearchableTableConfig();
+
+      assertThat(config.withRecordLabelFormat("%s")).isSameAs(config);
+      assertThat(config.withRecordLabelFields(List.of("a"))).isSameAs(config);
+   }
+
 }

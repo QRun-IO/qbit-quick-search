@@ -245,6 +245,7 @@ class SynchronousIndexEventPublisherTest
    {
       QuickSearchableTableConfig configWithoutPk = new QuickSearchableTableConfig()
          .withTableName("products")
+         .withPrimaryKeyField("id")
          .withSearchableFields(List.of("name"))
          .withFieldWeights(Map.of("name", 1))
          .withFieldIncludeLabels(Map.of("name", false));

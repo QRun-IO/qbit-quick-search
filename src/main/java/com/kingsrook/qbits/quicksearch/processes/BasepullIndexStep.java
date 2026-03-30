@@ -235,13 +235,7 @@ public class BasepullIndexStep extends AbstractIndexingStep
             {
                if(tableConfig != null)
                {
-                  OpenSearchDocument doc = IndexingUtils.buildDocument(
-                     record,
-                     tableName,
-                     tableConfig.getPrimaryKeyField(),
-                     tableConfig.getSearchableFields(),
-                     tableConfig.getFieldWeights(),
-                     tableConfig.getFieldIncludeLabels() != null ? tableConfig.getFieldIncludeLabels() : java.util.Collections.emptyMap());
+                  OpenSearchDocument doc = IndexingUtils.buildDocument(record, tableConfig);
                   documents.add(doc);
                }
             }
