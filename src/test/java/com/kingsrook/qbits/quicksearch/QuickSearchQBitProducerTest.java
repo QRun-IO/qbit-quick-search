@@ -476,6 +476,314 @@ class QuickSearchQBitProducerTest
 
 
    /***************************************************************************
+    ** Test that config-driven-only produce discovers tables from
+    ** searchableTables config.
+    ***************************************************************************/
+   @Test
+   void testProduce_configDrivenOnly_discoversTable() throws QException
+   {
+      QInstance qInstance = buildQInstance();
+      QContext.init(qInstance, new QSession());
+
+      QuickSearchQBitConfig config = new QuickSearchQBitConfig()
+         .withBackendName(BACKEND_NAME)
+         .withOpensearchHost("localhost")
+         .withOpensearchPort(9200)
+         .withOpensearchIndexName("test-config-driven")
+         .withSearchableTable(SOURCE_TABLE, List.of(
+            new SearchableFieldConfig("firstName").withWeight(2),
+            new SearchableFieldConfig("lastName"),
+            new SearchableFieldConfig("email").withWeight(3)));
+
+      QuickSearchQBitProducer producer = new QuickSearchQBitProducer()
+         .withConfig(config);
+
+      producer.produce(qInstance);
+
+      assertThat(QuickSearchQBitContext.getDiscoveredTables()).hasSize(1);
+      assertThat(QuickSearchQBitContext.getDiscoveredTables().get(0).getTableName()).isEqualTo(SOURCE_TABLE);
+      assertThat(QuickSearchQBitContext.getDiscoveredTables().get(0).getSearchableFields())
+         .containsExactly("firstName", "lastName", "email");
+   }
+
+
+
+   /***************************************************************************
+    ** Test that config-driven tables register customizers on source tables.
+    ***************************************************************************/
+   @Test
+   void testProduce_configDriven_registersCustomizers() throws QException
+   {
+      QInstance qInstance = buildQInstance();
+      QContext.init(qInstance, new QSession());
+
+      QuickSearchQBitConfig config = new QuickSearchQBitConfig()
+         .withBackendName(BACKEND_NAME)
+         .withOpensearchHost("localhost")
+         .withOpensearchPort(9200)
+         .withOpensearchIndexName("test-config-driven")
+         .withEnableRealTimeIndexing(true)
+         .withSearchableTable(SOURCE_TABLE, List.of(new SearchableFieldConfig("firstName")));
+
+      QuickSearchQBitProducer producer = new QuickSearchQBitProducer()
+         .withConfig(config);
+
+      producer.produce(qInstance);
+
+      QTableMetaData personTable = qInstance.getTable(SOURCE_TABLE);
+      Map<String, com.kingsrook.qqq.backend.core.model.metadata.code.QCodeReference> customizers =
+         personTable.getCustomizers();
+
+      assertThat(customizers).containsKey("postInsertRecord");
+      assertThat(customizers).containsKey("postUpdateRecord");
+      assertThat(customizers).containsKey("postDeleteRecord");
+   }
+
+
+
+   /***************************************************************************
+    ** Test mixed mode: both annotation-based and config-driven tables
+    ** are discovered and merged.
+    ***************************************************************************/
+   @Test
+   void testProduce_mixedMode_bothSourcesMerged() throws QException
+   {
+      QInstance qInstance = buildQInstance();
+      addOrderTable(qInstance);
+      QContext.init(qInstance, new QSession());
+
+      QuickSearchQBitConfig config = buildValidConfig()
+         .withSearchableTable("order", List.of(
+            new SearchableFieldConfig("orderNumber").withWeight(2),
+            new SearchableFieldConfig("customerName")));
+
+      QuickSearchQBitProducer producer = new QuickSearchQBitProducer()
+         .withConfig(config);
+
+      producer.produce(qInstance);
+
+      assertThat(QuickSearchQBitContext.getDiscoveredTables()).hasSize(2);
+      assertThat(QuickSearchQBitContext.getDiscoveredTables())
+         .extracting(QuickSearchableTableConfig::getTableName)
+         .containsExactlyInAnyOrder("person", "order");
+   }
+
+
+
+   /***************************************************************************
+    ** Test that duplicate table name across annotation and config-driven
+    ** sources throws an exception.
+    ***************************************************************************/
+   @Test
+   void testProduce_duplicateTableName_throws()
+   {
+      QInstance qInstance = buildQInstance();
+      QContext.init(qInstance, new QSession());
+
+      QuickSearchQBitConfig config = buildValidConfig()
+         .withSearchableTable(SOURCE_TABLE, List.of(
+            new SearchableFieldConfig("firstName")));
+
+      QuickSearchQBitProducer producer = new QuickSearchQBitProducer()
+         .withConfig(config);
+
+      assertThatThrownBy(() -> producer.produce(qInstance))
+         .isInstanceOf(QException.class)
+         .hasMessageContaining("Duplicate table name")
+         .hasMessageContaining(SOURCE_TABLE);
+   }
+
+
+
+   /***************************************************************************
+    ** Test that config-driven table with null basepullIntervalMinutes
+    ** inherits the default from config.
+    ***************************************************************************/
+   @Test
+   void testProduce_configDriven_defaultsApplied() throws QException
+   {
+      QInstance qInstance = buildQInstance();
+      QContext.init(qInstance, new QSession());
+
+      QuickSearchQBitConfig config = new QuickSearchQBitConfig()
+         .withBackendName(BACKEND_NAME)
+         .withOpensearchHost("localhost")
+         .withOpensearchPort(9200)
+         .withOpensearchIndexName("test-config-driven")
+         .withDefaultBasepullIntervalMinutes(7)
+         .withSearchableTable(SOURCE_TABLE, List.of(new SearchableFieldConfig("firstName")));
+
+      QuickSearchQBitProducer producer = new QuickSearchQBitProducer()
+         .withConfig(config);
+
+      producer.produce(qInstance);
+
+      QuickSearchableTableConfig tableConfig = QuickSearchQBitContext.getDiscoveredTables().get(0);
+      assertThat(tableConfig.getBasepullIntervalMinutes()).isEqualTo(7);
+      assertThat(tableConfig.getBasepullTimestampField()).isEqualTo("modifyDate");
+      assertThat(tableConfig.getEnabledByDefault()).isTrue();
+   }
+
+
+
+   /***************************************************************************
+    ** Test that config-driven table with explicit basepullIntervalMinutes
+    ** preserves it (does not override with default).
+    ***************************************************************************/
+   @Test
+   void testProduce_configDriven_explicitIntervalPreserved() throws QException
+   {
+      QInstance qInstance = buildQInstance();
+      QContext.init(qInstance, new QSession());
+
+      QuickSearchQBitConfig config = new QuickSearchQBitConfig()
+         .withBackendName(BACKEND_NAME)
+         .withOpensearchHost("localhost")
+         .withOpensearchPort(9200)
+         .withOpensearchIndexName("test-config-driven")
+         .withDefaultBasepullIntervalMinutes(5)
+         .withSearchableTable(new SearchableTableConfig(SOURCE_TABLE,
+            List.of(new SearchableFieldConfig("firstName")))
+            .withBasepullIntervalMinutes(30));
+
+      QuickSearchQBitProducer producer = new QuickSearchQBitProducer()
+         .withConfig(config);
+
+      producer.produce(qInstance);
+
+      QuickSearchableTableConfig tableConfig = QuickSearchQBitContext.getDiscoveredTables().get(0);
+      assertThat(tableConfig.getBasepullIntervalMinutes()).isEqualTo(30);
+   }
+
+
+
+   /***************************************************************************
+    ** Test that config-driven table resolves primaryKeyField from QInstance
+    ** table metadata.
+    ***************************************************************************/
+   @Test
+   void testProduce_configDriven_primaryKeyFromQInstance() throws QException
+   {
+      QInstance qInstance = buildQInstance();
+      QContext.init(qInstance, new QSession());
+
+      QuickSearchQBitConfig config = new QuickSearchQBitConfig()
+         .withBackendName(BACKEND_NAME)
+         .withOpensearchHost("localhost")
+         .withOpensearchPort(9200)
+         .withOpensearchIndexName("test-config-driven")
+         .withSearchableTable(SOURCE_TABLE, List.of(new SearchableFieldConfig("firstName")));
+
+      QuickSearchQBitProducer producer = new QuickSearchQBitProducer()
+         .withConfig(config);
+
+      producer.produce(qInstance);
+
+      QuickSearchableTableConfig tableConfig = QuickSearchQBitContext.getDiscoveredTables().get(0);
+      assertThat(tableConfig.getPrimaryKeyField()).isEqualTo("id");
+   }
+
+
+
+   /***************************************************************************
+    ** Test that config-driven table for a table not in QInstance falls back
+    ** to "id" as primary key.
+    ***************************************************************************/
+   @Test
+   void testProduce_configDriven_primaryKeyFallbackToId() throws QException
+   {
+      QInstance qInstance = buildQInstance();
+      QContext.init(qInstance, new QSession());
+
+      QuickSearchQBitConfig config = new QuickSearchQBitConfig()
+         .withBackendName(BACKEND_NAME)
+         .withOpensearchHost("localhost")
+         .withOpensearchPort(9200)
+         .withOpensearchIndexName("test-config-driven")
+         .withEnableRealTimeIndexing(false)
+         .withSearchableTable("unknownTable", List.of(new SearchableFieldConfig("name")));
+
+      QuickSearchQBitProducer producer = new QuickSearchQBitProducer()
+         .withConfig(config);
+
+      producer.produce(qInstance);
+
+      QuickSearchableTableConfig tableConfig = QuickSearchQBitContext.getDiscoveredTables().get(0);
+      assertThat(tableConfig.getPrimaryKeyField()).isEqualTo("id");
+   }
+
+
+
+   /***************************************************************************
+    ** Test that config-driven table transfers recordLabelFormat and
+    ** recordLabelFields to QuickSearchableTableConfig.
+    ***************************************************************************/
+   @Test
+   void testProduce_configDriven_recordLabelFormatTransferred() throws QException
+   {
+      QInstance qInstance = buildQInstance();
+      QContext.init(qInstance, new QSession());
+
+      QuickSearchQBitConfig config = new QuickSearchQBitConfig()
+         .withBackendName(BACKEND_NAME)
+         .withOpensearchHost("localhost")
+         .withOpensearchPort(9200)
+         .withOpensearchIndexName("test-config-driven")
+         .withSearchableTable(new SearchableTableConfig(SOURCE_TABLE,
+            List.of(new SearchableFieldConfig("firstName"), new SearchableFieldConfig("lastName")))
+            .withRecordLabelFormat("%s %s", "firstName", "lastName"));
+
+      QuickSearchQBitProducer producer = new QuickSearchQBitProducer()
+         .withConfig(config);
+
+      producer.produce(qInstance);
+
+      QuickSearchableTableConfig tableConfig = QuickSearchQBitContext.getDiscoveredTables().get(0);
+      assertThat(tableConfig.getRecordLabelFormat()).isEqualTo("%s %s");
+      assertThat(tableConfig.getRecordLabelFields()).containsExactly("firstName", "lastName");
+   }
+
+
+
+   /***************************************************************************
+    ** Test that config-driven field weights and includeLabels are mapped
+    ** correctly to QuickSearchableTableConfig maps.
+    ***************************************************************************/
+   @Test
+   void testProduce_configDriven_fieldWeightsAndLabelsMapped() throws QException
+   {
+      QInstance qInstance = buildQInstance();
+      QContext.init(qInstance, new QSession());
+
+      QuickSearchQBitConfig config = new QuickSearchQBitConfig()
+         .withBackendName(BACKEND_NAME)
+         .withOpensearchHost("localhost")
+         .withOpensearchPort(9200)
+         .withOpensearchIndexName("test-config-driven")
+         .withSearchableTable(SOURCE_TABLE, List.of(
+            new SearchableFieldConfig("firstName").withWeight(3).withIncludeLabel(true),
+            new SearchableFieldConfig("lastName").withWeight(2),
+            new SearchableFieldConfig("email")));
+
+      QuickSearchQBitProducer producer = new QuickSearchQBitProducer()
+         .withConfig(config);
+
+      producer.produce(qInstance);
+
+      QuickSearchableTableConfig tableConfig = QuickSearchQBitContext.getDiscoveredTables().get(0);
+      assertThat(tableConfig.getFieldWeights())
+         .containsEntry("firstName", 3)
+         .containsEntry("lastName", 2)
+         .containsEntry("email", 1);
+      assertThat(tableConfig.getFieldIncludeLabels())
+         .containsEntry("firstName", true)
+         .containsEntry("lastName", false)
+         .containsEntry("email", false);
+   }
+
+
+
+   /***************************************************************************
     ** Build a base QInstance with a memory backend and source tables.
     ***************************************************************************/
    private QInstance buildQInstance()

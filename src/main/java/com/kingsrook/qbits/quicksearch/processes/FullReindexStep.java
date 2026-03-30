@@ -169,13 +169,7 @@ public class FullReindexStep extends AbstractIndexingStep
             List<OpenSearchDocument> documents = new ArrayList<>();
             for(QRecord record : batch)
             {
-               OpenSearchDocument doc = IndexingUtils.buildDocument(
-                  record,
-                  tableName,
-                  tableConfig.getPrimaryKeyField(),
-                  tableConfig.getSearchableFields(),
-                  tableConfig.getFieldWeights(),
-                  tableConfig.getFieldIncludeLabels() != null ? tableConfig.getFieldIncludeLabels() : java.util.Collections.emptyMap());
+               OpenSearchDocument doc = IndexingUtils.buildDocument(record, tableConfig);
                documents.add(doc);
             }
 

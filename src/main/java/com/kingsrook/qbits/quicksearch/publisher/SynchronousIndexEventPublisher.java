@@ -107,23 +107,13 @@ public class SynchronousIndexEventPublisher implements IndexEventPublisher
             continue;
          }
 
-         String primaryKeyField = tableConfig.getPrimaryKeyField();
-         if(primaryKeyField == null)
-         {
-            primaryKeyField = "id";
-         }
-
          for(IndexEvent event : tableEvents)
          {
-            OpenSearchDocument document = IndexingUtils.buildDocument(
-               event.getRecord(),
-               event.getTableName(),
-               primaryKeyField,
-               tableConfig.getSearchableFields(),
-               tableConfig.getFieldWeights(),
-               tableConfig.getFieldIncludeLabels());
-
-            allDocuments.add(document);
+            OpenSearchDocument document = IndexingUtils.buildDocument(event.getRecord(), tableConfig);
+            if(document != null)
+            {
+               allDocuments.add(document);
+            }
          }
       }
 

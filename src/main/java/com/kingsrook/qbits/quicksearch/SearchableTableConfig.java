@@ -16,29 +16,48 @@
 package com.kingsrook.qbits.quicksearch;
 
 
+import java.util.Arrays;
 import java.util.List;
-import java.util.Map;
 
 
 /*******************************************************************************
- ** Configuration for a table that is searchable via Quick Search.
+ ** Table-level configuration for a config-driven searchable table.
  **
- ** Describes which fields to index, optional per-field boost weights,
- ** optional per-field label-inclusion flags, basepull scheduling, and
- ** whether the table is enabled by default.
+ ** Specifies the QQQ table name, the fields to index, basepull scheduling
+ ** options, and an optional record label format for search result display.
  *******************************************************************************/
-public class QuickSearchableTableConfig
+public class SearchableTableConfig
 {
-   private String              tableName;
-   private String              primaryKeyField;
-   private List<String>        searchableFields;
-   private Map<String, Integer> fieldWeights;
-   private Map<String, Boolean> fieldIncludeLabels;
-   private Integer             basepullIntervalMinutes;
-   private String              basepullTimestampField;
-   private Boolean             enabledByDefault;
-   private String              recordLabelFormat;
-   private List<String>        recordLabelFields;
+   private String                    tableName;
+   private List<SearchableFieldConfig> fields;
+   private Integer                   basepullIntervalMinutes;
+   private String                    basepullTimestampField = "modifyDate";
+   private Boolean                   enabledByDefault       = true;
+   private String                    recordLabelFormat;
+   private List<String>              recordLabelFields;
+
+
+
+   /***************************************************************************
+    ** Constructor that takes the required tableName and fields.
+    ***************************************************************************/
+   public SearchableTableConfig(String tableName, List<SearchableFieldConfig> fields)
+   {
+      this.tableName = tableName;
+      this.fields = fields;
+   }
+
+
+
+   /***************************************************************************
+    ** Convenience method that sets both recordLabelFormat and recordLabelFields.
+    ***************************************************************************/
+   public SearchableTableConfig withRecordLabelFormat(String format, String... fields)
+   {
+      this.recordLabelFormat = format;
+      this.recordLabelFields = Arrays.asList(fields);
+      return (this);
+   }
 
 
 
@@ -65,7 +84,7 @@ public class QuickSearchableTableConfig
    /***************************************************************************
     ** Fluent setter for tableName
     ***************************************************************************/
-   public QuickSearchableTableConfig withTableName(String tableName)
+   public SearchableTableConfig withTableName(String tableName)
    {
       this.tableName = tableName;
       return (this);
@@ -74,124 +93,31 @@ public class QuickSearchableTableConfig
 
 
    /***************************************************************************
-    ** Getter for primaryKeyField
+    ** Getter for fields
     ***************************************************************************/
-   public String getPrimaryKeyField()
+   public List<SearchableFieldConfig> getFields()
    {
-      return (this.primaryKeyField);
+      return (this.fields);
    }
 
 
 
    /***************************************************************************
-    ** Setter for primaryKeyField
+    ** Setter for fields
     ***************************************************************************/
-   public void setPrimaryKeyField(String primaryKeyField)
+   public void setFields(List<SearchableFieldConfig> fields)
    {
-      this.primaryKeyField = primaryKeyField;
+      this.fields = fields;
    }
 
 
 
    /***************************************************************************
-    ** Fluent setter for primaryKeyField
+    ** Fluent setter for fields
     ***************************************************************************/
-   public QuickSearchableTableConfig withPrimaryKeyField(String primaryKeyField)
+   public SearchableTableConfig withFields(List<SearchableFieldConfig> fields)
    {
-      this.primaryKeyField = primaryKeyField;
-      return (this);
-   }
-
-
-
-   /***************************************************************************
-    ** Getter for searchableFields
-    ***************************************************************************/
-   public List<String> getSearchableFields()
-   {
-      return (this.searchableFields);
-   }
-
-
-
-   /***************************************************************************
-    ** Setter for searchableFields
-    ***************************************************************************/
-   public void setSearchableFields(List<String> searchableFields)
-   {
-      this.searchableFields = searchableFields;
-   }
-
-
-
-   /***************************************************************************
-    ** Fluent setter for searchableFields
-    ***************************************************************************/
-   public QuickSearchableTableConfig withSearchableFields(List<String> searchableFields)
-   {
-      this.searchableFields = searchableFields;
-      return (this);
-   }
-
-
-
-   /***************************************************************************
-    ** Getter for fieldWeights
-    ***************************************************************************/
-   public Map<String, Integer> getFieldWeights()
-   {
-      return (this.fieldWeights);
-   }
-
-
-
-   /***************************************************************************
-    ** Setter for fieldWeights
-    ***************************************************************************/
-   public void setFieldWeights(Map<String, Integer> fieldWeights)
-   {
-      this.fieldWeights = fieldWeights;
-   }
-
-
-
-   /***************************************************************************
-    ** Fluent setter for fieldWeights
-    ***************************************************************************/
-   public QuickSearchableTableConfig withFieldWeights(Map<String, Integer> fieldWeights)
-   {
-      this.fieldWeights = fieldWeights;
-      return (this);
-   }
-
-
-
-   /***************************************************************************
-    ** Getter for fieldIncludeLabels
-    ***************************************************************************/
-   public Map<String, Boolean> getFieldIncludeLabels()
-   {
-      return (this.fieldIncludeLabels);
-   }
-
-
-
-   /***************************************************************************
-    ** Setter for fieldIncludeLabels
-    ***************************************************************************/
-   public void setFieldIncludeLabels(Map<String, Boolean> fieldIncludeLabels)
-   {
-      this.fieldIncludeLabels = fieldIncludeLabels;
-   }
-
-
-
-   /***************************************************************************
-    ** Fluent setter for fieldIncludeLabels
-    ***************************************************************************/
-   public QuickSearchableTableConfig withFieldIncludeLabels(Map<String, Boolean> fieldIncludeLabels)
-   {
-      this.fieldIncludeLabels = fieldIncludeLabels;
+      this.fields = fields;
       return (this);
    }
 
@@ -220,7 +146,7 @@ public class QuickSearchableTableConfig
    /***************************************************************************
     ** Fluent setter for basepullIntervalMinutes
     ***************************************************************************/
-   public QuickSearchableTableConfig withBasepullIntervalMinutes(Integer basepullIntervalMinutes)
+   public SearchableTableConfig withBasepullIntervalMinutes(Integer basepullIntervalMinutes)
    {
       this.basepullIntervalMinutes = basepullIntervalMinutes;
       return (this);
@@ -251,7 +177,7 @@ public class QuickSearchableTableConfig
    /***************************************************************************
     ** Fluent setter for basepullTimestampField
     ***************************************************************************/
-   public QuickSearchableTableConfig withBasepullTimestampField(String basepullTimestampField)
+   public SearchableTableConfig withBasepullTimestampField(String basepullTimestampField)
    {
       this.basepullTimestampField = basepullTimestampField;
       return (this);
@@ -282,7 +208,7 @@ public class QuickSearchableTableConfig
    /***************************************************************************
     ** Fluent setter for enabledByDefault
     ***************************************************************************/
-   public QuickSearchableTableConfig withEnabledByDefault(Boolean enabledByDefault)
+   public SearchableTableConfig withEnabledByDefault(Boolean enabledByDefault)
    {
       this.enabledByDefault = enabledByDefault;
       return (this);
@@ -311,22 +237,22 @@ public class QuickSearchableTableConfig
 
 
    /***************************************************************************
-    ** Fluent setter for recordLabelFormat
-    ***************************************************************************/
-   public QuickSearchableTableConfig withRecordLabelFormat(String recordLabelFormat)
-   {
-      this.recordLabelFormat = recordLabelFormat;
-      return (this);
-   }
-
-
-
-   /***************************************************************************
     ** Getter for recordLabelFields
     ***************************************************************************/
    public List<String> getRecordLabelFields()
    {
       return (this.recordLabelFields);
+   }
+
+
+
+   /***************************************************************************
+    ** Fluent setter for recordLabelFormat (individual field)
+    ***************************************************************************/
+   public SearchableTableConfig withRecordLabelFormatString(String recordLabelFormat)
+   {
+      this.recordLabelFormat = recordLabelFormat;
+      return (this);
    }
 
 
@@ -344,7 +270,7 @@ public class QuickSearchableTableConfig
    /***************************************************************************
     ** Fluent setter for recordLabelFields
     ***************************************************************************/
-   public QuickSearchableTableConfig withRecordLabelFields(List<String> recordLabelFields)
+   public SearchableTableConfig withRecordLabelFields(List<String> recordLabelFields)
    {
       this.recordLabelFields = recordLabelFields;
       return (this);

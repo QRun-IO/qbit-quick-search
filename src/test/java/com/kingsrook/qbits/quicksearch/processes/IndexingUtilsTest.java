@@ -21,6 +21,7 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import com.kingsrook.qqq.backend.core.model.data.QRecord;
+import com.kingsrook.qbits.quicksearch.QuickSearchableTableConfig;
 import com.kingsrook.qbits.quicksearch.opensearch.OpenSearchDocument;
 import org.junit.jupiter.api.Test;
 import static org.assertj.core.api.Assertions.assertThat;
@@ -263,6 +264,118 @@ class IndexingUtilsTest
       );
 
       assertThat(doc.getSearchableText()).isEqualTo("");
+   }
+
+
+
+   /*******************************************************************************
+    ** Test the new buildDocument overload with QuickSearchableTableConfig that
+    ** has a recordLabelFormat -- verifies the formatted label is applied.
+    *******************************************************************************/
+   @Test
+   void testBuildDocument_tableConfig_withRecordLabelFormat_usesFormattedLabel()
+   {
+      QRecord record = new QRecord();
+      record.setValue("id", 1);
+      record.setValue("firstName", "John");
+      record.setValue("lastName", "Doe");
+      record.setRecordLabel("QQQ Default Label");
+
+      QuickSearchableTableConfig tableConfig = new QuickSearchableTableConfig()
+         .withTableName("person")
+         .withPrimaryKeyField("id")
+         .withSearchableFields(List.of("firstName", "lastName"))
+         .withFieldWeights(Map.of("firstName", 2, "lastName", 1))
+         .withFieldIncludeLabels(Map.of("firstName", false, "lastName", false))
+         .withRecordLabelFormat("%s %s")
+         .withRecordLabelFields(List.of("firstName", "lastName"));
+
+      OpenSearchDocument doc = IndexingUtils.buildDocument(record, tableConfig);
+
+      assertThat(doc).isNotNull();
+      assertThat(doc.getRecordLabel()).isEqualTo("John Doe");
+      assertThat(doc.getSourceTable()).isEqualTo("person");
+      assertThat(doc.getSearchableText()).isEqualTo("John Doe");
+   }
+
+
+
+   /*******************************************************************************
+    ** Test the new buildDocument overload with QuickSearchableTableConfig that
+    ** does NOT have a recordLabelFormat -- falls back to QRecord.getRecordLabel().
+    *******************************************************************************/
+   @Test
+   void testBuildDocument_tableConfig_withoutRecordLabelFormat_usesQRecordLabel()
+   {
+      QRecord record = new QRecord();
+      record.setValue("id", 42);
+      record.setValue("name", "Widget");
+      record.setRecordLabel("Widget Record");
+
+      QuickSearchableTableConfig tableConfig = new QuickSearchableTableConfig()
+         .withTableName("product")
+         .withPrimaryKeyField("id")
+         .withSearchableFields(List.of("name"))
+         .withFieldWeights(Map.of("name", 1))
+         .withFieldIncludeLabels(Map.of("name", false));
+
+      OpenSearchDocument doc = IndexingUtils.buildDocument(record, tableConfig);
+
+      assertThat(doc).isNotNull();
+      assertThat(doc.getRecordLabel()).isEqualTo("Widget Record");
+   }
+
+
+
+   /*******************************************************************************
+    ** Test the new buildDocument overload maps all fields into fieldValues.
+    *******************************************************************************/
+   @Test
+   void testBuildDocument_tableConfig_allFieldsMapped()
+   {
+      QRecord record = new QRecord();
+      record.setValue("id", 1);
+      record.setValue("firstName", "Jane");
+      record.setValue("lastName", "Smith");
+      record.setValue("email", "jane@example.com");
+
+      QuickSearchableTableConfig tableConfig = new QuickSearchableTableConfig()
+         .withTableName("person")
+         .withPrimaryKeyField("id")
+         .withSearchableFields(List.of("firstName", "lastName", "email"))
+         .withFieldWeights(Map.of("firstName", 3, "lastName", 2, "email", 1))
+         .withFieldIncludeLabels(Map.of("firstName", false, "lastName", false, "email", false));
+
+      OpenSearchDocument doc = IndexingUtils.buildDocument(record, tableConfig);
+
+      assertThat(doc).isNotNull();
+      assertThat(doc.getFieldValues()).containsKey("firstName");
+      assertThat(doc.getFieldValues()).containsKey("lastName");
+      assertThat(doc.getFieldValues()).containsKey("email");
+      assertThat(doc.getFieldValues().get("firstName")).isEqualTo("Jane");
+   }
+
+
+
+   /*******************************************************************************
+    ** Test the new buildDocument overload returns null when primary key is null.
+    *******************************************************************************/
+   @Test
+   void testBuildDocument_tableConfig_nullPrimaryKey_returnsNull()
+   {
+      QRecord record = new QRecord();
+      record.setValue("name", "NoId");
+
+      QuickSearchableTableConfig tableConfig = new QuickSearchableTableConfig()
+         .withTableName("person")
+         .withPrimaryKeyField("id")
+         .withSearchableFields(List.of("name"))
+         .withFieldWeights(Map.of("name", 1))
+         .withFieldIncludeLabels(Map.of("name", false));
+
+      OpenSearchDocument doc = IndexingUtils.buildDocument(record, tableConfig);
+
+      assertThat(doc).isNull();
    }
 
 }
