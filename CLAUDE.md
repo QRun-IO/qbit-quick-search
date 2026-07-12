@@ -74,3 +74,13 @@ Unit tests exclude `*IntegrationTest.java` and `*IT.java`.
 - jackson-datatype-jsr310 2.21.0 (Instant serialization for OpenSearch client)
 - JUnit 5 + AssertJ + Mockito for testing
 - Testcontainers for integration tests (requires Docker)
+
+## Knowledge base
+
+Second-brain vault notes covering this repo and the QQQ platform it plugs into:
+
+- Platform hub: `$SECOND_BRAIN_VAULT/knowledge/qqq/qqq-hub.md` (start here; read `knowledge/qqq/architecture/metadata-model.md` for QBit mechanics)
+- This repo's dossier: `$SECOND_BRAIN_VAULT/knowledge/qqq/repos/qbit-quick-search.md` (reviewed at develop @ `8d9ec2711fde`, 2026-07-04)
+- Production-readiness audit + P0-P3 roadmap: `$SECOND_BRAIN_VAULT/projects/qbit-quick-search.md`
+
+Note: some facts above in this file are stale (version is 0.2.1-SNAPSHOT, 215 tests, qqq dep is release 0.40.0 not SNAPSHOT) — trust the dossier.
