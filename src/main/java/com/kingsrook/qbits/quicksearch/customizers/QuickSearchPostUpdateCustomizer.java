@@ -17,14 +17,21 @@
 package com.kingsrook.qbits.quicksearch.customizers;
 
 
+import java.io.Serializable;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
 import com.kingsrook.qqq.backend.core.actions.customizers.TableCustomizerInterface;
+import com.kingsrook.qqq.backend.core.actions.tables.QueryAction;
 import com.kingsrook.qqq.backend.core.exceptions.QException;
 import com.kingsrook.qqq.backend.core.logging.QLogger;
+import com.kingsrook.qqq.backend.core.model.actions.tables.query.QCriteriaOperator;
+import com.kingsrook.qqq.backend.core.model.actions.tables.query.QFilterCriteria;
+import com.kingsrook.qqq.backend.core.model.actions.tables.query.QQueryFilter;
+import com.kingsrook.qqq.backend.core.model.actions.tables.query.QueryInput;
 import com.kingsrook.qqq.backend.core.model.actions.tables.update.UpdateInput;
 import com.kingsrook.qqq.backend.core.model.data.QRecord;
+import com.kingsrook.qqq.backend.core.utils.CollectionUtils;
 import com.kingsrook.qbits.quicksearch.QuickSearchQBitContext;
 import com.kingsrook.qbits.quicksearch.QuickSearchableTableConfig;
 import com.kingsrook.qbits.quicksearch.publisher.IndexEvent;
@@ -36,6 +43,11 @@ import static com.kingsrook.qqq.backend.core.logging.LogUtils.logPair;
 /*******************************************************************************
  ** Post-update table customizer that re-indexes updated records in the Quick
  ** Search OpenSearch index.
+ **
+ ** An update's records may hold only the fields that changed, so each updated
+ ** record is re-read from the source table (in the update's transaction) and
+ ** the full record is indexed. Indexing the sparse record would drop the
+ ** unchanged fields from the document.
  **
  ** QQQ instantiates this class via reflection using the no-arg constructor.
  ** The publisher and table configuration are obtained from the static
@@ -57,8 +69,10 @@ public class QuickSearchPostUpdateCustomizer implements TableCustomizerInterface
 
 
    /*******************************************************************************
-    ** Post-update hook: builds INDEX events for each updated record and publishes
-    ** them via the configured IndexEventPublisher.
+    ** Post-update hook: re-reads the successfully updated records from the
+    ** source table, builds INDEX events from them, and publishes them via the
+    ** configured IndexEventPublisher. Records with errors were not updated, so
+    ** they are skipped.
     **
     ** If the publisher is null (QBit not yet initialized) or if publishing fails,
     ** a warning is logged and the original records are returned without throwing,
@@ -86,7 +100,7 @@ public class QuickSearchPostUpdateCustomizer implements TableCustomizerInterface
          String primaryKeyField = (tableConfig != null && tableConfig.getPrimaryKeyField() != null) ? tableConfig.getPrimaryKeyField() : "id";
 
          List<IndexEvent> events = new ArrayList<>();
-         for(QRecord record : records)
+         for(QRecord record : fetchCurrentRecords(updateInput, records, primaryKeyField))
          {
             events.add(new IndexEvent()
                .withAction(IndexEventAction.INDEX)
@@ -95,7 +109,10 @@ public class QuickSearchPostUpdateCustomizer implements TableCustomizerInterface
                .withRecord(record));
          }
 
-         publisher.publishIndexEvents(events);
+         if(!events.isEmpty())
+         {
+            publisher.publishIndexEvents(events);
+         }
       }
       catch(Exception e)
       {
@@ -103,6 +120,38 @@ public class QuickSearchPostUpdateCustomizer implements TableCustomizerInterface
       }
 
       return records;
+   }
+
+
+
+   /*******************************************************************************
+    ** Query the source table for the full, current version of each successfully
+    ** updated record. Uses the update's transaction, so uncommitted changes are
+    ** visible.
+    *******************************************************************************/
+   private List<QRecord> fetchCurrentRecords(UpdateInput updateInput, List<QRecord> updatedRecords, String primaryKeyField) throws QException
+   {
+      List<Serializable> primaryKeys = new ArrayList<>();
+      for(QRecord record : updatedRecords)
+      {
+         Serializable primaryKey = record.getValue(primaryKeyField);
+         if(primaryKey != null && CollectionUtils.nullSafeIsEmpty(record.getErrors()))
+         {
+            primaryKeys.add(primaryKey);
+         }
+      }
+
+      if(primaryKeys.isEmpty())
+      {
+         return (new ArrayList<>());
+      }
+
+      QueryInput queryInput = new QueryInput();
+      queryInput.setTableName(updateInput.getTableName());
+      queryInput.setTransaction(updateInput.getTransaction());
+      queryInput.setFilter(new QQueryFilter(new QFilterCriteria(primaryKeyField, QCriteriaOperator.IN, primaryKeys)));
+
+      return (CollectionUtils.nonNullList(new QueryAction().execute(queryInput).getRecords()));
    }
 
 }

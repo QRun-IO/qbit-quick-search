@@ -47,6 +47,7 @@ import org.junit.jupiter.api.MethodOrderer;
 import org.junit.jupiter.api.Order;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.TestMethodOrder;
+import org.junit.jupiter.api.extension.ExtendWith;
 import org.testcontainers.containers.GenericContainer;
 import org.testcontainers.containers.wait.strategy.Wait;
 import org.testcontainers.junit.jupiter.Container;
@@ -61,7 +62,8 @@ import static org.assertj.core.api.Assertions.assertThat;
  ** Tests run in order: index creation, full reindex, search with results,
  ** pagination, and no-results search.
  *******************************************************************************/
-@Testcontainers(disabledWithoutDocker = true)
+@ExtendWith(RequiresDockerCondition.class)
+@Testcontainers
 @TestMethodOrder(MethodOrderer.OrderAnnotation.class)
 class OpenSearchIntegrationTest
 {
@@ -115,7 +117,7 @@ class OpenSearchIntegrationTest
          .withName(BACKEND_NAME)
          .withBackendType(MemoryBackendModule.class));
 
-      qInstance.setAuthentication(new QAuthenticationMetaData()
+      qInstance.withInstanceDefaultAuthentication(new QAuthenticationMetaData()
          .withName("anonymous")
          .withType(QAuthenticationType.FULLY_ANONYMOUS));
 

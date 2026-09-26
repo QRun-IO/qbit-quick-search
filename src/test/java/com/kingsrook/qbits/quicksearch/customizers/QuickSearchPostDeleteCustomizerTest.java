@@ -29,6 +29,7 @@ import com.kingsrook.qqq.backend.core.model.session.QSession;
 import com.kingsrook.qqq.backend.core.model.metadata.fields.QFieldMetaData;
 import com.kingsrook.qqq.backend.core.model.metadata.fields.QFieldType;
 import com.kingsrook.qqq.backend.core.model.metadata.tables.QTableMetaData;
+import com.kingsrook.qqq.backend.core.model.statusmessages.BadInputStatusMessage;
 import com.kingsrook.qbits.quicksearch.QuickSearchQBitContext;
 import com.kingsrook.qbits.quicksearch.QuickSearchableTableConfig;
 import com.kingsrook.qbits.quicksearch.publisher.IndexEvent;
@@ -79,7 +80,7 @@ class QuickSearchPostDeleteCustomizerTest
          .withField(new QFieldMetaData(PK_FIELD, QFieldType.INTEGER))
          .withField(new QFieldMetaData("name", QFieldType.STRING)));
       qInstance.addBackend(new com.kingsrook.qqq.backend.module.rdbms.model.metadata.RDBMSBackendMetaData().withName("testBackend"));
-      qInstance.setAuthentication(new QAuthenticationMetaData().withName("anonymous").withType(com.kingsrook.qqq.backend.core.model.metadata.QAuthenticationType.FULLY_ANONYMOUS));
+      qInstance.withInstanceDefaultAuthentication(new QAuthenticationMetaData().withName("anonymous").withType(com.kingsrook.qqq.backend.core.model.metadata.QAuthenticationType.FULLY_ANONYMOUS));
       qInstance.getTable(TABLE_NAME).withBackendName("testBackend");
       QContext.init(qInstance, new QSession());
    }
@@ -140,6 +141,50 @@ class QuickSearchPostDeleteCustomizerTest
       assertThat(events.get(0).getRecord()).isNull();
       assertThat(events.get(1).getAction()).isEqualTo(IndexEventAction.DELETE);
       assertThat(events.get(1).getRecordId()).isEqualTo("6");
+   }
+
+
+
+   /*******************************************************************************
+    ** Test that records the delete rejected (with errors), or that carry no
+    ** primary key, do not remove documents from the index.
+    *******************************************************************************/
+   @SuppressWarnings("unchecked")
+   @Test
+   void testPostDelete_recordsWithErrorsOrNoPrimaryKey_skipped() throws QException
+   {
+      QRecord deleted  = new QRecord().withValue(PK_FIELD, 5);
+      QRecord rejected = new QRecord().withValue(PK_FIELD, 6);
+      rejected.addError(new BadInputStatusMessage("still referenced"));
+      QRecord noKey = new QRecord().withValue("name", "orphan");
+
+      DeleteInput deleteInput = new DeleteInput();
+      deleteInput.setTableName(TABLE_NAME);
+
+      List<QRecord> result = new QuickSearchPostDeleteCustomizer().postDelete(deleteInput, List.of(deleted, rejected, noKey));
+      assertThat(result).containsExactly(deleted, rejected, noKey);
+
+      ArgumentCaptor<List<IndexEvent>> captor = ArgumentCaptor.forClass(List.class);
+      verify(mockPublisher).publishDeleteEvents(captor.capture());
+      assertThat(captor.getValue()).extracting(IndexEvent::getRecordId).containsExactly("5");
+   }
+
+
+
+   /*******************************************************************************
+    ** Test that when no record is eligible, nothing is published.
+    *******************************************************************************/
+   @Test
+   void testPostDelete_onlyRejectedRecords_nothingPublished() throws QException
+   {
+      QRecord rejected = new QRecord().withValue(PK_FIELD, 6);
+      rejected.addError(new BadInputStatusMessage("still referenced"));
+
+      DeleteInput deleteInput = new DeleteInput();
+      deleteInput.setTableName(TABLE_NAME);
+
+      new QuickSearchPostDeleteCustomizer().postDelete(deleteInput, List.of(rejected));
+      verify(mockPublisher, never()).publishDeleteEvents(anyList());
    }
 
 

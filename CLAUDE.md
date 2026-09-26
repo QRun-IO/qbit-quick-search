@@ -4,20 +4,22 @@ This file provides guidance to Claude Code when working with code in this reposi
 
 ## Project Overview
 
-**QBit Quick Search** - A QQQ QBit providing OpenSearch-backed full-text search across QQQ applications. Current version: 0.1.0.
+**QBit Quick Search** - A QQQ QBit providing OpenSearch-backed full-text search across QQQ applications.
 
 ## Build Commands
 
 ```bash
 mvn compile          # Compile
-mvn test             # Run all tests (174 tests)
+mvn test             # Run unit tests
 mvn test -Dtest=ClassName  # Run single test class
 mvn package          # Build JAR
-mvn verify           # Full verify with coverage check
+mvn verify           # Full verify, including integration tests
+mvn verify -Pqqq-snapshot  # Verify against 4.1.0-SNAPSHOT (override with -Dqqq.snapshot.version)
 ```
 
 Integration tests (require Docker) run via `mvn verify` using maven-failsafe-plugin.
 Unit tests exclude `*IntegrationTest.java` and `*IT.java`.
+Integration tests use `@ExtendWith(RequiresDockerCondition.class)`: skipped without Docker locally, failed when `CI=true`.
 
 ## Architecture
 
@@ -32,13 +34,14 @@ Unit tests exclude `*IntegrationTest.java` and `*IT.java`.
 
 **Customizers** (`customizers/` package, all three registered when `enableRealTimeIndexing = true`):
 - `QuickSearchPostInsertCustomizer` - Fires after insert, publishes index events
-- `QuickSearchPostUpdateCustomizer` - Fires after update, publishes index events
+- `QuickSearchPostUpdateCustomizer` - Fires after update, re-reads the full records from the source table, publishes index events
 - `QuickSearchPostDeleteCustomizer` - Fires after delete, publishes delete events
 
 **Processes** (`processes/` package):
 - `AbstractIndexingStep` - Base class with shared indexing logic (query source table, build documents, publish events, update run record)
 - `BasepullIndexStep` - Queries records modified since last run timestamp
 - `FullReindexStep` - Wipes and rebuilds the index for one or all tables
+- `ReconcileIndexStep` - Re-indexes each table in primary-key order, then removes documents with no source record (no wipe, so no search blackout)
 - `IndexingUtils` - Converts `QRecord` values to indexed text using field configs
 
 **Publisher** (`publisher/` package):
@@ -68,12 +71,11 @@ Unit tests exclude `*IntegrationTest.java` and `*IT.java`.
 ## Dependencies
 
 - Java 21
-- QQQ Backend Core 0.40.0-SNAPSHOT (via `qqq-bom-pom`)
+- Parent `com.kingsrook:qbit-build-parent:2.0.0`, the only source of the qqq version (QQQ 4.0.0); do not re-import `qqq-bom-pom` here (ADR-0007), except in the opt-in `qqq-snapshot` profile (`-Pqqq-snapshot`), which imports `qqq-bom-pom:${qqq.snapshot.version}` (default 4.1.0-SNAPSHOT) and adds the Central snapshots repository
 - OpenSearch Java Client 2.10.0
-- Apache HttpClient5 5.3
-- jackson-datatype-jsr310 2.21.0 (Instant serialization for OpenSearch client)
+- Apache HttpClient5 and jackson-datatype-jsr310, versions managed by the qqq BOM (keep them unpinned so they match its httpcore5 and jackson)
 - JUnit 5 + AssertJ + Mockito for testing
-- Testcontainers for integration tests (requires Docker)
+- Testcontainers 1.21.4 for integration tests (requires Docker)
 
 ## Knowledge base
 
@@ -83,4 +85,4 @@ Second-brain vault notes covering this repo and the QQQ platform it plugs into:
 - This repo's dossier: `$SECOND_BRAIN_VAULT/knowledge/qqq/repos/qbit-quick-search.md` (reviewed at develop @ `8d9ec2711fde`, 2026-07-04)
 - Production-readiness audit + P0-P3 roadmap: `$SECOND_BRAIN_VAULT/projects/qbit-quick-search.md`
 
-Note: some facts above in this file are stale (version is 0.2.1-SNAPSHOT, 215 tests, qqq dep is release 0.40.0 not SNAPSHOT) — trust the dossier.
+Note: the dossier was reviewed before the qqq 4.0 re-pin; trust this file for build and dependency facts.

@@ -24,6 +24,7 @@ import java.util.Map;
 import com.kingsrook.qqq.backend.core.exceptions.QException;
 import com.kingsrook.qqq.backend.core.logging.QLogger;
 import com.kingsrook.qbits.quicksearch.QuickSearchableTableConfig;
+import com.kingsrook.qbits.quicksearch.opensearch.BulkIndexResult;
 import com.kingsrook.qbits.quicksearch.opensearch.OpenSearchDocument;
 import com.kingsrook.qbits.quicksearch.opensearch.QuickSearchOpenSearchClient;
 import com.kingsrook.qbits.quicksearch.processes.IndexingUtils;
@@ -35,12 +36,14 @@ import static com.kingsrook.qqq.backend.core.logging.LogUtils.logPair;
  ** immediately against the OpenSearch client.
  **
  ** Index events are grouped by table, converted to OpenSearchDocument instances
- ** using IndexingUtils, and bulk-indexed. Delete events are processed
- ** individually.
+ ** using IndexingUtils, and bulk-indexed. Delete events are bulk-deleted.
+ ** Either way, per-document failures are raised as a QException.
  *******************************************************************************/
 public class SynchronousIndexEventPublisher implements IndexEventPublisher
 {
    private static final QLogger LOG = QLogger.getLogger(SynchronousIndexEventPublisher.class);
+
+   private static final Integer MAX_ERRORS_IN_MESSAGE = 10;
 
    private final QuickSearchOpenSearchClient        client;
    private final Map<String, QuickSearchableTableConfig> tableConfigsByName;
@@ -119,14 +122,16 @@ public class SynchronousIndexEventPublisher implements IndexEventPublisher
 
       if(!allDocuments.isEmpty())
       {
-         client.indexDocuments(allDocuments, bulkBatchSize);
+         BulkIndexResult result = client.indexDocuments(allDocuments, bulkBatchSize);
+         throwIfAnyFailed(result, "index", allDocuments.size());
       }
    }
 
 
 
    /*******************************************************************************
-    ** Publish delete events synchronously by calling deleteDocument for each event.
+    ** Publish delete events synchronously as one bulk delete, so every document
+    ** is attempted even when some fail. Throws if any document failed.
     *******************************************************************************/
    @Override
    public void publishDeleteEvents(List<IndexEvent> events) throws QException
@@ -136,10 +141,33 @@ public class SynchronousIndexEventPublisher implements IndexEventPublisher
          return;
       }
 
+      List<String> documentIds = new ArrayList<>();
       for(IndexEvent event : events)
       {
-         client.deleteDocument(event.getTableName(), event.getRecordId());
+         documentIds.add(OpenSearchDocument.buildDocumentId(event.getTableName(), event.getRecordId()));
       }
+
+      BulkIndexResult result = client.deleteDocuments(documentIds, bulkBatchSize);
+      throwIfAnyFailed(result, "delete", documentIds.size());
+   }
+
+
+
+   /*******************************************************************************
+    ** Throw a QException naming the failed documents, if any bulk item failed,
+    ** so failures reach the caller instead of leaving the index silently stale.
+    *******************************************************************************/
+   private void throwIfAnyFailed(BulkIndexResult result, String operationName, Integer attemptedCount) throws QException
+   {
+      if(result == null || Boolean.TRUE.equals(result.isFullySuccessful()))
+      {
+         return;
+      }
+
+      List<String> errors      = result.getErrors();
+      List<String> errorsShown = errors.subList(0, Math.min(errors.size(), MAX_ERRORS_IN_MESSAGE));
+      throw (new QException("Failed to " + operationName + " " + result.getFailureCount() + " of " + attemptedCount
+         + " search documents: " + String.join("; ", errorsShown)));
    }
 
 

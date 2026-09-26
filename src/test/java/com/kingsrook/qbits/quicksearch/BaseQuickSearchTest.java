@@ -79,7 +79,7 @@ public class BaseQuickSearchTest
       ////////////////////////////////////////////////////
       // Set up fully-anonymous authentication          //
       ////////////////////////////////////////////////////
-      qInstance.setAuthentication(new QAuthenticationMetaData()
+      qInstance.withInstanceDefaultAuthentication(new QAuthenticationMetaData()
          .withName("anonymous")
          .withType(QAuthenticationType.FULLY_ANONYMOUS));
 

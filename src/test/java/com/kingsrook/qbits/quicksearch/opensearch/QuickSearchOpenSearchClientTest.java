@@ -261,4 +261,51 @@ class QuickSearchOpenSearchClientTest
       }
    }
 
+
+
+   /*******************************************************************************
+    ** deleteDocuments with a null or empty list is a no-op, even with no server.
+    *******************************************************************************/
+   @Test
+   void testDeleteDocuments_emptyList_returnsEmptyResult() throws QException
+   {
+      QuickSearchOpenSearchClient client = new QuickSearchOpenSearchClient(plainConfig());
+
+      try
+      {
+         BulkIndexResult emptyResult = client.deleteDocuments(List.of(), 100);
+         BulkIndexResult nullResult  = client.deleteDocuments(null, 100);
+
+         assertThat(emptyResult.getSuccessCount()).isEqualTo(0);
+         assertThat(emptyResult.getFailureCount()).isEqualTo(0);
+         assertThat(nullResult.getSuccessCount()).isEqualTo(0);
+      }
+      finally
+      {
+         client.close();
+      }
+   }
+
+
+
+   /*******************************************************************************
+    ** deleteDocuments throws QException when the server is unavailable.
+    *******************************************************************************/
+   @Test
+   void testDeleteDocuments_serverUnavailable_throwsQException() throws QException
+   {
+      QuickSearchOpenSearchClient client = new QuickSearchOpenSearchClient(plainConfig());
+
+      try
+      {
+         assertThatThrownBy(() -> client.deleteDocuments(List.of("orders:1", "orders:2"), 100))
+            .isInstanceOf(QException.class)
+            .hasMessageContaining("Bulk delete");
+      }
+      finally
+      {
+         client.close();
+      }
+   }
+
 }
