@@ -90,16 +90,16 @@
          <version>${opensearch.version}</version>
       </dependency>
 
+      <!-- httpclient5 and jackson versions are managed by the qqq BOM, so they -->
+      <!-- stay binary-compatible with the httpcore5 and jackson it brings.       -->
       <dependency>
          <groupId>org.apache.httpcomponents.client5</groupId>
          <artifactId>httpclient5</artifactId>
-         <version>5.3</version>
       </dependency>
 
       <dependency>
          <groupId>com.fasterxml.jackson.datatype</groupId>
          <artifactId>jackson-datatype-jsr310</artifactId>
-         <version>2.21.0</version>
       </dependency>
 
       <dependency>

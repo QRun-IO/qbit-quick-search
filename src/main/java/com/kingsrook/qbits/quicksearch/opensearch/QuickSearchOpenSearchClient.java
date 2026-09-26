@@ -104,16 +104,32 @@ public class QuickSearchOpenSearchClient implements Closeable
          String username = config.getOpensearchUsername();
          String password = config.getOpensearchPassword();
 
+         BasicCredentialsProvider credentialsProvider = null;
          if(username != null && password != null)
          {
-            BasicCredentialsProvider credentialsProvider = new BasicCredentialsProvider();
+            credentialsProvider = new BasicCredentialsProvider();
             credentialsProvider.setCredentials(
                new AuthScope(httpHost),
                new UsernamePasswordCredentials(username, password.toCharArray()));
-
-            builder.setHttpClientConfigCallback(httpClientBuilder ->
-               httpClientBuilder.setDefaultCredentialsProvider(credentialsProvider));
          }
+
+         BasicCredentialsProvider finalCredentialsProvider = credentialsProvider;
+         builder.setHttpClientConfigCallback(httpClientBuilder ->
+         {
+            ///////////////////////////////////////////////////////////////////////
+            // httpclient5 5.6+ decompresses gzip responses itself but leaves    //
+            // the Content-Encoding header, so the OpenSearch transport would    //
+            // gunzip the body a second time and fail.  Let the transport alone //
+            // handle compression.                                               //
+            ///////////////////////////////////////////////////////////////////////
+            httpClientBuilder.disableContentCompression();
+
+            if(finalCredentialsProvider != null)
+            {
+               httpClientBuilder.setDefaultCredentialsProvider(finalCredentialsProvider);
+            }
+            return (httpClientBuilder);
+         });
 
          transport = builder.build();
          client    = new OpenSearchClient(transport);
