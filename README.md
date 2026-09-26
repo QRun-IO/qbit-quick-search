@@ -346,12 +346,13 @@ Index `wmsItem` and `wmsLocation` for warehouse item and location search.
 mvn test                    # Run unit tests
 mvn verify                  # Run unit tests + integration tests (requires Docker)
 mvn test -Dtest=ClassName   # Run single test class
-mvn verify -Dqqq.version=4.1.0-SNAPSHOT   # Verify against another qqq version
+mvn verify -Pqqq-snapshot    # Verify against the next qqq line (4.1.0-SNAPSHOT)
 ```
 
-The qqq version comes from `qbit-build-parent`. Setting `qqq.version` activates
-the `qqq-version-override` profile, which imports that version of `qqq-bom-pom`
-instead.
+The qqq version comes from `qbit-build-parent`. The opt-in `qqq-snapshot`
+profile imports `qqq-bom-pom` at `${qqq.snapshot.version}` (default
+`4.1.0-SNAPSHOT`) ahead of the parent's BOM and adds the Central snapshots
+repository. Pick another version with `-Dqqq.snapshot.version=...`.
 
 Without Docker, integration tests are skipped locally. With `CI=true`, they fail
 instead, so a CI build cannot pass with its integration tests silently skipped.

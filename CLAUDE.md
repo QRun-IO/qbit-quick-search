@@ -14,7 +14,7 @@ mvn test             # Run unit tests
 mvn test -Dtest=ClassName  # Run single test class
 mvn package          # Build JAR
 mvn verify           # Full verify, including integration tests
-mvn verify -Dqqq.version=4.1.0-SNAPSHOT  # Verify against another qqq version
+mvn verify -Pqqq-snapshot  # Verify against 4.1.0-SNAPSHOT (override with -Dqqq.snapshot.version)
 ```
 
 Integration tests (require Docker) run via `mvn verify` using maven-failsafe-plugin.
@@ -71,7 +71,7 @@ Integration tests use `@ExtendWith(RequiresDockerCondition.class)`: skipped with
 ## Dependencies
 
 - Java 21
-- Parent `com.kingsrook:qbit-build-parent:2.0.0`, the only source of the qqq version (QQQ 4.0.0); do not re-import `qqq-bom-pom` here (ADR-0007), except in the opt-in `qqq-version-override` profile that `-Dqqq.version` activates
+- Parent `com.kingsrook:qbit-build-parent:2.0.0`, the only source of the qqq version (QQQ 4.0.0); do not re-import `qqq-bom-pom` here (ADR-0007), except in the opt-in `qqq-snapshot` profile (`-Pqqq-snapshot`), which imports `qqq-bom-pom:${qqq.snapshot.version}` (default 4.1.0-SNAPSHOT) and adds the Central snapshots repository
 - OpenSearch Java Client 2.10.0
 - Apache HttpClient5 and jackson-datatype-jsr310, versions managed by the qqq BOM (keep them unpinned so they match its httpcore5 and jackson)
 - JUnit 5 + AssertJ + Mockito for testing

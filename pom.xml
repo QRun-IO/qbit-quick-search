@@ -219,27 +219,37 @@
    </build>
 
    <profiles>
-      <!-- The qqq version comes only from qbit-build-parent (ADR-0007).  This     -->
-      <!-- profile exists solely to verify against another qqq line, and is only -->
-      <!-- active when invoked with e.g. -Dqqq.version=4.1.0-SNAPSHOT.           -->
+      <!-- Opt-in check against the next qqq line: mvn -B verify -Pqqq-snapshot       -->
+      <!-- (override the version with -Dqqq.snapshot.version=...).  Default builds   -->
+      <!-- take the qqq version only from qbit-build-parent (ADR-0007).              -->
       <profile>
-         <id>qqq-version-override</id>
-         <activation>
-            <property>
-               <name>qqq.version</name>
-            </property>
-         </activation>
+         <id>qqq-snapshot</id>
+         <properties>
+            <qqq.snapshot.version>4.1.0-SNAPSHOT</qqq.snapshot.version>
+         </properties>
          <dependencyManagement>
             <dependencies>
                <dependency>
                   <groupId>com.kingsrook.qqq</groupId>
                   <artifactId>qqq-bom-pom</artifactId>
-                  <version>${qqq.version}</version>
+                  <version>${qqq.snapshot.version}</version>
                   <type>pom</type>
                   <scope>import</scope>
                </dependency>
             </dependencies>
          </dependencyManagement>
+         <repositories>
+            <repository>
+               <id>sonatype-snapshots</id>
+               <url>https://central.sonatype.com/repository/maven-snapshots/</url>
+               <releases>
+                  <enabled>false</enabled>
+               </releases>
+               <snapshots>
+                  <enabled>true</enabled>
+               </snapshots>
+            </repository>
+         </repositories>
       </profile>
    </profiles>
 </project>
