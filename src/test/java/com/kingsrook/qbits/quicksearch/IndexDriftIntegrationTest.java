@@ -18,12 +18,17 @@ package com.kingsrook.qbits.quicksearch;
 
 
 import java.io.Serializable;
+import java.time.Instant;
+import java.time.temporal.ChronoUnit;
 import java.util.List;
+import java.util.Map;
 import com.kingsrook.qqq.backend.core.actions.tables.DeleteAction;
 import com.kingsrook.qqq.backend.core.actions.tables.InsertAction;
 import com.kingsrook.qqq.backend.core.actions.tables.UpdateAction;
 import com.kingsrook.qqq.backend.core.context.QContext;
 import com.kingsrook.qqq.backend.core.exceptions.QException;
+import com.kingsrook.qqq.backend.core.model.actions.processes.RunBackendStepInput;
+import com.kingsrook.qqq.backend.core.model.actions.processes.RunBackendStepOutput;
 import com.kingsrook.qqq.backend.core.model.actions.tables.delete.DeleteInput;
 import com.kingsrook.qqq.backend.core.model.actions.tables.insert.InsertInput;
 import com.kingsrook.qqq.backend.core.model.actions.tables.update.UpdateInput;
@@ -43,7 +48,9 @@ import com.kingsrook.qbits.quicksearch.actions.QuickSearchInput;
 import com.kingsrook.qbits.quicksearch.actions.QuickSearchResult;
 import com.kingsrook.qbits.quicksearch.annotations.QuickSearchField;
 import com.kingsrook.qbits.quicksearch.annotations.QuickSearchable;
+import com.kingsrook.qbits.quicksearch.opensearch.OpenSearchDocument;
 import com.kingsrook.qbits.quicksearch.opensearch.QuickSearchOpenSearchClient;
+import com.kingsrook.qbits.quicksearch.processes.ReconcileIndexStep;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
@@ -57,7 +64,8 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 /*******************************************************************************
  ** Integration tests, against a real OpenSearch, that real-time indexing keeps
- ** the index in step with the source table through updates and deletes.
+ ** the index in step with the source table through updates and deletes, and
+ ** that the reconcile process repairs an index that has drifted.
  **
  ** Each test uses its own record IDs and search terms, so tests are independent.
  *******************************************************************************/
@@ -192,6 +200,47 @@ class IndexDriftIntegrationTest
       assertThat(searchRecordIds("deleteton"))
          .as("only the record that was not deleted should remain")
          .containsExactly("11");
+   }
+
+
+
+   /*******************************************************************************
+    ** Test: the reconcile process repairs each kind of drift from the source
+    ** table: an orphan document (record gone), a missing document, and a stale
+    ** document (record changed since it was indexed).
+    *******************************************************************************/
+   @Test
+   void testReconcile_repairsOrphanMissingAndStaleDocuments() throws Exception
+   {
+      insert(
+         new QRecord().withValue("id", 21).withValue("name", "Stella").withValue("city", "Freshford"),
+         new QRecord().withValue("id", 22).withValue("name", "Mona").withValue("city", "Missingham"));
+
+      ////////////////////////////////////////////////////////////////////
+      // drift the index away from the source table three ways          //
+      ////////////////////////////////////////////////////////////////////
+      Instant anHourAgo = Instant.now().minus(1, ChronoUnit.HOURS);
+      client().indexDocuments(List.of(
+         new OpenSearchDocument().withSourceTable(TABLE_NAME).withRecordId("99")
+            .withSearchableText("Ghostly Phantomburg").withIndexedAt(anHourAgo).withFieldValues(Map.of()),
+         new OpenSearchDocument().withSourceTable(TABLE_NAME).withRecordId("21")
+            .withSearchableText("Stella Oldtown").withIndexedAt(anHourAgo).withFieldValues(Map.of())), 10);
+      client().deleteDocument(TABLE_NAME, "22");
+
+      assertThat(searchRecordIds("phantomburg")).containsExactly("99");
+      assertThat(searchRecordIds("oldtown")).containsExactly("21");
+      assertThat(searchRecordIds("missingham")).isEmpty();
+
+      RunBackendStepInput input = new RunBackendStepInput();
+      input.addValue("tableName", TABLE_NAME);
+      RunBackendStepOutput output = new RunBackendStepOutput();
+      new ReconcileIndexStep().run(input, output);
+
+      assertThat(searchRecordIds("phantomburg")).as("orphan document removed").isEmpty();
+      assertThat(searchRecordIds("oldtown")).as("stale document replaced").isEmpty();
+      assertThat(searchRecordIds("freshford")).as("stale document replaced").containsExactly("21");
+      assertThat(searchRecordIds("missingham")).as("missing document restored").containsExactly("22");
+      assertThat(output.getValue("documentsRemoved")).isEqualTo(1L);
    }
 
 

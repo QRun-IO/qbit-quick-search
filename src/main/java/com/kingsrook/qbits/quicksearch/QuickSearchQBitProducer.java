@@ -43,6 +43,7 @@ import com.kingsrook.qbits.quicksearch.model.QuickSearchIndexRun;
 import com.kingsrook.qbits.quicksearch.opensearch.QuickSearchOpenSearchClient;
 import com.kingsrook.qbits.quicksearch.processes.BasepullIndexStep;
 import com.kingsrook.qbits.quicksearch.processes.FullReindexStep;
+import com.kingsrook.qbits.quicksearch.processes.ReconcileIndexStep;
 import com.kingsrook.qbits.quicksearch.publisher.IndexEventPublisher;
 import com.kingsrook.qbits.quicksearch.publisher.SynchronousIndexEventPublisher;
 
@@ -62,6 +63,7 @@ public class QuickSearchQBitProducer
 
    public static final String BASEPULL_PROCESS_NAME      = "quickSearchBasepullIndex";
    public static final String FULL_REINDEX_PROCESS_NAME  = "quickSearchFullReindex";
+   public static final String RECONCILE_PROCESS_NAME     = "quickSearchReconcileIndex";
    public static final String APP_NAME                   = "quickSearchAdmin";
 
    private QuickSearchQBitConfig config;
@@ -217,14 +219,17 @@ public class QuickSearchQBitProducer
       ////////////////////////////////////////////////////
       String basepullProcessName   = config.applyPrefix(BASEPULL_PROCESS_NAME);
       String fullReindexProcessName = config.applyPrefix(FULL_REINDEX_PROCESS_NAME);
+      String reconcileProcessName   = config.applyPrefix(RECONCILE_PROCESS_NAME);
 
       QProcessMetaData basepullProcess = buildBasepullProcess(basepullProcessName);
       QProcessMetaData fullReindexProcess = buildFullReindexProcess(fullReindexProcessName);
+      QProcessMetaData reconcileProcess = buildReconcileProcess(reconcileProcessName);
 
       if(Boolean.TRUE.equals(config.getEnableScheduledProcesses()))
       {
          qInstance.addProcess(basepullProcess);
          qInstance.addProcess(fullReindexProcess);
+         qInstance.addProcess(reconcileProcess);
       }
 
       ////////////////////////////////////////////////////
@@ -249,6 +254,7 @@ public class QuickSearchQBitProducer
       {
          app.withChild(basepullProcess);
          app.withChild(fullReindexProcess);
+         app.withChild(reconcileProcess);
       }
 
       qInstance.addApp(app);
@@ -523,6 +529,23 @@ public class QuickSearchQBitProducer
          .withStep(new QBackendStepMetaData()
             .withName("fullReindex")
             .withCode(new QCodeReference(FullReindexStep.class)));
+   }
+
+
+
+   /***************************************************************************
+    ** Build the reconcile process metadata: re-index each table from its
+    ** source and remove documents with no source record, without wiping the
+    ** index first. Takes the same optional tableName input as full reindex.
+    ***************************************************************************/
+   private QProcessMetaData buildReconcileProcess(String processName)
+   {
+      return new QProcessMetaData()
+         .withName(processName)
+         .withLabel("Quick Search Reconcile Index")
+         .withStep(new QBackendStepMetaData()
+            .withName("reconcile")
+            .withCode(new QCodeReference(ReconcileIndexStep.class)));
    }
 
 

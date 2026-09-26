@@ -162,6 +162,7 @@ class QuickSearchQBitProducerTest
       assertThat(qInstance.getTable("myApp_quickSearchIndexRun")).isNotNull();
       assertThat(qInstance.getProcess("myApp_" + QuickSearchQBitProducer.BASEPULL_PROCESS_NAME)).isNotNull();
       assertThat(qInstance.getProcess("myApp_" + QuickSearchQBitProducer.FULL_REINDEX_PROCESS_NAME)).isNotNull();
+      assertThat(qInstance.getProcess("myApp_" + QuickSearchQBitProducer.RECONCILE_PROCESS_NAME)).isNotNull();
    }
 
 
@@ -342,6 +343,7 @@ class QuickSearchQBitProducerTest
 
       assertThat(qInstance.getProcess(QuickSearchQBitProducer.BASEPULL_PROCESS_NAME)).isNotNull();
       assertThat(qInstance.getProcess(QuickSearchQBitProducer.FULL_REINDEX_PROCESS_NAME)).isNotNull();
+      assertThat(qInstance.getProcess(QuickSearchQBitProducer.RECONCILE_PROCESS_NAME)).isNotNull();
    }
 
 

@@ -19,6 +19,7 @@ package com.kingsrook.qbits.quicksearch.opensearch;
 
 import java.io.Closeable;
 import java.io.IOException;
+import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
@@ -32,8 +33,10 @@ import org.apache.hc.client5.http.auth.AuthScope;
 import org.apache.hc.client5.http.auth.UsernamePasswordCredentials;
 import org.apache.hc.client5.http.impl.auth.BasicCredentialsProvider;
 import org.apache.hc.core5.http.HttpHost;
+import org.opensearch.client.json.JsonData;
 import org.opensearch.client.json.jackson.JacksonJsonpMapper;
 import org.opensearch.client.opensearch.OpenSearchClient;
+import org.opensearch.client.opensearch._types.Conflicts;
 import org.opensearch.client.opensearch._types.FieldValue;
 import org.opensearch.client.opensearch._types.query_dsl.BoolQuery;
 import org.opensearch.client.opensearch._types.query_dsl.MultiMatchQuery;
@@ -42,6 +45,7 @@ import org.opensearch.client.opensearch._types.query_dsl.TermQuery;
 import org.opensearch.client.opensearch.core.BulkRequest;
 import org.opensearch.client.opensearch.core.BulkResponse;
 import org.opensearch.client.opensearch.core.DeleteByQueryRequest;
+import org.opensearch.client.opensearch.core.DeleteByQueryResponse;
 import org.opensearch.client.opensearch.core.DeleteRequest;
 import org.opensearch.client.opensearch.core.IndexRequest;
 import org.opensearch.client.opensearch.core.SearchRequest;
@@ -395,6 +399,48 @@ public class QuickSearchOpenSearchClient implements Closeable
       catch(IOException e)
       {
          throw new QException("Failed to delete documents for table [" + sourceTable + "]: " + e.getMessage(), e);
+      }
+   }
+
+
+
+   /*******************************************************************************
+    ** Delete a table's documents that were not (re-)indexed at or after cutoff,
+    ** including any that have no indexedAt value.
+    **
+    ** Only documents visible to search are considered, so refresh the index
+    ** first. Documents changed while the delete runs are skipped (version
+    ** conflicts proceed), since they were just re-indexed.
+    **
+    ** @param sourceTable the table whose documents to consider
+    ** @param cutoff      documents indexed before this instant are deleted
+    ** @return the number of documents deleted
+    ** @throws QException if the OpenSearch call fails
+    *******************************************************************************/
+   public Long deleteDocumentsIndexedBefore(String sourceTable, Instant cutoff) throws QException
+   {
+      try
+      {
+         DeleteByQueryResponse response = client.deleteByQuery(DeleteByQueryRequest.of(r -> r
+            .index(indexName)
+            .conflicts(Conflicts.Proceed)
+            .refresh(true)
+            .query(Query.of(q -> q
+               .bool(b -> b
+                  .filter(f -> f
+                     .term(t -> t
+                        .field("sourceTable")
+                        .value(FieldValue.of(sourceTable))))
+                  .mustNot(mn -> mn
+                     .range(rg -> rg
+                        .field("indexedAt")
+                        .gte(JsonData.of(cutoff.toString())))))))));
+
+         return (response.deleted() == null ? 0L : response.deleted());
+      }
+      catch(IOException e)
+      {
+         throw new QException("Failed to delete stale documents for table [" + sourceTable + "]: " + e.getMessage(), e);
       }
    }
 
