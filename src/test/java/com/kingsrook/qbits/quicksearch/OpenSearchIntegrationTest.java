@@ -115,7 +115,7 @@ class OpenSearchIntegrationTest
          .withName(BACKEND_NAME)
          .withBackendType(MemoryBackendModule.class));
 
-      qInstance.setAuthentication(new QAuthenticationMetaData()
+      qInstance.withInstanceDefaultAuthentication(new QAuthenticationMetaData()
          .withName("anonymous")
          .withType(QAuthenticationType.FULLY_ANONYMOUS));
 

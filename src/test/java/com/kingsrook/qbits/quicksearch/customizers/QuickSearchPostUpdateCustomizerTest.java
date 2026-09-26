@@ -80,7 +80,7 @@ class QuickSearchPostUpdateCustomizerTest
          .withField(new QFieldMetaData(PK_FIELD, QFieldType.INTEGER))
          .withField(new QFieldMetaData("name", QFieldType.STRING)));
       qInstance.addBackend(new com.kingsrook.qqq.backend.module.rdbms.model.metadata.RDBMSBackendMetaData().withName("testBackend"));
-      qInstance.setAuthentication(new QAuthenticationMetaData().withName("anonymous").withType(com.kingsrook.qqq.backend.core.model.metadata.QAuthenticationType.FULLY_ANONYMOUS));
+      qInstance.withInstanceDefaultAuthentication(new QAuthenticationMetaData().withName("anonymous").withType(com.kingsrook.qqq.backend.core.model.metadata.QAuthenticationType.FULLY_ANONYMOUS));
       qInstance.getTable(TABLE_NAME).withBackendName("testBackend");
       QContext.init(qInstance, new QSession());
    }
