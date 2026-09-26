@@ -35,7 +35,7 @@ QBit Quick Search is 100% open source under Apache 2.0. All data stays in your O
 
 ### Technology Stack
 
-- **Java 21** with QQQ backend modules
+- **Java 21** with QQQ 4.x backend modules (versions from `qbit-build-parent` 2.0.0)
 - **OpenSearch 2.x** for full-text search with custom edge-ngram analyzer
 - **QQQ Framework**: Entities, processes, customizers, permissions, API layer
 
@@ -54,7 +54,7 @@ qbit-quick-search/
     model/                            -- QuickSearchIndex, QuickSearchIndexRun entities
     opensearch/                       -- OpenSearch client, document model, bulk results
     actions/                          -- QuickSearchAction, input/output DTOs
-    processes/                        -- AbstractIndexingStep, BasepullIndexStep, FullReindexStep
+    processes/                        -- AbstractIndexingStep, BasepullIndexStep, FullReindexStep, ReconcileIndexStep
     customizers/                      -- Post-insert, post-update, post-delete customizers
     publisher/                        -- IndexEventPublisher interface, SynchronousIndexEventPublisher
 ```
@@ -253,6 +253,24 @@ new FullReindexStep().run(input, output);
 
 Or through the QQQ admin UI via the "Full Reindex" process.
 
+### Reconciling the Index
+
+If the index may have drifted from the source tables (for example, deletes that
+happened while OpenSearch was down), run the reconcile process. It re-indexes
+every source record, then removes documents whose source record no longer
+exists. It does not wipe the index first, so search keeps working while it runs.
+
+```java
+RunBackendStepInput input = new RunBackendStepInput();
+input.addValue("tableName", "customer"); // optional: omit to reconcile all tables
+RunBackendStepOutput output = new RunBackendStepOutput();
+new ReconcileIndexStep().run(input, output);
+// output values: recordsIndexed, documentsRemoved
+```
+
+Or through the QQQ admin UI via the "Reconcile Index" process. If any document
+fails to index, the run is marked `FAILED` and no documents are removed.
+
 ## Data Model
 
 ### Tables (2)
@@ -262,12 +280,13 @@ Or through the QQQ admin UI via the "Full Reindex" process.
 | `quickSearchIndex` | Per-table index configuration, status, and basepull tracking |
 | `quickSearchIndexRun` | Individual indexing run history with record counts and error tracking |
 
-### Processes (2)
+### Processes (3)
 
 | Process | Description |
 |---------|-------------|
 | Basepull Index | Scheduled: queries each source table for records modified since last run, indexes in batches |
 | Full Reindex | On-demand: deletes and re-indexes all records for one or all tables |
+| Reconcile Index | On-demand: re-indexes all records for one or all tables, then removes documents with no source record, without wiping the index first |
 
 ## Configuration Reference
 
@@ -324,10 +343,18 @@ Index `wmsItem` and `wmsLocation` for warehouse item and location search.
 ## Testing
 
 ```bash
-mvn test                    # Run all 174 unit tests
+mvn test                    # Run unit tests
 mvn verify                  # Run unit tests + integration tests (requires Docker)
 mvn test -Dtest=ClassName   # Run single test class
+mvn verify -Dqqq.version=4.1.0-SNAPSHOT   # Verify against another qqq version
 ```
+
+The qqq version comes from `qbit-build-parent`. Setting `qqq.version` activates
+the `qqq-version-override` profile, which imports that version of `qqq-bom-pom`
+instead.
+
+Without Docker, integration tests are skipped locally. With `CI=true`, they fail
+instead, so a CI build cannot pass with its integration tests silently skipped.
 
 ### Coverage
 
