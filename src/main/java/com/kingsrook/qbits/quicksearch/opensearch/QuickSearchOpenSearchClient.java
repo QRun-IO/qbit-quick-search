@@ -48,6 +48,7 @@ import org.opensearch.client.opensearch.core.SearchRequest;
 import org.opensearch.client.opensearch.core.SearchResponse;
 import org.opensearch.client.opensearch.core.bulk.BulkOperation;
 import org.opensearch.client.opensearch.core.bulk.BulkResponseItem;
+import org.opensearch.client.opensearch.core.bulk.DeleteOperation;
 import org.opensearch.client.opensearch.core.bulk.IndexOperation;
 import org.opensearch.client.opensearch.core.search.Highlight;
 import org.opensearch.client.opensearch.core.search.HighlightField;
@@ -262,31 +263,89 @@ public class QuickSearchOpenSearchClient implements Closeable
                   .document(doc)))));
          }
 
-         BulkRequest bulkRequest = BulkRequest.of(r -> r.operations(operations));
-
-         try
-         {
-            BulkResponse response = client.bulk(bulkRequest);
-
-            for(BulkResponseItem item : response.items())
-            {
-               if(item.error() != null)
-               {
-                  result.addFailure(item.id() + ": " + item.error().reason());
-               }
-               else
-               {
-                  result.addSuccess();
-               }
-            }
-         }
-         catch(IOException e)
-         {
-            throw new QException("Bulk index request failed: " + e.getMessage(), e);
-         }
+         executeBulk(operations, result, "index");
       }
 
       return (result);
+   }
+
+
+
+   /*******************************************************************************
+    ** Bulk-delete documents by their composite document IDs, in batches of at
+    ** most batchSize.
+    **
+    ** Every document is attempted; one failing item does not stop the others.
+    ** A document that is not in the index counts as a success, because it is
+    ** already absent. Per-item errors are recorded via addFailure().
+    **
+    ** @param documentIds the composite document IDs; null is treated as empty
+    ** @param batchSize   maximum number of documents per bulk request
+    ** @return accumulated result across all batches
+    ** @throws QException if any batch request fails at the transport level
+    *******************************************************************************/
+   public BulkIndexResult deleteDocuments(List<String> documentIds, int batchSize) throws QException
+   {
+      BulkIndexResult result = new BulkIndexResult();
+
+      if(documentIds == null || documentIds.isEmpty())
+      {
+         return (result);
+      }
+
+      int total = documentIds.size();
+
+      for(int start = 0; start < total; start += batchSize)
+      {
+         List<String>        batch      = documentIds.subList(start, Math.min(start + batchSize, total));
+         List<BulkOperation> operations = new ArrayList<>();
+
+         for(String documentId : batch)
+         {
+            operations.add(BulkOperation.of(o -> o
+               .delete(DeleteOperation.of(d -> d
+                  .index(indexName)
+                  .id(documentId)))));
+         }
+
+         executeBulk(operations, result, "delete");
+      }
+
+      return (result);
+   }
+
+
+
+   /*******************************************************************************
+    ** Send one bulk request and record each item's outcome in result.
+    **
+    ** @param operations    the bulk operations to send
+    ** @param result        accumulator for per-item successes and failures
+    ** @param operationName used in the transport-failure message
+    ** @throws QException if the request fails at the transport level
+    *******************************************************************************/
+   private void executeBulk(List<BulkOperation> operations, BulkIndexResult result, String operationName) throws QException
+   {
+      try
+      {
+         BulkResponse response = client.bulk(BulkRequest.of(r -> r.operations(operations)));
+
+         for(BulkResponseItem item : response.items())
+         {
+            if(item.error() != null)
+            {
+               result.addFailure(item.id() + ": " + item.error().reason());
+            }
+            else
+            {
+               result.addSuccess();
+            }
+         }
+      }
+      catch(IOException e)
+      {
+         throw new QException("Bulk " + operationName + " request failed: " + e.getMessage(), e);
+      }
    }
 
 
@@ -300,7 +359,7 @@ public class QuickSearchOpenSearchClient implements Closeable
     *******************************************************************************/
    public void deleteDocument(String sourceTable, String recordId) throws QException
    {
-      String documentId = sourceTable + ":" + recordId;
+      String documentId = OpenSearchDocument.buildDocumentId(sourceTable, recordId);
 
       try
       {

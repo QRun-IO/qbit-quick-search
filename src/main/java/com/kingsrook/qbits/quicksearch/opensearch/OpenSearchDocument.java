@@ -173,6 +173,16 @@ public class OpenSearchDocument
    @JsonIgnore
    public String getDocumentId()
    {
+      return (buildDocumentId(sourceTable, recordId));
+   }
+
+
+
+   /*******************************************************************************
+    ** Build the composite OpenSearch _id for a source table and record ID.
+    *******************************************************************************/
+   public static String buildDocumentId(String sourceTable, String recordId)
+   {
       return (sourceTable + ":" + recordId);
    }
 

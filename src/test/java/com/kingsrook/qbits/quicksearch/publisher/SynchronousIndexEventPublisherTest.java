@@ -34,6 +34,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.anyList;
+import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
@@ -167,10 +168,11 @@ class SynchronousIndexEventPublisherTest
 
 
    /*******************************************************************************
-    ** Test publishDeleteEvents calls client.deleteDocument for each event.
+    ** Test publishDeleteEvents removes all documents in one bulk call, so one
+    ** failing document cannot stop the others from being removed.
     *******************************************************************************/
    @Test
-   void testPublishDeleteEvents_callsClientForEachEvent() throws QException
+   void testPublishDeleteEvents_bulkDeletesAllDocuments() throws QException
    {
       List<IndexEvent> events = List.of(
          new IndexEvent()
@@ -182,10 +184,61 @@ class SynchronousIndexEventPublisherTest
             .withRecordId("20")
             .withAction(IndexEventAction.DELETE));
 
+      when(mockClient.deleteDocuments(anyList(), anyInt())).thenReturn(new BulkIndexResult());
+
       publisher.publishDeleteEvents(events);
 
-      verify(mockClient).deleteDocument("orders", "10");
-      verify(mockClient).deleteDocument("orders", "20");
+      verify(mockClient).deleteDocuments(List.of("orders:10", "orders:20"), BATCH_SIZE);
+      verify(mockClient, never()).deleteDocument(anyString(), anyString());
+   }
+
+
+
+   /*******************************************************************************
+    ** Test publishDeleteEvents throws, naming the failed documents, when some
+    ** bulk items fail.
+    *******************************************************************************/
+   @Test
+   void testPublishDeleteEvents_itemFailures_throwsQException() throws QException
+   {
+      BulkIndexResult result = new BulkIndexResult();
+      result.addSuccess();
+      result.addFailure("orders:20: shard unavailable");
+      when(mockClient.deleteDocuments(anyList(), anyInt())).thenReturn(result);
+
+      List<IndexEvent> events = List.of(
+         new IndexEvent().withTableName("orders").withRecordId("10").withAction(IndexEventAction.DELETE),
+         new IndexEvent().withTableName("orders").withRecordId("20").withAction(IndexEventAction.DELETE));
+
+      assertThatThrownBy(() -> publisher.publishDeleteEvents(events))
+         .isInstanceOf(QException.class)
+         .hasMessageContaining("1 of 2")
+         .hasMessageContaining("orders:20: shard unavailable");
+   }
+
+
+
+   /*******************************************************************************
+    ** Test publishIndexEvents throws, naming the failed documents, when some
+    ** bulk items fail (instead of silently dropping the failures).
+    *******************************************************************************/
+   @Test
+   void testPublishIndexEvents_itemFailures_throwsQException() throws QException
+   {
+      BulkIndexResult result = new BulkIndexResult();
+      result.addFailure("orders:1: mapper_parsing_exception");
+      when(mockClient.indexDocuments(anyList(), anyInt())).thenReturn(result);
+
+      IndexEvent event = new IndexEvent()
+         .withTableName("orders")
+         .withRecordId("1")
+         .withAction(IndexEventAction.INDEX)
+         .withRecord(new QRecord().withValue("id", 1).withValue("orderNumber", "ORD-001"));
+
+      assertThatThrownBy(() -> publisher.publishIndexEvents(List.of(event)))
+         .isInstanceOf(QException.class)
+         .hasMessageContaining("1 of 1")
+         .hasMessageContaining("orders:1: mapper_parsing_exception");
    }
 
 
@@ -209,7 +262,7 @@ class SynchronousIndexEventPublisherTest
    void testPublishDeleteEvents_clientThrows_propagatesException() throws QException
    {
       doThrow(new QException("delete failed"))
-         .when(mockClient).deleteDocument("orders", "1");
+         .when(mockClient).deleteDocuments(anyList(), anyInt());
 
       IndexEvent event = new IndexEvent()
          .withTableName("orders")

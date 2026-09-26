@@ -24,6 +24,7 @@ import com.kingsrook.qqq.backend.core.exceptions.QException;
 import com.kingsrook.qqq.backend.core.logging.QLogger;
 import com.kingsrook.qqq.backend.core.model.actions.tables.delete.DeleteInput;
 import com.kingsrook.qqq.backend.core.model.data.QRecord;
+import com.kingsrook.qqq.backend.core.utils.CollectionUtils;
 import com.kingsrook.qbits.quicksearch.QuickSearchQBitContext;
 import com.kingsrook.qbits.quicksearch.QuickSearchableTableConfig;
 import com.kingsrook.qbits.quicksearch.publisher.IndexEvent;
@@ -56,8 +57,8 @@ public class QuickSearchPostDeleteCustomizer implements TableCustomizerInterface
 
 
    /*******************************************************************************
-    ** Post-delete hook: builds DELETE events for each deleted record and publishes
-    ** them via the configured IndexEventPublisher.
+    ** Post-delete hook: builds DELETE events for each successfully deleted
+    ** record and publishes them via the configured IndexEventPublisher.
     **
     ** If the publisher is null (QBit not yet initialized) or if publishing fails,
     ** a warning is logged and the original records are returned without throwing,
@@ -87,13 +88,26 @@ public class QuickSearchPostDeleteCustomizer implements TableCustomizerInterface
          List<IndexEvent> events = new ArrayList<>();
          for(QRecord record : records)
          {
+            ///////////////////////////////////////////////////////////////////
+            // a record with errors was not deleted, so its document stays;  //
+            // one without a primary key has no document id to remove        //
+            ///////////////////////////////////////////////////////////////////
+            String recordId = record.getValueString(primaryKeyField);
+            if(recordId == null || CollectionUtils.nullSafeHasContents(record.getErrors()))
+            {
+               continue;
+            }
+
             events.add(new IndexEvent()
                .withAction(IndexEventAction.DELETE)
                .withTableName(tableName)
-               .withRecordId(record.getValueString(primaryKeyField)));
+               .withRecordId(recordId));
          }
 
-         publisher.publishDeleteEvents(events);
+         if(!events.isEmpty())
+         {
+            publisher.publishDeleteEvents(events);
+         }
       }
       catch(Exception e)
       {
