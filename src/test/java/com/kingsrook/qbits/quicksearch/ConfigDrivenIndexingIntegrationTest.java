@@ -46,6 +46,7 @@ import org.junit.jupiter.api.MethodOrderer;
 import org.junit.jupiter.api.Order;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.TestMethodOrder;
+import org.junit.jupiter.api.extension.ExtendWith;
 import org.testcontainers.containers.GenericContainer;
 import org.testcontainers.containers.wait.strategy.Wait;
 import org.testcontainers.junit.jupiter.Container;
@@ -61,7 +62,8 @@ import static org.assertj.core.api.Assertions.assertThat;
  ** records, runs FullReindexStep, and verifies search results including custom
  ** recordLabelFormat.
  *******************************************************************************/
-@Testcontainers(disabledWithoutDocker = true)
+@ExtendWith(RequiresDockerCondition.class)
+@Testcontainers
 @TestMethodOrder(MethodOrderer.OrderAnnotation.class)
 class ConfigDrivenIndexingIntegrationTest
 {
