@@ -22,7 +22,7 @@ workflows:
               context: [qqq-maven-registry-credentials]
               filters:
                  branches:
-                    ignore: /(develop|main|release\/.*|hotfix\/.*)/
+                    ignore: /(develop|release\/.*|hotfix\/.*)/
 
    publish_snapshot:
       jobs:
@@ -55,7 +55,7 @@ workflows:
               branch_type: release
               filters:
                  branches:
-                    only: [main]
+                    ignore: /.*/
                  tags:
                     only: [/v.*/]
 
