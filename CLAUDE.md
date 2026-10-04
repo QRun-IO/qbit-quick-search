@@ -71,7 +71,7 @@ Integration tests use `@ExtendWith(RequiresDockerCondition.class)`: skipped with
 ## Dependencies
 
 - Java 21
-- Parent `com.kingsrook:qbit-build-parent:2.0.0`, the only source of the qqq version (QQQ 4.0.0); do not re-import `qqq-bom-pom` here (ADR-0007), except in the opt-in `qqq-snapshot` profile (`-Pqqq-snapshot`), which imports `qqq-bom-pom:${qqq.snapshot.version}` (default 4.1.0-SNAPSHOT) and adds the Central snapshots repository
+- Parent `com.kingsrook:qbit-build-parent:2.0.0` (pins QQQ 4.0.0). Release 0.2.1 deviates from ADR-0007: the `qqq.version` property (4.1.0-RC.1) drives a `qqq-bom-pom` import that replaces the parent's BOM; remove it once a parent release on the QQQ 4.1 line exists. The opt-in `qqq-snapshot` profile (`-Pqqq-snapshot`) imports `qqq-bom-pom:${qqq.snapshot.version}` (default 4.1.0-SNAPSHOT) instead and adds the Central snapshots repository
 - OpenSearch Java Client 2.10.0
 - Apache HttpClient5 and jackson-datatype-jsr310, versions managed by the qqq BOM (keep them unpinned so they match its httpcore5 and jackson)
 - JUnit 5 + AssertJ + Mockito for testing

@@ -1,6 +1,6 @@
 # QBit: Quick Search
 
-[![Version](https://img.shields.io/badge/version-0.2.0-blue.svg)](https://github.com/QRun-IO/qbit-quick-search)
+[![Version](https://img.shields.io/badge/version-0.2.1-blue.svg)](https://github.com/QRun-IO/qbit-quick-search)
 [![License](https://img.shields.io/badge/license-Apache%202.0-green.svg)](https://www.apache.org/licenses/LICENSE-2.0)
 [![Java](https://img.shields.io/badge/java-21+-blue.svg)](https://adoptium.net/)
 
@@ -35,7 +35,7 @@ QBit Quick Search is 100% open source under Apache 2.0. All data stays in your O
 
 ### Technology Stack
 
-- **Java 21** with QQQ 4.x backend modules (versions from `qbit-build-parent` 2.0.0)
+- **Java 21** with QQQ 4.x backend modules (QQQ 4.1.0-RC.1 BOM, build plugins from `qbit-build-parent` 2.0.0)
 - **OpenSearch 2.x** for full-text search with custom edge-ngram analyzer
 - **QQQ Framework**: Entities, processes, customizers, permissions, API layer
 
@@ -76,7 +76,7 @@ qbit-quick-search/
 <dependency>
     <groupId>com.kingsrook.qbits</groupId>
     <artifactId>qbit-quick-search</artifactId>
-    <version>0.2.0-SNAPSHOT</version>
+    <version>0.2.1</version>
 </dependency>
 ```
 
@@ -349,10 +349,11 @@ mvn test -Dtest=ClassName   # Run single test class
 mvn verify -Pqqq-snapshot    # Verify against the next qqq line (4.1.0-SNAPSHOT)
 ```
 
-The qqq version comes from `qbit-build-parent`. The opt-in `qqq-snapshot`
-profile imports `qqq-bom-pom` at `${qqq.snapshot.version}` (default
-`4.1.0-SNAPSHOT`) ahead of the parent's BOM and adds the Central snapshots
-repository. Pick another version with `-Dqqq.snapshot.version=...`.
+The qqq version comes from the `qqq.version` property (4.1.0-RC.1), whose
+`qqq-bom-pom` import replaces the QQQ 4.0.0 BOM in `qbit-build-parent` 2.0.0.
+The opt-in `qqq-snapshot` profile imports `qqq-bom-pom` at
+`${qqq.snapshot.version}` (default `4.1.0-SNAPSHOT`) instead and adds the
+Central snapshots repository. Pick another version with `-Dqqq.snapshot.version=...`.
 
 Without Docker, integration tests are skipped locally. With `CI=true`, they fail
 instead, so a CI build cannot pass with its integration tests silently skipped.

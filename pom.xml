@@ -18,10 +18,11 @@
 <project xmlns="http://maven.apache.org/POM/4.0.0" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
 
    <properties>
-      <revision>0.2.1-SNAPSHOT</revision>
+      <revision>0.2.1</revision>
       <maven.compiler.source>21</maven.compiler.source>
       <maven.compiler.target>21</maven.compiler.target>
       <opensearch.version>2.10.0</opensearch.version>
+      <qqq.version>4.1.0-RC.1</qqq.version>
    </properties>
 
    <parent>
@@ -72,6 +73,16 @@
             <groupId>org.junit</groupId>
             <artifactId>junit-bom</artifactId>
             <version>5.10.0</version>
+            <type>pom</type>
+            <scope>import</scope>
+         </dependency>
+         <!-- Release 0.2.1 targets QQQ 4.1.0-RC.1. qbit-build-parent 2.0.0 still -->
+         <!-- pins QQQ 4.0.0, so this import replaces the parent's qqq BOM until a -->
+         <!-- parent release on the QQQ 4.1 line exists (deviation from ADR-0007). -->
+         <dependency>
+            <groupId>com.kingsrook.qqq</groupId>
+            <artifactId>qqq-bom-pom</artifactId>
+            <version>${qqq.version}</version>
             <type>pom</type>
             <scope>import</scope>
          </dependency>
@@ -221,7 +232,7 @@
    <profiles>
       <!-- Opt-in check against the next qqq line: mvn -B verify -Pqqq-snapshot       -->
       <!-- (override the version with -Dqqq.snapshot.version=...).  Default builds   -->
-      <!-- take the qqq version only from qbit-build-parent (ADR-0007).              -->
+      <!-- take the qqq version from the qqq.version property above.                 -->
       <profile>
          <id>qqq-snapshot</id>
          <properties>
