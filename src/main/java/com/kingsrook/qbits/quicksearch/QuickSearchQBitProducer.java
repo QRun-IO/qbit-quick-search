@@ -328,12 +328,13 @@ public class QuickSearchQBitProducer implements QBitMetaDataProducer<QuickSearch
             }
          }
 
-         String         primaryKeyField = "id";
-         QTableMetaData table           = qInstance.getTable(tableName);
+         String         primaryKeyField        = "id";
+         String         basepullTimestampField = StringUtils.hasContent(annotation.basepullTimestampField()) ? annotation.basepullTimestampField() : null;
+         QTableMetaData table                  = qInstance.getTable(tableName);
          if(table != null)
          {
-            primaryKeyField = table.getPrimaryKeyField();
-            assertFieldsExist(table, searchableFields, annotation.basepullTimestampField());
+            primaryKeyField        = table.getPrimaryKeyField();
+            basepullTimestampField = resolveTimestampField(table, searchableFields, basepullTimestampField);
          }
 
          tables.add(new QuickSearchableTableConfig()
@@ -343,7 +344,7 @@ public class QuickSearchQBitProducer implements QBitMetaDataProducer<QuickSearch
             .withFieldWeights(fieldWeights)
             .withFieldIncludeLabels(fieldIncludeLabels)
             .withBasepullIntervalMinutes(annotation.basepullIntervalMinutes())
-            .withBasepullTimestampField(StringUtils.hasContent(annotation.basepullTimestampField()) ? annotation.basepullTimestampField() : null)
+            .withBasepullTimestampField(basepullTimestampField)
             .withEnabledByDefault(annotation.enabledByDefault()));
       }
 
@@ -378,11 +379,13 @@ public class QuickSearchQBitProducer implements QBitMetaDataProducer<QuickSearch
             fieldIncludeLabels.put(fieldConfig.getFieldName(), fieldConfig.getIncludeLabel() != null ? fieldConfig.getIncludeLabel() : false);
          }
 
-         String         primaryKeyField = "id";
-         QTableMetaData table           = qInstance.getTable(stc.getTableName());
+         String         primaryKeyField        = "id";
+         String         basepullTimestampField = stc.getBasepullTimestampField();
+         QTableMetaData table                  = qInstance.getTable(stc.getTableName());
          if(table != null)
          {
-            primaryKeyField = table.getPrimaryKeyField();
+            primaryKeyField        = table.getPrimaryKeyField();
+            basepullTimestampField = (basepullTimestampField != null && !table.getFields().containsKey(basepullTimestampField)) ? null : basepullTimestampField;
          }
 
          Integer basepullInterval = stc.getBasepullIntervalMinutes();
@@ -398,7 +401,7 @@ public class QuickSearchQBitProducer implements QBitMetaDataProducer<QuickSearch
             .withFieldWeights(fieldWeights)
             .withFieldIncludeLabels(fieldIncludeLabels)
             .withBasepullIntervalMinutes(basepullInterval)
-            .withBasepullTimestampField(stc.getBasepullTimestampField())
+            .withBasepullTimestampField(basepullTimestampField)
             .withEnabledByDefault(stc.getEnabledByDefault())
             .withRecordLabelFormat(stc.getRecordLabelFormat())
             .withRecordLabelFields(stc.getRecordLabelFields()));
@@ -412,7 +415,13 @@ public class QuickSearchQBitProducer implements QBitMetaDataProducer<QuickSearch
    /*******************************************************************************
     **
     *******************************************************************************/
-   private static void assertFieldsExist(QTableMetaData table, List<String> searchableFields, String basepullTimestampField) throws QException
+   /*******************************************************************************
+    ** Fail on missing searchable fields. A missing timestamp field disables
+    ** incremental basepull for the table (reconcile still covers it): the
+    ** default "modifyDate" is downgraded with a warning, an explicit other name
+    ** is an error.
+    *******************************************************************************/
+   private static String resolveTimestampField(QTableMetaData table, List<String> searchableFields, String basepullTimestampField) throws QException
    {
       List<String> missing = new ArrayList<>();
       for(String fieldName : searchableFields)
@@ -427,10 +436,16 @@ public class QuickSearchQBitProducer implements QBitMetaDataProducer<QuickSearch
          throw (new QException("Searchable field(s) " + missing + " do not exist on table [" + table.getName() + "]"));
       }
 
-      if(StringUtils.hasContent(basepullTimestampField) && !table.getFields().containsKey(basepullTimestampField))
+      if(basepullTimestampField != null && !table.getFields().containsKey(basepullTimestampField))
       {
+         if(QuickSearchQBitConfig.DEFAULT_BASEPULL_TIMESTAMP_FIELD.equals(basepullTimestampField))
+         {
+            LOG.warn("Table has no modifyDate field; incremental basepull is disabled for it (reconcile still covers it)", logPair("tableName", table.getName()));
+            return (null);
+         }
          throw (new QException("basepullTimestampField [" + basepullTimestampField + "] does not exist on table [" + table.getName() + "]"));
       }
+      return (basepullTimestampField);
    }
 
 

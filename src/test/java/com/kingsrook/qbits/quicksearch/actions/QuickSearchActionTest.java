@@ -35,6 +35,7 @@ import org.opensearch.client.opensearch.core.search.HitsMetadata;
 import org.opensearch.client.opensearch.core.search.TotalHits;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyCollection;
 import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.anyList;
 import static org.mockito.ArgumentMatchers.anyString;
@@ -402,13 +403,13 @@ class QuickSearchActionTest
    void testTableNameFilter_passedToClient() throws QException
    {
       SearchResponse<OpenSearchDocument> response = buildMockResponse(Collections.emptyList(), 0L);
-      when(mockClient.search(anyString(), anyString(), anyInt(), anyInt(), anyList())).thenReturn(response);
+      when(mockClient.search(anyString(), anyCollection(), anyInt(), anyInt(), anyList())).thenReturn(response);
 
       action.execute(new QuickSearchInput()
          .withSearchTerm("widget")
          .withTableName("products"));
 
-      verify(mockClient).search(anyString(), eq("products"), anyInt(), anyInt(), anyList());
+      verify(mockClient).search(anyString(), eq(List.of("products")), anyInt(), anyInt(), anyList());
    }
 
 
@@ -417,16 +418,16 @@ class QuickSearchActionTest
     ** null tableName is passed through to client.search() as null.
     *******************************************************************************/
    @Test
-   void testNullTableName_passedAsNullToClient() throws QException
+   void testNullTableName_searchesAllConfiguredTables() throws QException
    {
       SearchResponse<OpenSearchDocument> response = buildMockResponse(Collections.emptyList(), 0L);
-      when(mockClient.search(anyString(), isNull(), anyInt(), anyInt(), anyList())).thenReturn(response);
+      when(mockClient.search(anyString(), anyCollection(), anyInt(), anyInt(), anyList())).thenReturn(response);
 
       action.execute(new QuickSearchInput()
          .withSearchTerm("widget")
          .withTableName(null));
 
-      verify(mockClient).search(anyString(), isNull(), anyInt(), anyInt(), anyList());
+      verify(mockClient).search(anyString(), anyCollection(), anyInt(), anyInt(), anyList());
    }
 
 

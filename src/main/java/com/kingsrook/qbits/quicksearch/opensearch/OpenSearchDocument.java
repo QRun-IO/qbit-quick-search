@@ -38,6 +38,8 @@ public class OpenSearchDocument
    private Instant indexedAt;
    private Map<String, Object> fieldValues;
 
+   private transient Long version;
+
 
 
    /*******************************************************************************
@@ -170,6 +172,30 @@ public class OpenSearchDocument
     ** Returns the composite document ID used as the OpenSearch _id field.
     ** Excluded from JSON serialization to avoid including it in the document body.
     *******************************************************************************/
+   /*******************************************************************************
+    ** External version for optimistic indexing (epoch millis of the source
+    ** row's timestamp), or null to index unconditionally. Not stored in the
+    ** document body.
+    *******************************************************************************/
+   @JsonIgnore
+   public Long getVersion()
+   {
+      return (version);
+   }
+
+
+
+   /*******************************************************************************
+    ** Fluent setter for version
+    *******************************************************************************/
+   public OpenSearchDocument withVersion(Long version)
+   {
+      this.version = version;
+      return (this);
+   }
+
+
+
    @JsonIgnore
    public String getDocumentId()
    {

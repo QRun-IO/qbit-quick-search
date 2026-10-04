@@ -59,6 +59,7 @@ import com.kingsrook.qbits.quicksearch.publisher.IndexEventPublisher;
 public class QuickSearchQBitConfig implements QBitConfig
 {
    public static final String DEFAULT_ADMIN_PERMISSION_BASE_NAME = "quickSearchAdmin";
+   public static final String DEFAULT_BASEPULL_TIMESTAMP_FIELD   = "modifyDate";
 
    private static final Pattern INDEX_NAME_PATTERN = Pattern.compile("^[a-z0-9][a-z0-9_+.-]*$");
    private static final Set<String> AWS_SERVICE_NAMES = Set.of("es", "aoss");
@@ -360,7 +361,7 @@ public class QuickSearchQBitConfig implements QBitConfig
       }
 
       String timestampField = tableConfig.getBasepullTimestampField();
-      if(timestampField != null && !table.getFields().containsKey(timestampField))
+      if(timestampField != null && !DEFAULT_BASEPULL_TIMESTAMP_FIELD.equals(timestampField) && !table.getFields().containsKey(timestampField))
       {
          errors.add("basepullTimestampField [" + timestampField + "] does not exist on table [" + table.getName() + "]; set it to null to disable incremental basepull for that table");
       }

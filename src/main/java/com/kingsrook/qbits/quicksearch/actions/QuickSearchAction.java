@@ -88,7 +88,17 @@ public class QuickSearchAction
 
       LOG.debug("Executing quick search", "term", normalizedTerm, "tableName", input.getTableName(), "limit", limit, "offset", offset);
 
-      SearchResponse<OpenSearchDocument> response = client.search(normalizedTerm, input.getTableName(), limit, offset, tableConfigs);
+      List<String> tables = new ArrayList<>();
+      if(input.getTableName() != null)
+      {
+         tables.add(input.getTableName());
+      }
+      else if(tableConfigs != null)
+      {
+         tableConfigs.forEach(tc -> tables.add(tc.getTableName()));
+      }
+
+      SearchResponse<OpenSearchDocument> response = client.search(normalizedTerm, tables, limit, offset, tableConfigs);
 
       List<QuickSearchResult> results = new ArrayList<>();
 

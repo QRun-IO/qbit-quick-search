@@ -229,7 +229,7 @@ class QuickSearchOpenSearchClientTest
 
       try
       {
-         assertThatThrownBy(() -> client.search("hello", null, 10, 0, List.of()))
+         assertThatThrownBy(() -> client.search("hello", List.of(), 10, 0, List.of()))
             .isInstanceOf(QException.class)
             .hasMessageContaining("hello");
       }

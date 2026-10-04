@@ -24,6 +24,7 @@
       <opensearch.version>3.10.0</opensearch.version>
       <jacoco.version>0.8.15</jacoco.version>
       <opensearch.test.image>opensearchproject/opensearch:2.19.6</opensearch.test.image>
+      <aws.sdk.version>2.41.10</aws.sdk.version>
    </properties>
 
    <parent>
@@ -90,6 +91,22 @@
       <dependency>
          <groupId>com.fasterxml.jackson.datatype</groupId>
          <artifactId>jackson-datatype-jsr310</artifactId>
+      </dependency>
+
+      <!-- Only needed for authMode AWS_SIGV4 (Amazon OpenSearch Service with IAM). -->
+      <!-- Optional: hosts that use it declare them; the core modules already come  -->
+      <!-- through qqq-backend-core at the same version.                            -->
+      <dependency>
+         <groupId>software.amazon.awssdk</groupId>
+         <artifactId>apache-client</artifactId>
+         <version>${aws.sdk.version}</version>
+         <optional>true</optional>
+      </dependency>
+      <dependency>
+         <groupId>software.amazon.awssdk</groupId>
+         <artifactId>sts</artifactId>
+         <version>${aws.sdk.version}</version>
+         <optional>true</optional>
       </dependency>
 
       <dependency>

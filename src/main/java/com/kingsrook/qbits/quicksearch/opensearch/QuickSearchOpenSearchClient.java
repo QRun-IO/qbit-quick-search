@@ -18,29 +18,31 @@ package com.kingsrook.qbits.quicksearch.opensearch;
 
 
 import java.io.Closeable;
-import java.io.IOException;
 import java.time.Instant;
 import java.util.ArrayList;
+import java.util.Collection;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.SerializationFeature;
 import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule;
 import com.kingsrook.qqq.backend.core.exceptions.QException;
 import com.kingsrook.qqq.backend.core.logging.QLogger;
 import com.kingsrook.qbits.quicksearch.QuickSearchQBitConfig;
 import com.kingsrook.qbits.quicksearch.QuickSearchableTableConfig;
-import org.apache.hc.client5.http.auth.AuthScope;
-import org.apache.hc.client5.http.auth.UsernamePasswordCredentials;
-import org.apache.hc.client5.http.impl.auth.BasicCredentialsProvider;
-import org.apache.hc.core5.http.HttpHost;
 import org.opensearch.client.json.JsonData;
-import org.opensearch.client.json.jackson.JacksonJsonpMapper;
 import org.opensearch.client.opensearch.OpenSearchClient;
 import org.opensearch.client.opensearch._types.Conflicts;
 import org.opensearch.client.opensearch._types.FieldValue;
+import org.opensearch.client.opensearch._types.OpenSearchException;
 import org.opensearch.client.opensearch._types.Refresh;
+import org.opensearch.client.opensearch._types.VersionType;
+import org.opensearch.client.opensearch._types.mapping.DynamicTemplate;
+import org.opensearch.client.opensearch._types.mapping.TypeMapping;
 import org.opensearch.client.opensearch._types.query_dsl.BoolQuery;
 import org.opensearch.client.opensearch._types.query_dsl.MultiMatchQuery;
+import org.opensearch.client.opensearch._types.query_dsl.Operator;
 import org.opensearch.client.opensearch._types.query_dsl.Query;
 import org.opensearch.client.opensearch._types.query_dsl.TermQuery;
 import org.opensearch.client.opensearch.core.BulkRequest;
@@ -59,215 +61,350 @@ import org.opensearch.client.opensearch.core.search.Highlight;
 import org.opensearch.client.opensearch.core.search.HighlightField;
 import org.opensearch.client.opensearch.indices.CreateIndexRequest;
 import org.opensearch.client.opensearch.indices.ExistsRequest;
-import org.opensearch.client.transport.httpclient5.ApacheHttpClient5Transport;
-import org.opensearch.client.transport.httpclient5.ApacheHttpClient5TransportBuilder;
+import org.opensearch.client.opensearch.indices.GetMappingResponse;
+import org.opensearch.client.transport.OpenSearchTransport;
+import static com.kingsrook.qqq.backend.core.logging.LogUtils.logPair;
 
 
 /*******************************************************************************
- ** OpenSearch client wrapper for the Quick Search QBit.
+ ** All OpenSearch operations for the Quick Search QBit.
  **
- ** Manages the lifecycle of an OpenSearchClient with optional SSL and basic-auth
- ** support. Provides helpers for index creation with edge-ngram mappings, single
- ** and bulk document indexing, deletion, and boosted multi-match search.
+ ** The configured opensearchIndexName is an alias over a physical index named
+ ** "{alias}-v{mappingVersion}-{epochSeconds}", so a full rebuild can index into a
+ ** fresh physical index and swap the alias without a search blackout. A
+ ** pre-1.0 concrete index with the alias's name is used as-is and reported as
+ ** needing a rebuild.
+ **
+ ** Mapping (version 2): searchableText is indexed with an edge-ngram analyzer
+ ** and searched with a plain lowercase analyzer, so query terms are not
+ ** n-grammed; fieldValues.* are mapped through a dynamic template as text with
+ ** the same analyzers (never numbers or dates), so tables cannot conflict.
+ **
+ ** Every OpenSearch failure surfaces as a QException.
  *******************************************************************************/
 public class QuickSearchOpenSearchClient implements Closeable
 {
    private static final QLogger LOG = QLogger.getLogger(QuickSearchOpenSearchClient.class);
 
-   private final OpenSearchClient          client;
-   private final ApacheHttpClient5Transport transport;
-   private final String                    indexName;
-   private       Boolean                   closed = false;
+   public static final int    MAPPING_VERSION      = 2;
+   public static final String META_MAPPING_VERSION = "quickSearchMappingVersion";
+   public static final String INDEX_ANALYZER       = "quick_search_analyzer";
+   public static final String SEARCH_ANALYZER      = "quick_search_search_analyzer";
+   public static final int    MAX_RESULT_WINDOW    = 10_000;
+
+   private final OpenSearchClient    client;
+   private final OpenSearchTransport transport;
+   private final String              indexName;
+   private final int                 maxBulkRequestBytes;
+   private final ObjectMapper        sizingMapper;
+
+   private volatile Boolean mappingOutdated = false;
+   private          Boolean closed          = false;
 
 
 
    /*******************************************************************************
-    ** Construct a new client from the provided config.
-    **
-    ** Creates an ApacheHttpClient5Transport pointed at the configured host/port.
-    ** When both username and password are non-null, a BasicCredentialsProvider
-    ** is configured for HTTP basic authentication.  A JavaTimeModule-aware
-    ** ObjectMapper is used for JSON serialization.
-    **
-    ** @param config the QBit configuration supplying connection details
-    ** @throws QException if transport construction fails
+    ** Build a client for the config. Does not contact the cluster.
     *******************************************************************************/
    public QuickSearchOpenSearchClient(QuickSearchQBitConfig config) throws QException
    {
-      try
-      {
-         String   scheme   = Boolean.TRUE.equals(config.getUseSsl()) ? "https" : "http";
-         HttpHost httpHost = new HttpHost(scheme, config.getOpensearchHost(), config.getOpensearchPort());
-
-         ObjectMapper objectMapper = new ObjectMapper();
-         objectMapper.registerModule(new JavaTimeModule());
-         objectMapper.disable(com.fasterxml.jackson.databind.SerializationFeature.WRITE_DATES_AS_TIMESTAMPS);
-
-         ApacheHttpClient5TransportBuilder builder = ApacheHttpClient5TransportBuilder
-            .builder(httpHost)
-            .setMapper(new JacksonJsonpMapper(objectMapper));
-
-         String username = config.getOpensearchUsername();
-         String password = config.getOpensearchPassword();
-
-         BasicCredentialsProvider credentialsProvider = null;
-         if(username != null && password != null)
-         {
-            credentialsProvider = new BasicCredentialsProvider();
-            credentialsProvider.setCredentials(
-               new AuthScope(httpHost),
-               new UsernamePasswordCredentials(username, password.toCharArray()));
-         }
-
-         BasicCredentialsProvider finalCredentialsProvider = credentialsProvider;
-         builder.setHttpClientConfigCallback(httpClientBuilder ->
-         {
-            ///////////////////////////////////////////////////////////////////////
-            // httpclient5 5.6+ decompresses gzip responses itself but leaves    //
-            // the Content-Encoding header, so the OpenSearch transport would    //
-            // gunzip the body a second time and fail.  Let the transport alone //
-            // handle compression.                                               //
-            ///////////////////////////////////////////////////////////////////////
-            httpClientBuilder.disableContentCompression();
-
-            if(finalCredentialsProvider != null)
-            {
-               httpClientBuilder.setDefaultCredentialsProvider(finalCredentialsProvider);
-            }
-            return (httpClientBuilder);
-         });
-
-         transport = builder.build();
-         client    = new OpenSearchClient(transport);
-         indexName = config.getOpensearchIndexName();
-      }
-      catch(Exception e)
-      {
-         throw new QException("Failed to create OpenSearch transport: " + e.getMessage(), e);
-      }
+      this.transport           = OpenSearchTransportFactory.build(config);
+      this.client              = new OpenSearchClient(transport);
+      this.indexName           = config.getOpensearchIndexName();
+      this.maxBulkRequestBytes = config.getMaxBulkRequestBytes() == null ? 5 * 1024 * 1024 : config.getMaxBulkRequestBytes();
+      this.sizingMapper        = new ObjectMapper().registerModule(new JavaTimeModule()).disable(SerializationFeature.WRITE_DATES_AS_TIMESTAMPS);
    }
 
 
 
    /*******************************************************************************
-    ** Ensure the index exists, creating it with explicit mappings if needed.
-    **
-    ** Uses a custom edge-ngram analyzer (quick_search_analyzer) with min=2 max=20.
-    ** Field mappings: sourceTable and recordId as keyword; recordLabel as text;
-    ** searchableText as text with the custom analyzer; indexedAt as date;
-    ** fieldValues as a dynamic object.
-    **
-    ** @throws QException if the OpenSearch call fails
+    ** Make sure the alias (or a legacy concrete index) exists. Creates a new
+    ** physical index with the current mapping and the alias when nothing exists.
+    ** When an index exists with an older mapping, remembers that a rebuild is
+    ** needed (see {@link #isMappingOutdated()}).
     *******************************************************************************/
    public void ensureIndexExists() throws QException
    {
       try
       {
-         boolean exists = client.indices().exists(ExistsRequest.of(r -> r.index(indexName))).value();
-
-         if(exists)
+         if(client.indices().exists(ExistsRequest.of(r -> r.index(indexName))).value())
          {
-            LOG.info("OpenSearch index already exists", "indexName", indexName);
+            mappingOutdated = readMappingVersion() < MAPPING_VERSION;
+            if(mappingOutdated)
+            {
+               LOG.warn("OpenSearch index has an older mapping; run a full reindex to rebuild it", logPair("indexName", indexName), logPair("currentMappingVersion", MAPPING_VERSION));
+            }
+            else
+            {
+               LOG.info("OpenSearch index already exists", logPair("indexName", indexName));
+            }
             return;
          }
 
-         client.indices().create(CreateIndexRequest.of(r -> r
-            .index(indexName)
-            .settings(s -> s
-               .analysis(a -> a
-                  .analyzer("quick_search_analyzer", an -> an
-                     .custom(c -> c
-                        .tokenizer("standard")
-                        .filter("lowercase", "edge_ngram_filter")))
-                  .filter("edge_ngram_filter", f -> f
-                     .definition(d -> d
-                        .edgeNgram(en -> en
-                           .minGram(2)
-                           .maxGram(20))))))
-            .mappings(m -> m
-               .properties("sourceTable", p -> p.keyword(k -> k))
-               .properties("recordId", p -> p.keyword(k -> k))
-               .properties("recordLabel", p -> p.text(t -> t))
-               .properties("searchableText", p -> p.text(t -> t.analyzer("quick_search_analyzer")))
-               .properties("indexedAt", p -> p.date(d -> d))
-               .properties("fieldValues", p -> p.object(o -> o)))));
-
-
-         LOG.info("Created OpenSearch index", "indexName", indexName);
+         String physicalIndex = newPhysicalIndexName();
+         createPhysicalIndex(physicalIndex);
+         client.indices().updateAliases(u -> u.actions(a -> a.add(ad -> ad.index(physicalIndex).alias(indexName))));
+         mappingOutdated = false;
+         LOG.info("Created OpenSearch index", logPair("indexName", indexName), logPair("physicalIndex", physicalIndex));
       }
-      catch(IOException e)
+      catch(OpenSearchException | java.io.IOException e)
       {
-         throw new QException("Failed to ensure index exists [" + indexName + "]: " + e.getMessage(), e);
+         throw wrap("Failed to ensure index exists [" + indexName + "]", e);
       }
    }
 
 
 
    /*******************************************************************************
-    ** Index a single document using its composite document ID as the _id.
+    ** Whether the live index was created with an older mapping than this
+    ** client writes. A full reindex of all tables rebuilds it.
+    *******************************************************************************/
+   public boolean isMappingOutdated()
+   {
+      return (Boolean.TRUE.equals(mappingOutdated));
+   }
+
+
+
+   /*******************************************************************************
+    ** Name for a fresh physical index behind the alias.
+    *******************************************************************************/
+   public String newPhysicalIndexName()
+   {
+      return (indexName + "-v" + MAPPING_VERSION + "-" + Instant.now().getEpochSecond());
+   }
+
+
+
+   /*******************************************************************************
+    ** Create a physical index with the current settings and mapping (no alias).
+    *******************************************************************************/
+   public void createPhysicalIndex(String physicalIndex) throws QException
+   {
+      try
+      {
+         client.indices().create(CreateIndexRequest.of(r -> r
+            .index(physicalIndex)
+            .settings(s -> s
+               .analysis(a -> a
+                  .analyzer(INDEX_ANALYZER, an -> an.custom(c -> c.tokenizer("standard").filter("lowercase", "edge_ngram_filter")))
+                  .analyzer(SEARCH_ANALYZER, an -> an.custom(c -> c.tokenizer("standard").filter("lowercase")))
+                  .filter("edge_ngram_filter", f -> f.definition(d -> d.edgeNgram(en -> en.minGram(2).maxGram(20))))))
+            .mappings(buildMapping())));
+      }
+      catch(OpenSearchException | java.io.IOException e)
+      {
+         throw wrap("Failed to create index [" + physicalIndex + "]", e);
+      }
+   }
+
+
+
+   /*******************************************************************************
     **
-    ** @param doc the document to index
-    ** @throws QException if the OpenSearch call fails
+    *******************************************************************************/
+   private TypeMapping buildMapping()
+   {
+      DynamicTemplate fieldValuesAsText = DynamicTemplate.of(t -> t
+         .pathMatch("fieldValues.*")
+         .mapping(p -> p.text(tx -> tx.analyzer(INDEX_ANALYZER).searchAnalyzer(SEARCH_ANALYZER))));
+
+      return (TypeMapping.of(m -> m
+         .meta(META_MAPPING_VERSION, JsonData.of(MAPPING_VERSION))
+         .dateDetection(false)
+         .numericDetection(false)
+         .dynamicTemplates(Map.of("fieldValuesAsText", fieldValuesAsText))
+         .properties("sourceTable", p -> p.keyword(k -> k))
+         .properties("recordId", p -> p.keyword(k -> k))
+         .properties("recordLabel", p -> p.text(t -> t.analyzer(INDEX_ANALYZER).searchAnalyzer(SEARCH_ANALYZER)))
+         .properties("searchableText", p -> p.text(t -> t.analyzer(INDEX_ANALYZER).searchAnalyzer(SEARCH_ANALYZER)))
+         .properties("indexedAt", p -> p.date(d -> d))
+         .properties("fieldValues", p -> p.object(o -> o))));
+   }
+
+
+
+   /*******************************************************************************
+    ** Read quickSearchMappingVersion from the live mapping's _meta; 1 when
+    ** absent (a pre-1.0 index).
+    *******************************************************************************/
+   int readMappingVersion() throws java.io.IOException
+   {
+      GetMappingResponse response = client.indices().getMapping(g -> g.index(indexName));
+      int                version  = 1;
+      for(var record : response.result().values())
+      {
+         if(record.mappings() != null && record.mappings().meta() != null && record.mappings().meta().containsKey(META_MAPPING_VERSION))
+         {
+            version = Math.max(version, record.mappings().meta().get(META_MAPPING_VERSION).to(Integer.class));
+         }
+      }
+      return (version);
+   }
+
+
+
+   /*******************************************************************************
+    ** Physical indexes currently behind the alias (empty for a legacy concrete
+    ** index).
+    *******************************************************************************/
+   public Set<String> getPhysicalIndexes() throws QException
+   {
+      try
+      {
+         if(!client.indices().existsAlias(e -> e.name(indexName)).value())
+         {
+            return (Set.of());
+         }
+         return (client.indices().getAlias(g -> g.name(indexName)).result().keySet());
+      }
+      catch(OpenSearchException | java.io.IOException e)
+      {
+         throw wrap("Failed to read alias [" + indexName + "]", e);
+      }
+   }
+
+
+
+   /*******************************************************************************
+    ** Atomically point the alias at newPhysicalIndex, then delete the indexes it
+    ** pointed at before. A legacy concrete index with the alias's name is
+    ** deleted first, since an alias cannot share its name.
+    *******************************************************************************/
+   public void swapAliasTo(String newPhysicalIndex) throws QException
+   {
+      try
+      {
+         Set<String> previous = getPhysicalIndexes();
+
+         if(previous.isEmpty() && client.indices().exists(ExistsRequest.of(r -> r.index(indexName))).value())
+         {
+            client.indices().delete(d -> d.index(indexName));
+            client.indices().updateAliases(u -> u.actions(a -> a.add(ad -> ad.index(newPhysicalIndex).alias(indexName))));
+         }
+         else
+         {
+            client.indices().updateAliases(u ->
+            {
+               u.actions(a -> a.add(ad -> ad.index(newPhysicalIndex).alias(indexName)));
+               for(String old : previous)
+               {
+                  u.actions(a -> a.remove(rm -> rm.index(old).alias(indexName)));
+               }
+               return (u);
+            });
+            for(String old : previous)
+            {
+               if(!old.equals(newPhysicalIndex))
+               {
+                  client.indices().delete(d -> d.index(old));
+               }
+            }
+         }
+
+         mappingOutdated = false;
+         LOG.info("Swapped OpenSearch alias", logPair("alias", indexName), logPair("newPhysicalIndex", newPhysicalIndex), logPair("removed", previous));
+      }
+      catch(OpenSearchException | java.io.IOException e)
+      {
+         throw wrap("Failed to swap alias [" + indexName + "] to [" + newPhysicalIndex + "]", e);
+      }
+   }
+
+
+
+   /*******************************************************************************
+    ** Delete a physical index (cleanup after a failed rebuild).
+    *******************************************************************************/
+   public void deletePhysicalIndex(String physicalIndex) throws QException
+   {
+      try
+      {
+         if(client.indices().exists(ExistsRequest.of(r -> r.index(physicalIndex))).value())
+         {
+            client.indices().delete(d -> d.index(physicalIndex));
+         }
+      }
+      catch(OpenSearchException | java.io.IOException e)
+      {
+         throw wrap("Failed to delete index [" + physicalIndex + "]", e);
+      }
+   }
+
+
+
+   /*******************************************************************************
+    ** Index a single document into the alias.
     *******************************************************************************/
    public void indexDocument(OpenSearchDocument doc) throws QException
    {
       try
       {
-         client.index(IndexRequest.of(r -> r
-            .index(indexName)
-            .id(doc.getDocumentId())
-            .document(doc)));
+         client.index(IndexRequest.of(r -> r.index(indexName).id(doc.getDocumentId()).document(doc)));
       }
-      catch(IOException e)
+      catch(OpenSearchException | java.io.IOException e)
       {
-         throw new QException("Failed to index document [" + doc.getDocumentId() + "]: " + e.getMessage(), e);
+         throw wrap("Failed to index document [" + doc.getDocumentId() + "]", e);
       }
    }
 
 
 
    /*******************************************************************************
-    ** Bulk-index a list of documents in batches of at most batchSize.
-    **
-    ** An empty or null list is a no-op that returns an empty BulkIndexResult.
-    ** Documents within each batch are collected into a BulkRequest. Per-item
-    ** errors are recorded via BulkIndexResult.addFailure(); successes via
-    ** addSuccess().
-    **
-    ** @param docs      the documents to index; null is treated as empty
-    ** @param batchSize maximum number of documents per bulk request
-    ** @return accumulated result across all batches
-    ** @throws QException if any batch request fails at the transport level
+    ** Bulk-index into the alias.
     *******************************************************************************/
    public BulkIndexResult indexDocuments(List<OpenSearchDocument> docs, int batchSize) throws QException
    {
-      BulkIndexResult result = new BulkIndexResult();
+      return (indexDocuments(indexName, docs, batchSize));
+   }
 
+
+
+   /*******************************************************************************
+    ** Bulk-index into a named index (alias or physical). Batches are cut at
+    ** batchSize documents or maxBulkRequestBytes, whichever comes first.
+    ** Documents with a version are written with version_type=external_gte so a
+    ** stale write (older source timestamp) is rejected, not applied; rejected
+    ** items are counted as skipped, not failures.
+    *******************************************************************************/
+   public BulkIndexResult indexDocuments(String targetIndex, List<OpenSearchDocument> docs, int batchSize) throws QException
+   {
+      BulkIndexResult result = new BulkIndexResult();
       if(docs == null || docs.isEmpty())
       {
          return (result);
       }
 
-      int total = docs.size();
+      List<BulkOperation> operations = new ArrayList<>();
+      long                bytes      = 0;
 
-      for(int start = 0; start < total; start += batchSize)
+      for(OpenSearchDocument doc : docs)
       {
-         int                      end   = Math.min(start + batchSize, total);
-         List<OpenSearchDocument> batch = docs.subList(start, end);
+         String docId = doc.getDocumentId();
+         Long   version = doc.getVersion();
 
-         List<BulkOperation> operations = new ArrayList<>();
-
-         for(OpenSearchDocument doc : batch)
+         operations.add(BulkOperation.of(o -> o.index(IndexOperation.of(i ->
          {
-            String docId = doc.getDocumentId();
+            i.index(targetIndex).id(docId).document(doc);
+            if(version != null)
+            {
+               i.version(version).versionType(VersionType.ExternalGte);
+            }
+            return (i);
+         }))));
 
-            operations.add(BulkOperation.of(o -> o
-               .index(IndexOperation.of(i -> i
-                  .index(indexName)
-                  .id(docId)
-                  .document(doc)))));
+         bytes += estimateBytes(doc);
+
+         if(operations.size() >= batchSize || bytes >= maxBulkRequestBytes)
+         {
+            executeBulk(operations, result, "index");
+            operations = new ArrayList<>();
+            bytes      = 0;
          }
+      }
 
+      if(!operations.isEmpty())
+      {
          executeBulk(operations, result, "index");
       }
 
@@ -277,42 +414,42 @@ public class QuickSearchOpenSearchClient implements Closeable
 
 
    /*******************************************************************************
-    ** Bulk-delete documents by their composite document IDs, in batches of at
-    ** most batchSize.
     **
-    ** Every document is attempted; one failing item does not stop the others.
-    ** A document that is not in the index counts as a success, because it is
-    ** already absent. Per-item errors are recorded via addFailure().
-    **
-    ** @param documentIds the composite document IDs; null is treated as empty
-    ** @param batchSize   maximum number of documents per bulk request
-    ** @return accumulated result across all batches
-    ** @throws QException if any batch request fails at the transport level
+    *******************************************************************************/
+   private long estimateBytes(OpenSearchDocument doc)
+   {
+      try
+      {
+         return (sizingMapper.writeValueAsBytes(doc).length + 128);
+      }
+      catch(Exception e)
+      {
+         return (1024);
+      }
+   }
+
+
+
+   /*******************************************************************************
+    ** Bulk-delete documents by id from the alias. A missing document counts as
+    ** success.
     *******************************************************************************/
    public BulkIndexResult deleteDocuments(List<String> documentIds, int batchSize) throws QException
    {
       BulkIndexResult result = new BulkIndexResult();
-
       if(documentIds == null || documentIds.isEmpty())
       {
          return (result);
       }
 
       int total = documentIds.size();
-
       for(int start = 0; start < total; start += batchSize)
       {
-         List<String>        batch      = documentIds.subList(start, Math.min(start + batchSize, total));
          List<BulkOperation> operations = new ArrayList<>();
-
-         for(String documentId : batch)
+         for(String documentId : documentIds.subList(start, Math.min(start + batchSize, total)))
          {
-            operations.add(BulkOperation.of(o -> o
-               .delete(DeleteOperation.of(d -> d
-                  .index(indexName)
-                  .id(documentId)))));
+            operations.add(BulkOperation.of(o -> o.delete(DeleteOperation.of(d -> d.index(indexName).id(documentId)))));
          }
-
          executeBulk(operations, result, "delete");
       }
 
@@ -322,101 +459,107 @@ public class QuickSearchOpenSearchClient implements Closeable
 
 
    /*******************************************************************************
-    ** Send one bulk request and record each item's outcome in result.
     **
-    ** @param operations    the bulk operations to send
-    ** @param result        accumulator for per-item successes and failures
-    ** @param operationName used in the transport-failure message
-    ** @throws QException if the request fails at the transport level
     *******************************************************************************/
    private void executeBulk(List<BulkOperation> operations, BulkIndexResult result, String operationName) throws QException
    {
       try
       {
          BulkResponse response = client.bulk(BulkRequest.of(r -> r.operations(operations)));
-
          for(BulkResponseItem item : response.items())
          {
-            if(item.error() != null)
-            {
-               result.addFailure(item.id() + ": " + item.error().reason());
-            }
-            else
+            if(item.error() == null)
             {
                result.addSuccess();
             }
+            else if(item.status() == 409)
+            {
+               ////////////////////////////////////////////////////////////////////
+               // a newer version of this document is already indexed; keep it  //
+               ////////////////////////////////////////////////////////////////////
+               result.addSkipped();
+            }
+            else
+            {
+               result.addFailure(item.id() + ": " + item.error().reason());
+            }
          }
       }
-      catch(IOException e)
+      catch(OpenSearchException | java.io.IOException e)
       {
-         throw new QException("Bulk " + operationName + " request failed: " + e.getMessage(), e);
+         throw wrap("Bulk " + operationName + " request failed", e);
       }
    }
 
 
 
    /*******************************************************************************
-    ** Delete a single document identified by sourceTable and recordId.
-    **
-    ** @param sourceTable the source table component of the document ID
-    ** @param recordId    the record ID component of the document ID
-    ** @throws QException if the OpenSearch call fails
+    ** Delete one document.
     *******************************************************************************/
    public void deleteDocument(String sourceTable, String recordId) throws QException
    {
       String documentId = OpenSearchDocument.buildDocumentId(sourceTable, recordId);
-
       try
       {
-         client.delete(DeleteRequest.of(r -> r
-            .index(indexName)
-            .id(documentId)));
+         client.delete(DeleteRequest.of(r -> r.index(indexName).id(documentId)));
       }
-      catch(IOException e)
+      catch(OpenSearchException | java.io.IOException e)
       {
-         throw new QException("Failed to delete document [" + documentId + "]: " + e.getMessage(), e);
+         throw wrap("Failed to delete document [" + documentId + "]", e);
       }
    }
 
 
 
    /*******************************************************************************
-    ** Delete all documents whose sourceTable field matches the given table name.
-    **
-    ** @param sourceTable the table name to delete all documents for
-    ** @throws QException if the OpenSearch call fails
+    ** Delete every document of a table. Version conflicts (a concurrent write)
+    ** proceed rather than failing the request.
     *******************************************************************************/
-   public void deleteDocumentsForTable(String sourceTable) throws QException
+   public Long deleteDocumentsForTable(String sourceTable) throws QException
    {
       try
       {
-         client.deleteByQuery(DeleteByQueryRequest.of(r -> r
+         DeleteByQueryResponse response = client.deleteByQuery(DeleteByQueryRequest.of(r -> r
             .index(indexName)
-            .query(Query.of(q -> q
-               .term(TermQuery.of(t -> t
-                  .field("sourceTable")
-                  .value(FieldValue.of(sourceTable))))))));
+            .conflicts(Conflicts.Proceed)
+            .refresh(Refresh.True)
+            .query(Query.of(q -> q.term(TermQuery.of(t -> t.field("sourceTable").value(FieldValue.of(sourceTable))))))));
+         return (response.deleted() == null ? 0L : response.deleted());
       }
-      catch(IOException e)
+      catch(OpenSearchException | java.io.IOException e)
       {
-         throw new QException("Failed to delete documents for table [" + sourceTable + "]: " + e.getMessage(), e);
+         throw wrap("Failed to delete documents for table [" + sourceTable + "]", e);
       }
    }
 
 
 
    /*******************************************************************************
-    ** Delete a table's documents that were not (re-)indexed at or after cutoff,
-    ** including any that have no indexedAt value.
-    **
-    ** Only documents visible to search are considered, so refresh the index
-    ** first. Documents changed while the delete runs are skipped (version
-    ** conflicts proceed), since they were just re-indexed.
-    **
-    ** @param sourceTable the table whose documents to consider
-    ** @param cutoff      documents indexed before this instant are deleted
-    ** @return the number of documents deleted
-    ** @throws QException if the OpenSearch call fails
+    ** Delete every document whose sourceTable is not in the given set (tables
+    ** removed from the configuration).
+    *******************************************************************************/
+   public Long deleteDocumentsForTablesNotIn(Collection<String> keepTables) throws QException
+   {
+      try
+      {
+         List<FieldValue> values = keepTables.stream().map(FieldValue::of).toList();
+         DeleteByQueryResponse response = client.deleteByQuery(DeleteByQueryRequest.of(r -> r
+            .index(indexName)
+            .conflicts(Conflicts.Proceed)
+            .refresh(Refresh.True)
+            .query(Query.of(q -> q.bool(b -> b.mustNot(mn -> mn.terms(t -> t.field("sourceTable").terms(tv -> tv.value(values)))))))));
+         return (response.deleted() == null ? 0L : response.deleted());
+      }
+      catch(OpenSearchException | java.io.IOException e)
+      {
+         throw wrap("Failed to delete documents of removed tables", e);
+      }
+   }
+
+
+
+   /*******************************************************************************
+    ** Delete a table's documents not (re-)indexed at or after cutoff.
     *******************************************************************************/
    public Long deleteDocumentsIndexedBefore(String sourceTable, Instant cutoff) throws QException
    {
@@ -426,107 +569,100 @@ public class QuickSearchOpenSearchClient implements Closeable
             .index(indexName)
             .conflicts(Conflicts.Proceed)
             .refresh(Refresh.True)
-            .query(Query.of(q -> q
-               .bool(b -> b
-                  .filter(f -> f
-                     .term(t -> t
-                        .field("sourceTable")
-                        .value(FieldValue.of(sourceTable))))
-                  .mustNot(mn -> mn
-                     .range(rg -> rg
-                        .field("indexedAt")
-                        .gte(JsonData.of(cutoff.toString())))))))));
-
+            .query(Query.of(q -> q.bool(b -> b
+               .filter(f -> f.term(t -> t.field("sourceTable").value(FieldValue.of(sourceTable))))
+               .mustNot(mn -> mn.range(rg -> rg.field("indexedAt").gte(JsonData.of(cutoff.toString())))))))));
          return (response.deleted() == null ? 0L : response.deleted());
       }
-      catch(IOException e)
+      catch(OpenSearchException | java.io.IOException e)
       {
-         throw new QException("Failed to delete stale documents for table [" + sourceTable + "]: " + e.getMessage(), e);
+         throw wrap("Failed to delete stale documents for table [" + sourceTable + "]", e);
       }
    }
 
 
 
    /*******************************************************************************
-    ** Execute a boosted multi-match search across the index.
-    **
-    ** Builds a bool query with:
-    ** - a must multi_match on searchableText
-    ** - per-table should clauses on fieldValues.{fieldName} using configured weights
-    ** An optional term filter on sourceTable is applied when tableName is non-null.
-    ** Pagination via from/size. Highlights on searchableText.
-    **
-    ** @param searchTerm   the user-supplied search string
-    ** @param tableName    when non-null, restricts results to this source table
-    ** @param limit        maximum number of hits to return
-    ** @param offset       number of hits to skip (for pagination)
-    ** @param tableConfigs per-table config providing searchable fields and weights
-    ** @return raw SearchResponse from OpenSearch
-    ** @throws QException if the OpenSearch call fails
+    ** Count a table's documents.
     *******************************************************************************/
-   public SearchResponse<OpenSearchDocument> search(String searchTerm, String tableName, int limit, int offset, List<QuickSearchableTableConfig> tableConfigs) throws QException
+   public Long countDocumentsForTable(String sourceTable) throws QException
    {
       try
       {
-         List<Query> shouldClauses = buildFieldBoostQueries(searchTerm, tableConfigs);
+         return (client.count(c -> c.index(indexName).query(q -> q.term(t -> t.field("sourceTable").value(FieldValue.of(sourceTable))))).count());
+      }
+      catch(OpenSearchException | java.io.IOException e)
+      {
+         throw wrap("Failed to count documents for table [" + sourceTable + "]", e);
+      }
+   }
 
-         Query mustQuery = Query.of(q -> q
-            .multiMatch(MultiMatchQuery.of(mm -> mm
-               .query(searchTerm)
-               .fields("searchableText"))));
+
+
+   /*******************************************************************************
+    ** Whether the cluster answers and the alias (or index) exists.
+    *******************************************************************************/
+   public boolean isHealthy()
+   {
+      try
+      {
+         return (client.indices().exists(ExistsRequest.of(r -> r.index(indexName))).value());
+      }
+      catch(Exception e)
+      {
+         LOG.debug("Quick Search health check failed", e);
+         return (false);
+      }
+   }
+
+
+
+   /*******************************************************************************
+    ** Boosted multi-match search over the allowed tables only.
+    **
+    ** The must clause matches every term of the query (operator AND) in
+    ** searchableText; per-field should clauses boost by configured weight and
+    ** are lenient, so a non-text value can never fail the request. Only tables
+    ** in allowedTables are searched; an empty set returns no hits.
+    *******************************************************************************/
+   public SearchResponse<OpenSearchDocument> search(String searchTerm, Collection<String> allowedTables, int limit, int offset, List<QuickSearchableTableConfig> tableConfigs) throws QException
+   {
+      try
+      {
+         List<FieldValue> allowed = allowedTables.stream().map(FieldValue::of).toList();
 
          BoolQuery.Builder boolBuilder = new BoolQuery.Builder()
-            .must(mustQuery)
-            .should(shouldClauses);
+            .must(Query.of(q -> q.multiMatch(MultiMatchQuery.of(mm -> mm.query(searchTerm).fields("searchableText").operator(Operator.And)))))
+            .filter(Query.of(q -> q.terms(t -> t.field("sourceTable").terms(tv -> tv.value(allowed)))))
+            .should(buildFieldBoostQueries(searchTerm, tableConfigs, allowedTables));
 
-         if(tableName != null)
-         {
-            boolBuilder.filter(Query.of(q -> q
-               .term(TermQuery.of(t -> t
-                  .field("sourceTable")
-                  .value(FieldValue.of(tableName))))));
-         }
-
-         Query finalQuery = Query.of(q -> q.bool(boolBuilder.build()));
-
-         Highlight highlight = Highlight.of(h -> h
-            .fields("searchableText", HighlightField.of(hf -> hf)));
-
-         int capturedOffset = offset;
-         int capturedLimit  = limit;
+         Query     finalQuery = Query.of(q -> q.bool(boolBuilder.build()));
+         Highlight highlight  = Highlight.of(h -> h.fields("searchableText", HighlightField.of(hf -> hf)));
 
          SearchRequest request = SearchRequest.of(r -> r
             .index(indexName)
             .query(finalQuery)
             .highlight(highlight)
-            .from(capturedOffset)
-            .size(capturedLimit));
+            .trackTotalHits(t -> t.count(MAX_RESULT_WINDOW))
+            .from(offset)
+            .size(limit));
 
          return (client.search(request, OpenSearchDocument.class));
       }
-      catch(IOException e)
+      catch(OpenSearchException | java.io.IOException e)
       {
-         throw new QException("Search failed for term [" + searchTerm + "]: " + e.getMessage(), e);
+         throw wrap("Search failed for term [" + searchTerm + "]", e);
       }
    }
 
 
 
    /*******************************************************************************
-    ** Build should-clause boost queries from tableConfigs field weights.
     **
-    ** For each table config, emits a multi-match query for each field in
-    ** fieldWeights (if present) or searchableFields otherwise, targeting
-    ** fieldValues.{fieldName} with the configured boost.
-    **
-    ** @param searchTerm   the search string to match
-    ** @param tableConfigs the per-table configuration
-    ** @return list of boost queries, may be empty
     *******************************************************************************/
-   private List<Query> buildFieldBoostQueries(String searchTerm, List<QuickSearchableTableConfig> tableConfigs)
+   private List<Query> buildFieldBoostQueries(String searchTerm, List<QuickSearchableTableConfig> tableConfigs, Collection<String> allowedTables)
    {
       List<Query> queries = new ArrayList<>();
-
       if(tableConfigs == null)
       {
          return (queries);
@@ -534,31 +670,22 @@ public class QuickSearchOpenSearchClient implements Closeable
 
       for(QuickSearchableTableConfig tableConfig : tableConfigs)
       {
-         if(tableConfig.getFieldWeights() != null)
+         if(!allowedTables.contains(tableConfig.getTableName()))
          {
-            for(Map.Entry<String, Integer> entry : tableConfig.getFieldWeights().entrySet())
-            {
-               String fieldPath  = "fieldValues." + entry.getKey();
-               double boostValue = entry.getValue().doubleValue();
-
-               queries.add(Query.of(q -> q
-                  .multiMatch(MultiMatchQuery.of(mm -> mm
-                     .query(searchTerm)
-                     .fields(fieldPath)
-                     .boost((float) boostValue)))));
-            }
+            continue;
          }
-         else if(tableConfig.getSearchableFields() != null)
-         {
-            for(String field : tableConfig.getSearchableFields())
-            {
-               String fieldPath = "fieldValues." + field;
 
-               queries.add(Query.of(q -> q
-                  .multiMatch(MultiMatchQuery.of(mm -> mm
-                     .query(searchTerm)
-                     .fields(fieldPath)))));
-            }
+         Map<String, Integer> weights = tableConfig.getFieldWeights();
+         List<String>         fields  = tableConfig.getSearchableFields() == null ? List.of() : tableConfig.getSearchableFields();
+         for(String field : fields)
+         {
+            float boost = (weights == null || weights.get(field) == null) ? 1f : weights.get(field).floatValue();
+            queries.add(Query.of(q -> q.multiMatch(MultiMatchQuery.of(mm -> mm
+               .query(searchTerm)
+               .fields("fieldValues." + field)
+               .operator(Operator.And)
+               .lenient(true)
+               .boost(boost)))));
          }
       }
 
@@ -568,10 +695,7 @@ public class QuickSearchOpenSearchClient implements Closeable
 
 
    /*******************************************************************************
-    ** Force a refresh of the OpenSearch index, making all indexed documents
-    ** searchable immediately. Primarily used in tests.
-    **
-    ** @throws QException if the refresh call fails
+    ** Force a refresh so indexed documents are searchable now.
     *******************************************************************************/
    public void refreshIndex() throws QException
    {
@@ -579,27 +703,66 @@ public class QuickSearchOpenSearchClient implements Closeable
       {
          client.indices().refresh(r -> r.index(indexName));
       }
-      catch(IOException e)
+      catch(OpenSearchException | java.io.IOException e)
       {
-         throw new QException("Failed to refresh index [" + indexName + "]: " + e.getMessage(), e);
+         throw wrap("Failed to refresh index [" + indexName + "]", e);
       }
    }
 
 
 
    /*******************************************************************************
-    ** Close the underlying transport.
-    **
-    ** Safe to call multiple times; subsequent calls after the first are no-ops.
-    ** Exceptions during close are logged but not re-thrown.
+    ** Refresh a named physical index.
     *******************************************************************************/
+   public void refreshIndex(String physicalIndex) throws QException
+   {
+      try
+      {
+         client.indices().refresh(r -> r.index(physicalIndex));
+      }
+      catch(OpenSearchException | java.io.IOException e)
+      {
+         throw wrap("Failed to refresh index [" + physicalIndex + "]", e);
+      }
+   }
+
+
+
+   /*******************************************************************************
+    ** Getter for the configured alias name.
+    *******************************************************************************/
+   public String getIndexName()
+   {
+      return (indexName);
+   }
+
+
+
+   /*******************************************************************************
+    **
+    *******************************************************************************/
+   private static QException wrap(String message, Exception e)
+   {
+      if(e instanceof OpenSearchException openSearchException)
+      {
+         String reason = openSearchException.error() == null ? openSearchException.getMessage() : openSearchException.error().reason();
+         return (new QException(message + ": OpenSearch returned status " + openSearchException.status() + ": " + reason, e));
+      }
+      return (new QException(message + ": " + e.getMessage(), e));
+   }
+
+
+
+   /*******************************************************************************
+    ** Close the transport. Safe to call more than once.
+    *******************************************************************************/
+   @Override
    public void close()
    {
       if(Boolean.TRUE.equals(closed))
       {
          return;
       }
-
       closed = true;
 
       try
