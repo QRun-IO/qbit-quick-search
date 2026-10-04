@@ -13,44 +13,58 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+
 package com.kingsrook.qbits.quicksearch;
 
 
 import java.util.List;
+import com.kingsrook.qqq.backend.core.exceptions.QException;
+import com.kingsrook.qqq.backend.core.logging.QLogger;
 import com.kingsrook.qbits.quicksearch.opensearch.QuickSearchOpenSearchClient;
 import com.kingsrook.qbits.quicksearch.publisher.IndexEventPublisher;
 
 
 /*******************************************************************************
- ** Static holder for Quick Search QBit runtime state.
+ ** Deprecated static facade over {@link QuickSearchRuntime}.
  **
- ** Provides access to the active configuration, the OpenSearch client, the
- ** index-event publisher, and the list of tables discovered at startup.
+ ** Until 1.0 the QBit kept its live state in these static fields. The state now
+ ** lives on the produced QBit's runtime, resolved from QContext. The getters
+ ** here return an explicitly set static value when one exists (tests and
+ ** legacy hosts), otherwise they delegate to {@link QuickSearchRuntime#get()}.
  **
- ** Call clear() in test @AfterEach / @BeforeEach to reset all state.
+ ** @deprecated resolve state with {@link QuickSearchRuntime#get()}; this
+ ** facade will be removed in 1.1.
  *******************************************************************************/
+@Deprecated
 public class QuickSearchQBitContext
 {
-   private static volatile QuickSearchQBitConfig             config;
-   private static volatile List<QuickSearchableTableConfig>  discoveredTables;
-   private static volatile QuickSearchOpenSearchClient       client;
-   private static volatile IndexEventPublisher               publisher;
+   private static final QLogger LOG = QLogger.getLogger(QuickSearchQBitContext.class);
+
+   private static volatile QuickSearchQBitConfig            config;
+   private static volatile List<QuickSearchableTableConfig> discoveredTables;
+   private static volatile QuickSearchOpenSearchClient      client;
+   private static volatile IndexEventPublisher              publisher;
 
 
 
-   /***************************************************************************
-    ** Getter for config
-    ***************************************************************************/
+   /*******************************************************************************
+    ** Get the config: the static override, else the resolved runtime's config.
+    *******************************************************************************/
    public static QuickSearchQBitConfig getConfig()
    {
-      return config;
+      if(config != null)
+      {
+         return (config);
+      }
+      QuickSearchRuntime runtime = QuickSearchRuntime.get();
+      return (runtime == null ? null : runtime.getConfig());
    }
 
 
 
-   /***************************************************************************
-    ** Setter for config
-    ***************************************************************************/
+   /*******************************************************************************
+    ** Set a static config override.
+    *******************************************************************************/
    public static void setConfig(QuickSearchQBitConfig config)
    {
       QuickSearchQBitContext.config = config;
@@ -58,19 +72,24 @@ public class QuickSearchQBitContext
 
 
 
-   /***************************************************************************
-    ** Getter for discoveredTables
-    ***************************************************************************/
+   /*******************************************************************************
+    ** Get the discovered tables: the static override, else the runtime's.
+    *******************************************************************************/
    public static List<QuickSearchableTableConfig> getDiscoveredTables()
    {
-      return discoveredTables;
+      if(discoveredTables != null)
+      {
+         return (discoveredTables);
+      }
+      QuickSearchRuntime runtime = QuickSearchRuntime.get();
+      return (runtime == null ? null : runtime.getDiscoveredTables());
    }
 
 
 
-   /***************************************************************************
-    ** Setter for discoveredTables
-    ***************************************************************************/
+   /*******************************************************************************
+    ** Set a static discovered-tables override.
+    *******************************************************************************/
    public static void setDiscoveredTables(List<QuickSearchableTableConfig> discoveredTables)
    {
       QuickSearchQBitContext.discoveredTables = discoveredTables;
@@ -78,44 +97,62 @@ public class QuickSearchQBitContext
 
 
 
-   /***************************************************************************
-    ** Find a table config by table name from the discovered tables list.
-    **
-    ** Returns null if discoveredTables is null or no match is found.
-    ***************************************************************************/
+   /*******************************************************************************
+    ** Find a table config by name, or null.
+    *******************************************************************************/
    public static QuickSearchableTableConfig getTableConfig(String tableName)
    {
-      if(discoveredTables == null)
+      List<QuickSearchableTableConfig> tables = getDiscoveredTables();
+      if(tables == null || tableName == null)
       {
-         return null;
+         return (null);
       }
 
-      for(QuickSearchableTableConfig tableConfig : discoveredTables)
+      for(QuickSearchableTableConfig tableConfig : tables)
       {
          if(tableName.equals(tableConfig.getTableName()))
          {
-            return tableConfig;
+            return (tableConfig);
          }
       }
-
-      return null;
+      return (null);
    }
 
 
 
-   /***************************************************************************
-    ** Getter for client
-    ***************************************************************************/
+   /*******************************************************************************
+    ** Get the client: the static override, else the runtime's (built lazily).
+    ** Returns null when no runtime is registered or the client cannot be built.
+    *******************************************************************************/
    public static QuickSearchOpenSearchClient getClient()
    {
-      return client;
+      if(client != null)
+      {
+         return (client);
+      }
+
+      QuickSearchRuntime runtime = QuickSearchRuntime.get();
+      if(runtime == null)
+      {
+         return (null);
+      }
+
+      try
+      {
+         return (runtime.getClient());
+      }
+      catch(QException e)
+      {
+         LOG.warn("Could not build OpenSearch client", e);
+         return (null);
+      }
    }
 
 
 
-   /***************************************************************************
-    ** Setter for client
-    ***************************************************************************/
+   /*******************************************************************************
+    ** Set a static client override.
+    *******************************************************************************/
    public static void setClient(QuickSearchOpenSearchClient client)
    {
       QuickSearchQBitContext.client = client;
@@ -123,19 +160,38 @@ public class QuickSearchQBitContext
 
 
 
-   /***************************************************************************
-    ** Getter for publisher
-    ***************************************************************************/
+   /*******************************************************************************
+    ** Get the publisher: the static override, else the runtime's.
+    *******************************************************************************/
    public static IndexEventPublisher getPublisher()
    {
-      return publisher;
+      if(publisher != null)
+      {
+         return (publisher);
+      }
+
+      QuickSearchRuntime runtime = QuickSearchRuntime.get();
+      if(runtime == null)
+      {
+         return (null);
+      }
+
+      try
+      {
+         return (runtime.getPublisher());
+      }
+      catch(QException e)
+      {
+         LOG.warn("Could not build index event publisher", e);
+         return (null);
+      }
    }
 
 
 
-   /***************************************************************************
-    ** Setter for publisher
-    ***************************************************************************/
+   /*******************************************************************************
+    ** Set a static publisher override.
+    *******************************************************************************/
    public static void setPublisher(IndexEventPublisher publisher)
    {
       QuickSearchQBitContext.publisher = publisher;
@@ -143,18 +199,15 @@ public class QuickSearchQBitContext
 
 
 
-   /***************************************************************************
-    ** Reset all static state to null.
-    **
-    ** Call in test @BeforeEach or @AfterEach to prevent state leakage
-    ** between tests.
-    ***************************************************************************/
+   /*******************************************************************************
+    ** Clear the static overrides (tests).
+    *******************************************************************************/
    public static void clear()
    {
-      config = null;
+      config           = null;
       discoveredTables = null;
-      client = null;
-      publisher = null;
+      client           = null;
+      publisher        = null;
    }
 
 }
