@@ -73,11 +73,11 @@ class OpenSearchIntegrationTest
    private static final String INDEX_NAME   = "quick_search_integration_test";
 
    @Container
-   static GenericContainer<?> opensearch = new GenericContainer<>("opensearchproject/opensearch:2.11.0")
+   static GenericContainer<?> opensearch = new GenericContainer<>(System.getProperty("opensearch.test.image", "opensearchproject/opensearch:2.19.6"))
       .withExposedPorts(9200)
       .withEnv("discovery.type", "single-node")
-      .withEnv("plugins.security.disabled", "true")
-      .withEnv("OPENSEARCH_INITIAL_ADMIN_PASSWORD", "Admin123!")
+      .withEnv("DISABLE_SECURITY_PLUGIN", "true")
+      .withEnv("DISABLE_INSTALL_DEMO_CONFIG", "true")
       .waitingFor(Wait.forHttp("/_cluster/health").forStatusCode(200));
 
 

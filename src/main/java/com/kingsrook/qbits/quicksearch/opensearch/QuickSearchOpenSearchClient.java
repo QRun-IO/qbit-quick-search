@@ -38,6 +38,7 @@ import org.opensearch.client.json.jackson.JacksonJsonpMapper;
 import org.opensearch.client.opensearch.OpenSearchClient;
 import org.opensearch.client.opensearch._types.Conflicts;
 import org.opensearch.client.opensearch._types.FieldValue;
+import org.opensearch.client.opensearch._types.Refresh;
 import org.opensearch.client.opensearch._types.query_dsl.BoolQuery;
 import org.opensearch.client.opensearch._types.query_dsl.MultiMatchQuery;
 import org.opensearch.client.opensearch._types.query_dsl.Query;
@@ -424,7 +425,7 @@ public class QuickSearchOpenSearchClient implements Closeable
          DeleteByQueryResponse response = client.deleteByQuery(DeleteByQueryRequest.of(r -> r
             .index(indexName)
             .conflicts(Conflicts.Proceed)
-            .refresh(true)
+            .refresh(Refresh.True)
             .query(Query.of(q -> q
                .bool(b -> b
                   .filter(f -> f
