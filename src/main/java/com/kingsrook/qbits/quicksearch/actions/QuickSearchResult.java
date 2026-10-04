@@ -25,6 +25,7 @@ public class QuickSearchResult
 {
 
    private String tableName;
+   private String tableLabel;
    private String recordId;
    private String recordLabel;
    private Float  score;
@@ -167,6 +168,37 @@ public class QuickSearchResult
    public QuickSearchResult withHighlightSnippet(String highlightSnippet)
    {
       this.highlightSnippet = highlightSnippet;
+      return this;
+   }
+
+
+
+   /*******************************************************************************
+    ** Getter for tableLabel
+    *******************************************************************************/
+   public String getTableLabel()
+   {
+      return tableLabel;
+   }
+
+
+
+   /*******************************************************************************
+    ** Setter for tableLabel
+    *******************************************************************************/
+   public void setTableLabel(String tableLabel)
+   {
+      this.tableLabel = tableLabel;
+   }
+
+
+
+   /*******************************************************************************
+    ** Fluent setter for tableLabel
+    *******************************************************************************/
+   public QuickSearchResult withTableLabel(String tableLabel)
+   {
+      this.tableLabel = tableLabel;
       return this;
    }
 

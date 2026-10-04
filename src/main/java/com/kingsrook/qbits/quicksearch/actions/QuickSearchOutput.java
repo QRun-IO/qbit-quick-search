@@ -31,6 +31,7 @@ public class QuickSearchOutput
 
    private List<QuickSearchResult> results;
    private Long                    totalHits;
+   private Boolean totalHitsIsLowerBound = false;
    private Boolean                 hasMore;
 
 
@@ -114,6 +115,38 @@ public class QuickSearchOutput
    public QuickSearchOutput withHasMore(Boolean hasMore)
    {
       this.hasMore = hasMore;
+      return this;
+   }
+
+
+
+   /*******************************************************************************
+    ** Getter for totalHitsIsLowerBound: true when totalHits is a floor (hits
+    ** beyond the result window, or hits removed by permission filtering)
+    *******************************************************************************/
+   public Boolean getTotalHitsIsLowerBound()
+   {
+      return totalHitsIsLowerBound;
+   }
+
+
+
+   /*******************************************************************************
+    ** Setter for totalHitsIsLowerBound
+    *******************************************************************************/
+   public void setTotalHitsIsLowerBound(Boolean totalHitsIsLowerBound)
+   {
+      this.totalHitsIsLowerBound = totalHitsIsLowerBound;
+   }
+
+
+
+   /*******************************************************************************
+    ** Fluent setter for totalHitsIsLowerBound
+    *******************************************************************************/
+   public QuickSearchOutput withTotalHitsIsLowerBound(Boolean totalHitsIsLowerBound)
+   {
+      this.totalHitsIsLowerBound = totalHitsIsLowerBound;
       return this;
    }
 

@@ -19,6 +19,7 @@ package com.kingsrook.qbits.quicksearch.processes;
 
 import java.time.Instant;
 import java.util.ArrayList;
+import java.util.Collection;
 import java.util.List;
 import com.kingsrook.qqq.backend.core.actions.tables.InsertAction;
 import com.kingsrook.qqq.backend.core.actions.tables.QueryAction;
@@ -186,8 +187,8 @@ class ReconcileIndexStepTest extends BaseQuickSearchTest
 
    /*******************************************************************************
     ** Test: when any document fails to index, stale documents are not removed
-    ** (a document that failed to re-index would otherwise be purged), and the
-    ** run is marked FAILED.
+    ** (a document that failed to re-index would otherwise be purged), the run
+    ** is marked FAILED, and the step throws.
     *******************************************************************************/
    @Test
    void testReconcile_indexingErrors_keepsDocumentsAndFailsRun() throws QException
@@ -198,7 +199,9 @@ class ReconcileIndexStepTest extends BaseQuickSearchTest
       partial.addFailure("testEntity:2: mapper_parsing_exception");
       when(mockClient.indexDocuments(anyList(), anyInt())).thenReturn(partial);
 
-      new ReconcileIndexStep().run(new RunBackendStepInput(), new RunBackendStepOutput());
+      assertThatThrownBy(() -> new ReconcileIndexStep().run(new RunBackendStepInput(), new RunBackendStepOutput()))
+         .isInstanceOf(QException.class)
+         .hasMessageContaining("mapper_parsing_exception");
 
       verify(mockClient, never()).deleteDocumentsIndexedBefore(anyString(), any());
 
@@ -223,7 +226,7 @@ class ReconcileIndexStepTest extends BaseQuickSearchTest
 
       assertThatThrownBy(() -> new ReconcileIndexStep().run(new RunBackendStepInput(), new RunBackendStepOutput()))
          .isInstanceOf(QException.class)
-         .hasMessageContaining("Reconcile failed");
+         .hasMessageContaining("connection refused");
 
       List<QRecord> runs = queryAll(QuickSearchIndexRun.TABLE_NAME);
       assertThat(runs).hasSize(1);
@@ -241,6 +244,7 @@ class ReconcileIndexStepTest extends BaseQuickSearchTest
    void testReconcile_success_completesRunAndUpdatesIndexRow() throws QException
    {
       insertTestEntities(4);
+      when(mockClient.countDocumentsForTable(TEST_ENTITY_TABLE)).thenReturn(4L);
 
       Instant beforeRun = Instant.now();
       new ReconcileIndexStep().run(new RunBackendStepInput(), new RunBackendStepOutput());
@@ -255,8 +259,13 @@ class ReconcileIndexStepTest extends BaseQuickSearchTest
       List<QRecord> indexRows = queryAll(QuickSearchIndex.TABLE_NAME);
       assertThat(indexRows).hasSize(1);
       assertThat(indexRows.get(0).getValueInteger("recordCount")).isEqualTo(4);
-      assertThat(indexRows.get(0).getValueInstant("lastFullReindexTime")).isAfterOrEqualTo(beforeRun);
+      assertThat(indexRows.get(0).getValueInstant("lastReconcileTime")).isAfterOrEqualTo(beforeRun);
       assertThat(indexRows.get(0).getValueInstant("lastBasepullTime")).isAfterOrEqualTo(beforeRun);
+      assertThat(indexRows.get(0).getValue("lastFullReindexTime")).as("a reconcile is not a full reindex").isNull();
+      assertThat(indexRows.get(0).getValueInteger("documentCount")).isEqualTo(4);
+      assertThat(indexRows.get(0).getValueString("status")).isEqualTo("ACTIVE");
+      assertThat(indexRows.get(0).getValueString("lastRunStatus")).isEqualTo("RECONCILE COMPLETED");
+      assertThat(indexRows.get(0).getValueString("searchableFieldsJson")).isEqualTo(AbstractIndexingStep.buildSearchableFieldsJson(QuickSearchQBitContext.getTableConfig(TEST_ENTITY_TABLE)));
    }
 
 
@@ -276,6 +285,105 @@ class ReconcileIndexStepTest extends BaseQuickSearchTest
       verify(mockClient, never()).indexDocuments(anyList(), anyInt());
       verify(mockClient, never()).deleteDocumentsIndexedBefore(anyString(), any());
       assertThat(queryAll(QuickSearchIndexRun.TABLE_NAME)).isEmpty();
+   }
+
+
+
+   /*******************************************************************************
+    ** Insert a quickSearchIndex row for testEntity with the given enabled flag.
+    *******************************************************************************/
+   private void insertIndexRow(Boolean enabled) throws QException
+   {
+      InsertInput insertInput = new InsertInput();
+      insertInput.setTableName(QuickSearchIndex.TABLE_NAME);
+      insertInput.setRecords(List.of(new QRecord()
+         .withValue("tableName", TEST_ENTITY_TABLE)
+         .withValue("enabled", enabled)
+         .withValue("basepullIntervalMinutes", 5)
+         .withValue("status", "ACTIVE")));
+      new InsertAction().execute(insertInput);
+   }
+
+
+
+   /*******************************************************************************
+    ** Test: a disabled index row is skipped and counted in tablesSkipped.
+    *******************************************************************************/
+   @Test
+   void testReconcile_disabledRow_skipped() throws QException
+   {
+      insertTestEntities(2);
+      insertIndexRow(false);
+
+      RunBackendStepOutput output = new RunBackendStepOutput();
+      new ReconcileIndexStep().run(new RunBackendStepInput(), output);
+
+      verify(mockClient, never()).indexDocuments(anyList(), anyInt());
+      verify(mockClient, never()).deleteDocumentsIndexedBefore(anyString(), any());
+      assertThat(queryAll(QuickSearchIndexRun.TABLE_NAME)).isEmpty();
+      assertThat(output.getValueInteger("tablesSkipped")).isEqualTo(1);
+      assertThat(output.getValueInteger("recordsIndexed")).isEqualTo(0);
+   }
+
+
+
+   /*******************************************************************************
+    ** Test: without a table filter, documents of tables that are no longer
+    ** configured are swept, passing the configured table names to keep.
+    *******************************************************************************/
+   @Test
+   @SuppressWarnings("unchecked")
+   void testReconcile_allTables_sweepsOrphanDocumentsOfUnconfiguredTables() throws QException
+   {
+      insertTestEntities(1);
+      when(mockClient.deleteDocumentsForTablesNotIn(any())).thenReturn(7L);
+
+      RunBackendStepOutput output = new RunBackendStepOutput();
+      new ReconcileIndexStep().run(new RunBackendStepInput(), output);
+
+      ArgumentCaptor<Collection<String>> keepCaptor = ArgumentCaptor.forClass(Collection.class);
+      verify(mockClient).deleteDocumentsForTablesNotIn(keepCaptor.capture());
+      assertThat(keepCaptor.getValue()).containsExactly(TEST_ENTITY_TABLE);
+      assertThat(output.getValue("orphanDocumentsRemoved")).isEqualTo(7L);
+   }
+
+
+
+   /*******************************************************************************
+    ** Test: with a table filter the orphan sweep does not run.
+    *******************************************************************************/
+   @Test
+   void testReconcile_singleTable_noOrphanSweep() throws QException
+   {
+      insertTestEntities(1);
+
+      RunBackendStepInput input = new RunBackendStepInput();
+      input.addValue("tableName", TEST_ENTITY_TABLE);
+      RunBackendStepOutput output = new RunBackendStepOutput();
+      new ReconcileIndexStep().run(input, output);
+
+      verify(mockClient).indexDocuments(anyList(), anyInt());
+      verify(mockClient, never()).deleteDocumentsForTablesNotIn(any());
+      assertThat(output.getValue("orphanDocumentsRemoved")).isEqualTo(0L);
+   }
+
+
+
+   /*******************************************************************************
+    ** Test: a failed run carries the error message on the run record and on
+    ** the index row.
+    *******************************************************************************/
+   @Test
+   void testReconcile_failedRun_indexRowCarriesError() throws QException
+   {
+      insertTestEntities(1);
+      when(mockClient.indexDocuments(anyList(), anyInt())).thenThrow(new QException("connection refused"));
+
+      assertThatThrownBy(() -> new ReconcileIndexStep().run(new RunBackendStepInput(), new RunBackendStepOutput())).isInstanceOf(QException.class);
+
+      QRecord row = queryAll(QuickSearchIndex.TABLE_NAME).get(0);
+      assertThat(row.getValueString("lastRunStatus")).isEqualTo("RECONCILE FAILED");
+      assertThat(row.getValueString("lastErrorMessage")).contains("connection refused");
    }
 
 }

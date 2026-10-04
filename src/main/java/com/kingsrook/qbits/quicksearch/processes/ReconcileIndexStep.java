@@ -20,47 +20,30 @@ package com.kingsrook.qbits.quicksearch.processes;
 import java.io.Serializable;
 import java.time.Instant;
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
-import com.kingsrook.qqq.backend.core.actions.tables.QueryAction;
-import com.kingsrook.qqq.backend.core.actions.tables.UpdateAction;
+import java.util.Map;
 import com.kingsrook.qqq.backend.core.exceptions.QException;
 import com.kingsrook.qqq.backend.core.logging.QLogger;
 import com.kingsrook.qqq.backend.core.model.actions.processes.RunBackendStepInput;
 import com.kingsrook.qqq.backend.core.model.actions.processes.RunBackendStepOutput;
-import com.kingsrook.qqq.backend.core.model.actions.tables.query.QCriteriaOperator;
-import com.kingsrook.qqq.backend.core.model.actions.tables.query.QFilterCriteria;
-import com.kingsrook.qqq.backend.core.model.actions.tables.query.QFilterOrderBy;
-import com.kingsrook.qqq.backend.core.model.actions.tables.query.QQueryFilter;
-import com.kingsrook.qqq.backend.core.model.actions.tables.query.QueryInput;
-import com.kingsrook.qqq.backend.core.model.actions.tables.update.UpdateInput;
 import com.kingsrook.qqq.backend.core.model.data.QRecord;
-import com.kingsrook.qqq.backend.core.utils.CollectionUtils;
-import com.kingsrook.qbits.quicksearch.QuickSearchQBitConfig;
 import com.kingsrook.qbits.quicksearch.QuickSearchableTableConfig;
 import com.kingsrook.qbits.quicksearch.model.QuickSearchIndexRun;
-import com.kingsrook.qbits.quicksearch.opensearch.BulkIndexResult;
-import com.kingsrook.qbits.quicksearch.opensearch.OpenSearchDocument;
 import com.kingsrook.qbits.quicksearch.opensearch.QuickSearchOpenSearchClient;
 import static com.kingsrook.qqq.backend.core.logging.LogUtils.logPair;
 
 
 /*******************************************************************************
- ** Process step that reconciles the search index with its source tables.
+ ** Reconcile the index with its source tables without a search blackout.
  **
- ** For each table (or only the one named by the optional "tableName" input):
- ** 1. Re-index every source record, paging in primary-key order so each record
- **    is read exactly once, even while other rows are inserted or deleted.
- ** 2. If every document indexed, refresh the index and delete the table's
- **    documents that this run did not re-index (indexedAt before the run
- **    started). Those have no source record: their deletes were missed.
+ ** For each enabled table (or the one named by the optional "tableName"
+ ** input): re-index every source record in primary-key order, then, if every
+ ** document indexed, refresh and delete the table's documents this run did not
+ ** touch (indexedAt before the run started). When no table filter is given,
+ ** documents of tables that are no longer configured are removed too.
  **
- ** Unlike FullReindexStep, the table's documents are never wiped first, so
- ** search keeps working during the run. When any document fails to index, the
- ** stale-document delete is skipped (it would remove that record's old
- ** document), and the run is marked FAILED.
- **
- ** The cutoff comes from this JVM's clock, as do real-time indexedAt values on
- ** this node; application nodes are assumed to keep their clocks in sync.
+ ** Used by the full reindex of a single table as well, with its own run type.
  *******************************************************************************/
 public class ReconcileIndexStep extends AbstractIndexingStep
 {
@@ -73,142 +56,134 @@ public class ReconcileIndexStep extends AbstractIndexingStep
    /*******************************************************************************
     ** Totals from reconciling one table.
     *******************************************************************************/
-   private record ReconcileCounts(Integer recordsIndexed, Long documentsRemoved)
+   public record ReconcileCounts(Integer recordsIndexed, Long documentsRemoved)
    {
    }
 
 
 
    /*******************************************************************************
-    ** Reconcile every discovered table, or only the one named by "tableName".
     **
-    ** Output values: recordsIndexed (Integer) and documentsRemoved (Long),
-    ** summed across tables.
-    **
-    ** @throws QException if reconciling a table fails (its run is marked FAILED)
     *******************************************************************************/
    @Override
    public void run(RunBackendStepInput input, RunBackendStepOutput output) throws QException
    {
       String tableNameFilter = input.getValueString("tableName");
+      boolean allTables      = tableNameFilter == null || tableNameFilter.isBlank();
 
       Integer recordsIndexed   = 0;
       Long    documentsRemoved = 0L;
+      Integer tablesSkipped    = 0;
 
       for(QuickSearchableTableConfig tableConfig : getDiscoveredTables())
       {
-         if(tableNameFilter != null && !tableNameFilter.isBlank() && !tableNameFilter.equals(tableConfig.getTableName()))
+         if(!allTables && !tableNameFilter.equals(tableConfig.getTableName()))
          {
             continue;
          }
 
          ensureIndexRowExists(tableConfig.getTableName(), tableConfig);
-         ReconcileCounts counts = reconcileTable(tableConfig);
+         QRecord row = queryIndexRow(tableConfig.getTableName());
+         if(!isRowEnabled(row))
+         {
+            LOG.info("Table is disabled; skipping reconcile", logPair("tableName", tableConfig.getTableName()));
+            tablesSkipped++;
+            continue;
+         }
 
+         ReconcileCounts counts = reconcileTable(tableConfig, RUN_TYPE);
          recordsIndexed   = recordsIndexed + counts.recordsIndexed();
          documentsRemoved = documentsRemoved + counts.documentsRemoved();
       }
 
+      Long orphanDocumentsRemoved = 0L;
+      if(allTables)
+      {
+         List<String> configured = new ArrayList<>();
+         getDiscoveredTables().forEach(tc -> configured.add(tc.getTableName()));
+         orphanDocumentsRemoved = getClient().deleteDocumentsForTablesNotIn(configured);
+         if(orphanDocumentsRemoved > 0)
+         {
+            LOG.info("Removed documents of tables that are no longer configured", logPair("count", orphanDocumentsRemoved));
+         }
+      }
+
+      purgeOldRuns();
+
       output.addValue("recordsIndexed", recordsIndexed);
       output.addValue("documentsRemoved", documentsRemoved);
+      output.addValue("orphanDocumentsRemoved", orphanDocumentsRemoved);
+      output.addValue("tablesSkipped", tablesSkipped);
    }
 
 
 
    /*******************************************************************************
-    ** Reconcile one table, recording the run in quickSearchIndexRun.
+    ** Reconcile one table, recording the run with the given run type.
     *******************************************************************************/
-   private ReconcileCounts reconcileTable(QuickSearchableTableConfig tableConfig) throws QException
+   ReconcileCounts reconcileTable(QuickSearchableTableConfig tableConfig, String runType) throws QException
    {
-      String                      tableName       = tableConfig.getTableName();
-      String                      primaryKeyField = tableConfig.getPrimaryKeyField();
-      QuickSearchOpenSearchClient client          = getClient();
-      QuickSearchQBitConfig       config          = getConfig();
+      String                      tableName = tableConfig.getTableName();
+      QuickSearchOpenSearchClient client    = getClient();
 
       Integer             indexId = queryIndexId(tableName);
-      QuickSearchIndexRun run     = createRunRecord(indexId, RUN_TYPE);
-
-      Integer totalProcessed = 0;
-      Integer totalIndexed   = 0;
-      Integer totalErrors    = 0;
-      String  firstError     = null;
+      QuickSearchIndexRun run     = createRunRecord(indexId, runType);
 
       try
       {
-         ///////////////////////////////////////////////////////////////////////
-         // every document this run writes has indexedAt at or after this     //
-         // instant, so afterwards any older document has no source record    //
-         ///////////////////////////////////////////////////////////////////////
-         Instant reconcileStart = Instant.now();
-
-         Serializable lastPrimaryKey = null;
-         while(true)
-         {
-            List<QRecord> batch = querySourceBatchAfter(tableName, primaryKeyField, lastPrimaryKey, config.getSourceBatchSize());
-            if(batch.isEmpty())
-            {
-               break;
-            }
-
-            List<OpenSearchDocument> documents = new ArrayList<>();
-            for(QRecord record : batch)
-            {
-               OpenSearchDocument document = IndexingUtils.buildDocument(record, tableConfig);
-               if(document != null)
-               {
-                  documents.add(document);
-               }
-            }
-
-            if(!documents.isEmpty())
-            {
-               BulkIndexResult result = client.indexDocuments(documents, config.getBulkBatchSize());
-               totalIndexed = totalIndexed + result.getSuccessCount();
-               totalErrors  = totalErrors + result.getFailureCount();
-
-               if(firstError == null && !result.getErrors().isEmpty())
-               {
-                  firstError = result.getErrors().get(0);
-               }
-            }
-
-            totalProcessed = totalProcessed + batch.size();
-            lastPrimaryKey = batch.get(batch.size() - 1).getValue(primaryKeyField);
-
-            if(lastPrimaryKey == null)
-            {
-               //////////////////////////////////////////////////////////////
-               // paging needs a key to continue after; without one, the    //
-               // next query would start over and never finish              //
-               //////////////////////////////////////////////////////////////
-               throw new QException("Source record has no value in primary key field [" + primaryKeyField + "]");
-            }
-         }
+         Instant     reconcileStart = Instant.now();
+         IndexCounts counts         = indexAllRecords(client, tableConfig, List.of(), null);
 
          Long documentsRemoved = 0L;
-         if(totalErrors.equals(0))
+         if(counts.errors() == 0)
          {
             client.refreshIndex();
             documentsRemoved = client.deleteDocumentsIndexedBefore(tableName, reconcileStart);
-            updateIndexRow(indexId, reconcileStart, totalProcessed);
+
+            Map<String, Serializable> values = new HashMap<>();
+            values.put("lastReconcileTime", Instant.now());
+            values.put("lastBasepullTime", reconcileStart);
+            values.put("recordCount", counts.processed());
+            values.put("documentCount", safeCount(client, tableName));
+            values.put("searchableFieldsJson", buildSearchableFieldsJson(tableConfig));
+            values.put("status", STATUS_ACTIVE);
+            if(ReconcileIndexStep.RUN_TYPE.equals(runType) == false)
+            {
+               values.put("lastFullReindexTime", Instant.now());
+            }
+            updateIndexRow(indexId, values);
          }
          else
          {
-            LOG.warn("Reconcile had indexing errors; stale documents were not removed", logPair("tableName", tableName), logPair("errorCount", totalErrors));
+            LOG.warn("Reconcile had indexing errors; stale documents were not removed", logPair("tableName", tableName), logPair("errorCount", counts.errors()));
          }
 
-         String finalStatus = totalErrors.equals(0) ? "COMPLETED" : "FAILED";
-         completeRunRecord(run, finalStatus, totalProcessed, totalIndexed, totalErrors, firstError);
+         String status = counts.errors() == 0 ? RUN_COMPLETED : RUN_FAILED;
+         completeRunRecord(run, status, counts.processed(), counts.indexed(), counts.errors(), counts.firstError());
 
-         LOG.info("Reconcile complete", logPair("tableName", tableName), logPair("totalProcessed", totalProcessed),
-            logPair("totalIndexed", totalIndexed), logPair("totalErrors", totalErrors), logPair("documentsRemoved", documentsRemoved));
+         LOG.info("Reconcile complete", logPair("tableName", tableName), logPair("processed", counts.processed()), logPair("indexed", counts.indexed()),
+            logPair("skippedStale", counts.skipped()), logPair("errors", counts.errors()), logPair("documentsRemoved", documentsRemoved));
 
-         return (new ReconcileCounts(totalIndexed, documentsRemoved));
+         if(counts.errors() > 0)
+         {
+            throw (new QException("Reconcile indexed " + counts.indexed() + " of " + counts.processed() + " records for table [" + tableName + "]; first error: " + counts.firstError()));
+         }
+
+         return (new ReconcileCounts(counts.indexed(), documentsRemoved));
+      }
+      catch(QException e)
+      {
+         if(!RUN_FAILED.equals(run.getStatus()))
+         {
+            completeRunRecord(run, RUN_FAILED, 0, 0, 1, e.getMessage());
+            run.withStatus(RUN_FAILED);
+         }
+         throw e;
       }
       catch(Exception e)
       {
          LOG.warn("Reconcile failed", e, logPair("tableName", tableName));
-         completeRunRecord(run, "FAILED", totalProcessed, totalIndexed, totalErrors, e.getMessage());
+         completeRunRecord(run, RUN_FAILED, 0, 0, 1, e.getMessage());
          throw new QException("Reconcile failed for table [" + tableName + "]: " + e.getMessage(), e);
       }
    }
@@ -216,65 +191,19 @@ public class ReconcileIndexStep extends AbstractIndexingStep
 
 
    /*******************************************************************************
-    ** Query the next batch of source records, in primary-key order, after the
-    ** given key (or from the start when it is null).
+    **
     *******************************************************************************/
-   private List<QRecord> querySourceBatchAfter(String tableName, String primaryKeyField, Serializable afterPrimaryKey, Integer limit) throws QException
+   static Integer safeCount(QuickSearchOpenSearchClient client, String tableName)
    {
-      QQueryFilter filter = new QQueryFilter()
-         .withOrderBy(new QFilterOrderBy(primaryKeyField, true))
-         .withLimit(limit);
-
-      if(afterPrimaryKey != null)
+      try
       {
-         filter.withCriteria(new QFilterCriteria(primaryKeyField, QCriteriaOperator.GREATER_THAN, afterPrimaryKey));
+         Long count = client.countDocumentsForTable(tableName);
+         return (count == null ? null : count.intValue());
       }
-
-      QueryInput queryInput = new QueryInput();
-      queryInput.setTableName(tableName);
-      queryInput.setFilter(filter);
-
-      return (CollectionUtils.nonNullList(new QueryAction().execute(queryInput).getRecords()));
-   }
-
-
-
-   /*******************************************************************************
-    ** Look up the ID of the quickSearchIndex row for a table.
-    *******************************************************************************/
-   private Integer queryIndexId(String tableName) throws QException
-   {
-      QueryInput queryInput = new QueryInput();
-      queryInput.setTableName(getConfig().getQuickSearchIndexTableName());
-      queryInput.setFilter(new QQueryFilter()
-         .withCriteria(new QFilterCriteria("tableName", QCriteriaOperator.EQUALS, tableName)));
-
-      List<QRecord> rows = new QueryAction().execute(queryInput).getRecords();
-      if(CollectionUtils.nullSafeIsEmpty(rows))
+      catch(Exception e)
       {
-         throw new QException("No QuickSearchIndex row found for table: " + tableName);
+         return (null);
       }
-
-      return (rows.get(0).getValueInteger("id"));
-   }
-
-
-
-   /*******************************************************************************
-    ** Record a successful reconcile on the quickSearchIndex row. Records changed
-    ** after reconcileStart may not have been read, so basepull resumes from there.
-    *******************************************************************************/
-   private void updateIndexRow(Integer indexId, Instant reconcileStart, Integer recordCount) throws QException
-   {
-      UpdateInput updateInput = new UpdateInput();
-      updateInput.setTableName(getConfig().getQuickSearchIndexTableName());
-      updateInput.setRecords(List.of(new QRecord()
-         .withValue("id", indexId)
-         .withValue("lastFullReindexTime", Instant.now())
-         .withValue("lastBasepullTime", reconcileStart)
-         .withValue("recordCount", recordCount)));
-
-      new UpdateAction().execute(updateInput);
    }
 
 }

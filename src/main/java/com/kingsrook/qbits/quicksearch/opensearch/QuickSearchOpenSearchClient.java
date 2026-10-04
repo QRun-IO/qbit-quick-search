@@ -171,7 +171,7 @@ public class QuickSearchOpenSearchClient implements Closeable
     *******************************************************************************/
    public String newPhysicalIndexName()
    {
-      return (indexName + "-v" + MAPPING_VERSION + "-" + Instant.now().getEpochSecond());
+      return (indexName + "-v" + MAPPING_VERSION + "-" + Instant.now().toEpochMilli());
    }
 
 

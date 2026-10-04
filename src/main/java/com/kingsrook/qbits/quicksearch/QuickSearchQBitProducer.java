@@ -335,6 +335,7 @@ public class QuickSearchQBitProducer implements QBitMetaDataProducer<QuickSearch
          {
             primaryKeyField        = table.getPrimaryKeyField();
             basepullTimestampField = resolveTimestampField(table, searchableFields, basepullTimestampField);
+            removeHiddenFields(table, searchableFields, fieldWeights, fieldIncludeLabels);
          }
 
          tables.add(new QuickSearchableTableConfig()
@@ -345,7 +346,8 @@ public class QuickSearchQBitProducer implements QBitMetaDataProducer<QuickSearch
             .withFieldIncludeLabels(fieldIncludeLabels)
             .withBasepullIntervalMinutes(annotation.basepullIntervalMinutes())
             .withBasepullTimestampField(basepullTimestampField)
-            .withEnabledByDefault(annotation.enabledByDefault()));
+            .withEnabledByDefault(annotation.enabledByDefault())
+            .withMaxFieldLength(qBitConfig.getMaxFieldLength()));
       }
 
       return (tables);
@@ -386,6 +388,7 @@ public class QuickSearchQBitProducer implements QBitMetaDataProducer<QuickSearch
          {
             primaryKeyField        = table.getPrimaryKeyField();
             basepullTimestampField = (basepullTimestampField != null && !table.getFields().containsKey(basepullTimestampField)) ? null : basepullTimestampField;
+            removeHiddenFields(table, searchableFields, fieldWeights, fieldIncludeLabels);
          }
 
          Integer basepullInterval = stc.getBasepullIntervalMinutes();
@@ -404,7 +407,8 @@ public class QuickSearchQBitProducer implements QBitMetaDataProducer<QuickSearch
             .withBasepullTimestampField(basepullTimestampField)
             .withEnabledByDefault(stc.getEnabledByDefault())
             .withRecordLabelFormat(stc.getRecordLabelFormat())
-            .withRecordLabelFields(stc.getRecordLabelFields()));
+            .withRecordLabelFields(stc.getRecordLabelFields())
+            .withMaxFieldLength(qBitConfig.getMaxFieldLength()));
       }
 
       return (tables);
@@ -446,6 +450,31 @@ public class QuickSearchQBitProducer implements QBitMetaDataProducer<QuickSearch
          throw (new QException("basepullTimestampField [" + basepullTimestampField + "] does not exist on table [" + table.getName() + "]"));
       }
       return (basepullTimestampField);
+   }
+
+
+
+   /*******************************************************************************
+    ** Hidden fields are never indexed: their values would leak through
+    ** searchable text and highlights.
+    *******************************************************************************/
+   private static void removeHiddenFields(QTableMetaData table, List<String> searchableFields, Map<String, Integer> fieldWeights, Map<String, Boolean> fieldIncludeLabels)
+   {
+      List<String> hidden = new ArrayList<>();
+      for(String fieldName : searchableFields)
+      {
+         if(table.getFields().containsKey(fieldName) && Boolean.TRUE.equals(table.getField(fieldName).getIsHidden()))
+         {
+            hidden.add(fieldName);
+         }
+      }
+      if(!hidden.isEmpty())
+      {
+         LOG.warn("Hidden fields are excluded from Quick Search indexing", logPair("tableName", table.getName()), logPair("fields", hidden));
+         searchableFields.removeAll(hidden);
+         hidden.forEach(fieldWeights::remove);
+         hidden.forEach(fieldIncludeLabels::remove);
+      }
    }
 
 

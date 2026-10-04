@@ -227,8 +227,13 @@ class IndexDriftIntegrationTest
             .withSearchableText("Stella Oldtown").withIndexedAt(anHourAgo).withFieldValues(Map.of())), 10);
       client().deleteDocument(TABLE_NAME, "22");
 
-      assertThat(searchRecordIds("phantomburg")).containsExactly("99");
-      assertThat(searchRecordIds("oldtown")).containsExactly("21");
+      /////////////////////////////////////////////////////////////////////////////////
+      // check the drift at the index level: the search action hides the orphan, //
+      // since its record cannot be read back from the source table             //
+      /////////////////////////////////////////////////////////////////////////////////
+      assertThat(documentRecordIds("phantomburg")).containsExactly("99");
+      assertThat(documentRecordIds("oldtown")).containsExactly("21");
+      assertThat(searchRecordIds("phantomburg")).as("the orphan is never shown to a searcher").isEmpty();
       assertThat(searchRecordIds("missingham")).isEmpty();
 
       RunBackendStepInput input = new RunBackendStepInput();
@@ -236,8 +241,8 @@ class IndexDriftIntegrationTest
       RunBackendStepOutput output = new RunBackendStepOutput();
       new ReconcileIndexStep().run(input, output);
 
-      assertThat(searchRecordIds("phantomburg")).as("orphan document removed").isEmpty();
-      assertThat(searchRecordIds("oldtown")).as("stale document replaced").isEmpty();
+      assertThat(documentRecordIds("phantomburg")).as("orphan document removed").isEmpty();
+      assertThat(documentRecordIds("oldtown")).as("stale document replaced").isEmpty();
       assertThat(searchRecordIds("freshford")).as("stale document replaced").containsExactly("21");
       assertThat(searchRecordIds("missingham")).as("missing document restored").containsExactly("22");
       assertThat(output.getValue("documentsRemoved")).isEqualTo(1L);
@@ -267,6 +272,21 @@ class IndexDriftIntegrationTest
       return (new QuickSearchAction().execute(new QuickSearchInput().withSearchTerm(term).withTableName(TABLE_NAME))
          .getResults().stream()
          .map(QuickSearchResult::getRecordId)
+         .toList());
+   }
+
+
+
+   /*******************************************************************************
+    ** Refresh the index, then return the record IDs of the documents matching
+    ** the term, straight from OpenSearch (no record-security post-filter).
+    *******************************************************************************/
+   private List<String> documentRecordIds(String term) throws QException
+   {
+      client().refreshIndex();
+      return (client().search(term, List.of(TABLE_NAME), 10, 0, QuickSearchQBitContext.getDiscoveredTables())
+         .hits().hits().stream()
+         .map(hit -> hit.source().getRecordId())
          .toList());
    }
 

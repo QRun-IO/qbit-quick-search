@@ -17,6 +17,7 @@
 package com.kingsrook.qbits.quicksearch.processes;
 
 
+import java.util.ArrayList;
 import java.util.List;
 import com.kingsrook.qqq.backend.core.actions.tables.InsertAction;
 import com.kingsrook.qqq.backend.core.actions.tables.QueryAction;
@@ -28,7 +29,6 @@ import com.kingsrook.qqq.backend.core.model.actions.tables.query.QCriteriaOperat
 import com.kingsrook.qqq.backend.core.model.actions.tables.query.QFilterCriteria;
 import com.kingsrook.qqq.backend.core.model.actions.tables.query.QQueryFilter;
 import com.kingsrook.qqq.backend.core.model.actions.tables.query.QueryInput;
-import com.kingsrook.qqq.backend.core.model.actions.tables.query.QueryOutput;
 import com.kingsrook.qqq.backend.core.model.data.QRecord;
 import com.kingsrook.qbits.quicksearch.BaseQuickSearchTest;
 import com.kingsrook.qbits.quicksearch.QuickSearchQBitContext;
@@ -37,14 +37,19 @@ import com.kingsrook.qbits.quicksearch.model.QuickSearchIndexRun;
 import com.kingsrook.qbits.quicksearch.opensearch.BulkIndexResult;
 import com.kingsrook.qbits.quicksearch.opensearch.OpenSearchDocument;
 import com.kingsrook.qbits.quicksearch.opensearch.QuickSearchOpenSearchClient;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
+import org.mockito.InOrder;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyInt;
+import static org.mockito.ArgumentMatchers.anyList;
 import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.doThrow;
+import static org.mockito.Mockito.inOrder;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
@@ -55,53 +60,111 @@ import static org.mockito.Mockito.when;
 /*******************************************************************************
  ** Tests for FullReindexStep.
  **
- ** Verifies that:
- ** - All tables are reindexed when no tableName input is provided
- ** - Only the specified table is reindexed when tableName input is provided
- ** - An empty table results in a run record with 0 records processed
- ** - QuickSearchIndex rows are lazily created if they do not yet exist
- ** - A failed indexDocuments() call results in a FAILED run record
- ** - lastFullReindexTime is updated on the QuickSearchIndex row after reindex
+ ** Without a tableName input every enabled table is indexed into a new
+ ** physical index which then takes over the alias; with a tableName input the
+ ** table is rebuilt in place through the reconcile algorithm, never wiped.
  *******************************************************************************/
 class FullReindexStepTest extends BaseQuickSearchTest
 {
+   private static final String PHYSICAL_INDEX = "test-index-v2-1700000000";
+
+   private QuickSearchOpenSearchClient mockClient;
+
+
 
    /*******************************************************************************
-    ** Helper: insert source records into the testEntity table.
+    ** Install a mock client that reports every document as indexed, on both
+    ** the alias and the physical-index overloads.
+    *******************************************************************************/
+   @BeforeEach
+   void setUpClient() throws QException
+   {
+      mockClient = mock(QuickSearchOpenSearchClient.class);
+      when(mockClient.newPhysicalIndexName()).thenReturn(PHYSICAL_INDEX);
+      when(mockClient.indexDocuments(anyString(), anyList(), anyInt())).thenAnswer(invocation ->
+      {
+         List<?> docs = invocation.getArgument(1);
+         return (new BulkIndexResult().withSuccessCount(docs.size()));
+      });
+      when(mockClient.indexDocuments(anyList(), anyInt())).thenAnswer(invocation ->
+      {
+         List<?> docs = invocation.getArgument(0);
+         return (new BulkIndexResult().withSuccessCount(docs.size()));
+      });
+      when(mockClient.countDocumentsForTable(anyString())).thenReturn(0L);
+      when(mockClient.deleteDocumentsIndexedBefore(anyString(), any())).thenReturn(0L);
+      QuickSearchQBitContext.setClient(mockClient);
+   }
+
+
+
+   /*******************************************************************************
+    ** Insert count source records into the testEntity table.
     *******************************************************************************/
    private void insertTestEntities(int count) throws QException
    {
-      List<QRecord> records = new java.util.ArrayList<>();
+      List<QRecord> records = new ArrayList<>();
       for(int i = 1; i <= count; i++)
       {
-         records.add(new QRecord()
-            .withValue("name", "Entity " + i)
-            .withValue("description", "Description " + i));
+         records.add(new QRecord().withValue("name", "Entity " + i).withValue("description", "Description " + i));
       }
 
       InsertInput insertInput = new InsertInput();
       insertInput.setTableName(TEST_ENTITY_TABLE);
       insertInput.setRecords(records);
-
       new InsertAction().execute(insertInput);
    }
 
 
 
    /*******************************************************************************
-    ** Helper: build a RunBackendStepInput with no special values.
+    ** Insert a quickSearchIndex row for testEntity with the given enabled flag.
     *******************************************************************************/
-   private RunBackendStepInput buildEmptyInput()
+   private void insertIndexRow(Boolean enabled) throws QException
    {
-      return (new RunBackendStepInput());
+      InsertInput insertInput = new InsertInput();
+      insertInput.setTableName(QuickSearchIndex.TABLE_NAME);
+      insertInput.setRecords(List.of(new QRecord()
+         .withValue("tableName", TEST_ENTITY_TABLE)
+         .withValue("enabled", enabled)
+         .withValue("basepullIntervalMinutes", 5)
+         .withValue("status", "ACTIVE")));
+      new InsertAction().execute(insertInput);
    }
 
 
 
    /*******************************************************************************
-    ** Helper: build a RunBackendStepInput with a tableName filter.
+    ** Query all rows of a table.
     *******************************************************************************/
-   private RunBackendStepInput buildInputWithTableName(String tableName)
+   private List<QRecord> queryAll(String tableName) throws QException
+   {
+      QueryInput queryInput = new QueryInput();
+      queryInput.setTableName(tableName);
+      queryInput.setFilter(new QQueryFilter());
+      return (new QueryAction().execute(queryInput).getRecords());
+   }
+
+
+
+   /*******************************************************************************
+    ** The quickSearchIndex row for testEntity.
+    *******************************************************************************/
+   private QRecord queryIndexRow() throws QException
+   {
+      QueryInput queryInput = new QueryInput();
+      queryInput.setTableName(QuickSearchIndex.TABLE_NAME);
+      queryInput.setFilter(new QQueryFilter(new QFilterCriteria("tableName", QCriteriaOperator.EQUALS, TEST_ENTITY_TABLE)));
+      List<QRecord> rows = new QueryAction().execute(queryInput).getRecords();
+      return (rows.isEmpty() ? null : rows.get(0));
+   }
+
+
+
+   /*******************************************************************************
+    ** Input with a tableName filter.
+    *******************************************************************************/
+   private RunBackendStepInput inputForTable(String tableName)
    {
       RunBackendStepInput input = new RunBackendStepInput();
       input.addValue("tableName", tableName);
@@ -111,250 +174,304 @@ class FullReindexStepTest extends BaseQuickSearchTest
 
 
    /*******************************************************************************
-    ** Helper: query all records from quickSearchIndexRun.
-    *******************************************************************************/
-   private List<QRecord> queryAllRunRecords() throws QException
-   {
-      QueryInput queryInput = new QueryInput();
-      queryInput.setTableName(QuickSearchIndexRun.TABLE_NAME);
-      queryInput.setFilter(new QQueryFilter());
-
-      QueryOutput queryOutput = new QueryAction().execute(queryInput);
-      return (queryOutput.getRecords());
-   }
-
-
-
-   /*******************************************************************************
-    ** Helper: query all records from quickSearchIndex.
-    *******************************************************************************/
-   private List<QRecord> queryAllIndexRecords() throws QException
-   {
-      QueryInput queryInput = new QueryInput();
-      queryInput.setTableName(QuickSearchIndex.TABLE_NAME);
-      queryInput.setFilter(new QQueryFilter());
-
-      QueryOutput queryOutput = new QueryAction().execute(queryInput);
-      return (queryOutput.getRecords());
-   }
-
-
-
-   /*******************************************************************************
-    ** Helper: query a quickSearchIndex record by tableName.
-    *******************************************************************************/
-   private QRecord queryIndexByTableName(String tableName) throws QException
-   {
-      QueryInput queryInput = new QueryInput();
-      queryInput.setTableName(QuickSearchIndex.TABLE_NAME);
-      queryInput.setFilter(new QQueryFilter()
-         .withCriteria(new QFilterCriteria("tableName", QCriteriaOperator.EQUALS, tableName)));
-
-      QueryOutput queryOutput = new QueryAction().execute(queryInput);
-      List<QRecord> records = queryOutput.getRecords();
-      return (records.isEmpty() ? null : records.get(0));
-   }
-
-
-
-   /*******************************************************************************
-    ** Test: reindex all tables when no tableName input is given.
-    **
-    ** With one discovered table (testEntity) and source records present,
-    ** deleteDocumentsForTable() and indexDocuments() should each be called once.
+    ** Test: without a tableName input, documents go into a fresh physical
+    ** index which is refreshed and then takes over the alias; the live index
+    ** is never wiped.
     *******************************************************************************/
    @Test
-   void testReindexAllTables_noTableNameInput_reindexesAllDiscoveredTables() throws QException
+   void testAllTables_indexesIntoNewPhysicalIndexThenSwapsAlias() throws QException
    {
       insertTestEntities(3);
 
-      QuickSearchOpenSearchClient mockClient = mock(QuickSearchOpenSearchClient.class);
-      when(mockClient.indexDocuments(any(), anyInt())).thenReturn(new BulkIndexResult().withSuccessCount(3));
-      QuickSearchQBitContext.setClient(mockClient);
+      RunBackendStepOutput output = new RunBackendStepOutput();
+      new FullReindexStep().run(new RunBackendStepInput(), output);
 
-      FullReindexStep step = new FullReindexStep();
-      step.run(buildEmptyInput(), new RunBackendStepOutput());
+      InOrder inOrder = inOrder(mockClient);
+      inOrder.verify(mockClient).createPhysicalIndex(PHYSICAL_INDEX);
+      inOrder.verify(mockClient).indexDocuments(eq(PHYSICAL_INDEX), anyList(), anyInt());
+      inOrder.verify(mockClient).refreshIndex(PHYSICAL_INDEX);
+      inOrder.verify(mockClient).swapAliasTo(PHYSICAL_INDEX);
 
-      verify(mockClient, times(1)).deleteDocumentsForTable(TEST_ENTITY_TABLE);
-      verify(mockClient, times(1)).indexDocuments(any(), anyInt());
+      verify(mockClient, never()).deleteDocumentsForTable(anyString());
+      verify(mockClient, never()).indexDocuments(anyList(), anyInt());
+      verify(mockClient, never()).deletePhysicalIndex(anyString());
+
+      assertThat(output.getValueInteger("recordsIndexed")).isEqualTo(3);
+      assertThat(output.getValueBoolean("aliasSwapped")).isTrue();
    }
 
 
 
    /*******************************************************************************
-    ** Test: reindex only the specified table when tableName input is provided.
-    **
-    ** Registers two discovered tables, passes tableName=testEntity.
-    ** Only testEntity should be reindexed; the other table should be skipped.
+    ** Test: the documents built from the source records are the ones sent to
+    ** the physical index, and the run record counts them.
     *******************************************************************************/
    @Test
-   void testReindexSingleTable_tableNameInputProvided_onlyThatTableReindexed() throws QException
+   @SuppressWarnings("unchecked")
+   void testAllTables_documentsBuiltFromSourceRecords() throws QException
+   {
+      insertTestEntities(5);
+
+      new FullReindexStep().run(new RunBackendStepInput(), new RunBackendStepOutput());
+
+      ArgumentCaptor<List<OpenSearchDocument>> captor = ArgumentCaptor.forClass(List.class);
+      verify(mockClient).indexDocuments(eq(PHYSICAL_INDEX), captor.capture(), anyInt());
+      assertThat(captor.getValue()).extracting(OpenSearchDocument::getRecordId).containsExactly("1", "2", "3", "4", "5");
+
+      List<QRecord> runs = queryAll(QuickSearchIndexRun.TABLE_NAME);
+      assertThat(runs).hasSize(1);
+      assertThat(runs.get(0).getValueString("runType")).isEqualTo("FULL_REINDEX");
+      assertThat(runs.get(0).getValueString("status")).isEqualTo("COMPLETED");
+      assertThat(runs.get(0).getValueInteger("recordsProcessed")).isEqualTo(5);
+      assertThat(runs.get(0).getValueInteger("recordsIndexed")).isEqualTo(5);
+   }
+
+
+
+   /*******************************************************************************
+    ** Test: the index row is updated after the swap.
+    *******************************************************************************/
+   @Test
+   void testAllTables_updatesIndexRowAfterSwap() throws QException
    {
       insertTestEntities(2);
+      when(mockClient.countDocumentsForTable(TEST_ENTITY_TABLE)).thenReturn(2L);
 
-      QuickSearchOpenSearchClient mockClient = mock(QuickSearchOpenSearchClient.class);
-      when(mockClient.indexDocuments(any(), anyInt())).thenReturn(new BulkIndexResult().withSuccessCount(2));
-      QuickSearchQBitContext.setClient(mockClient);
+      new FullReindexStep().run(new RunBackendStepInput(), new RunBackendStepOutput());
 
-      FullReindexStep step = new FullReindexStep();
-      step.run(buildInputWithTableName(TEST_ENTITY_TABLE), new RunBackendStepOutput());
-
-      verify(mockClient, times(1)).deleteDocumentsForTable(TEST_ENTITY_TABLE);
-      verify(mockClient, never()).deleteDocumentsForTable("someOtherTable");
+      QRecord row = queryIndexRow();
+      assertThat(row).isNotNull();
+      assertThat(row.getValue("lastFullReindexTime")).isNotNull();
+      assertThat(row.getValue("lastBasepullTime")).isNotNull();
+      assertThat(row.getValueInteger("recordCount")).isEqualTo(2);
+      assertThat(row.getValueInteger("documentCount")).isEqualTo(2);
+      assertThat(row.getValueString("status")).isEqualTo("ACTIVE");
+      assertThat(row.getValueString("lastRunStatus")).isEqualTo("FULL_REINDEX COMPLETED");
+      assertThat(row.getValueString("searchableFieldsJson")).isEqualTo(AbstractIndexingStep.buildSearchableFieldsJson(QuickSearchQBitContext.getTableConfig(TEST_ENTITY_TABLE)));
    }
 
 
 
    /*******************************************************************************
-    ** Test: empty source table produces a run record with 0 records processed.
+    ** Test: an empty source table still produces a new physical index, a
+    ** swap, and a COMPLETED run with zero counts.
     *******************************************************************************/
    @Test
-   void testEmptyTable_noSourceRecords_runRecordCreatedWithZeroProcessed() throws QException
+   void testAllTables_emptyTable_swapsWithZeroCounts() throws QException
    {
-      QuickSearchOpenSearchClient mockClient = mock(QuickSearchOpenSearchClient.class);
-      when(mockClient.indexDocuments(any(), anyInt())).thenReturn(new BulkIndexResult());
-      QuickSearchQBitContext.setClient(mockClient);
+      new FullReindexStep().run(new RunBackendStepInput(), new RunBackendStepOutput());
 
-      FullReindexStep step = new FullReindexStep();
-      step.run(buildEmptyInput(), new RunBackendStepOutput());
+      verify(mockClient).createPhysicalIndex(PHYSICAL_INDEX);
+      verify(mockClient).swapAliasTo(PHYSICAL_INDEX);
+      verify(mockClient, never()).indexDocuments(anyString(), anyList(), anyInt());
 
-      List<QRecord> runRecords = queryAllRunRecords();
-      assertThat(runRecords).hasSize(1);
-
-      QRecord runRecord = runRecords.get(0);
-      assertThat(runRecord.getValueString("status")).isEqualTo("COMPLETED");
-      assertThat(runRecord.getValueInteger("recordsProcessed")).isEqualTo(0);
-      assertThat(runRecord.getValueInteger("recordsIndexed")).isEqualTo(0);
-
-      verify(mockClient, times(1)).deleteDocumentsForTable(TEST_ENTITY_TABLE);
-      verify(mockClient, never()).indexDocuments(any(), anyInt());
+      List<QRecord> runs = queryAll(QuickSearchIndexRun.TABLE_NAME);
+      assertThat(runs).hasSize(1);
+      assertThat(runs.get(0).getValueString("status")).isEqualTo("COMPLETED");
+      assertThat(runs.get(0).getValueInteger("recordsProcessed")).isEqualTo(0);
+      assertThat(runs.get(0).getValueInteger("recordsIndexed")).isEqualTo(0);
    }
 
 
 
    /*******************************************************************************
-    ** Test: QuickSearchIndex row is lazily created if it does not exist yet.
-    **
-    ** No pre-existing index rows.  After run(), a quickSearchIndex row for
-    ** testEntity should be present.
+    ** Test: a missing quickSearchIndex row is created before the reindex.
     *******************************************************************************/
    @Test
    void testLazyIndexRowCreation_noExistingIndexRow_createdBeforeReindex() throws QException
    {
-      QuickSearchOpenSearchClient mockClient = mock(QuickSearchOpenSearchClient.class);
-      when(mockClient.indexDocuments(any(), anyInt())).thenReturn(new BulkIndexResult());
-      QuickSearchQBitContext.setClient(mockClient);
+      assertThat(queryAll(QuickSearchIndex.TABLE_NAME)).isEmpty();
 
-      ////////////////////////////////////////////////////
-      // Verify no rows exist before run                //
-      ////////////////////////////////////////////////////
-      assertThat(queryAllIndexRecords()).isEmpty();
+      new FullReindexStep().run(new RunBackendStepInput(), new RunBackendStepOutput());
 
-      FullReindexStep step = new FullReindexStep();
-      step.run(buildEmptyInput(), new RunBackendStepOutput());
-
-      ////////////////////////////////////////////////////
-      // Verify index row was created                   //
-      ////////////////////////////////////////////////////
-      List<QRecord> indexRecords = queryAllIndexRecords();
-      assertThat(indexRecords).hasSize(1);
-      assertThat(indexRecords.get(0).getValueString("tableName")).isEqualTo(TEST_ENTITY_TABLE);
+      List<QRecord> rows = queryAll(QuickSearchIndex.TABLE_NAME);
+      assertThat(rows).hasSize(1);
+      assertThat(rows.get(0).getValueString("tableName")).isEqualTo(TEST_ENTITY_TABLE);
    }
 
 
 
    /*******************************************************************************
-    ** Test: when indexDocuments() throws, the run record is marked FAILED.
+    ** Test: when the client throws while indexing, the new physical index is
+    ** deleted, the alias is never swapped, the run is FAILED with the error
+    ** message, and the step throws.
     *******************************************************************************/
    @Test
-   void testErrorDuringIndexing_mockClientThrows_failedRunRecord() throws QException
+   void testAllTables_clientThrows_deletesPhysicalIndexAndNeverSwaps() throws QException
    {
       insertTestEntities(1);
+      when(mockClient.indexDocuments(anyString(), anyList(), anyInt())).thenThrow(new QException("OpenSearch connection refused"));
 
-      QuickSearchOpenSearchClient mockClient = mock(QuickSearchOpenSearchClient.class);
-      when(mockClient.indexDocuments(any(), anyInt()))
-         .thenThrow(new QException("OpenSearch connection refused"));
-      QuickSearchQBitContext.setClient(mockClient);
-
-      FullReindexStep step = new FullReindexStep();
-      assertThatThrownBy(() -> step.run(buildEmptyInput(), new RunBackendStepOutput()))
+      assertThatThrownBy(() -> new FullReindexStep().run(new RunBackendStepInput(), new RunBackendStepOutput()))
          .isInstanceOf(QException.class)
-         .hasMessageContaining("Full reindex failed");
+         .hasMessageContaining("OpenSearch connection refused");
 
-      List<QRecord> runRecords = queryAllRunRecords();
-      assertThat(runRecords).hasSize(1);
-      assertThat(runRecords.get(0).getValueString("status")).isEqualTo("FAILED");
-      assertThat(runRecords.get(0).getValueString("errorMessage")).contains("OpenSearch connection refused");
+      verify(mockClient).deletePhysicalIndex(PHYSICAL_INDEX);
+      verify(mockClient, never()).swapAliasTo(anyString());
+
+      List<QRecord> runs = queryAll(QuickSearchIndexRun.TABLE_NAME);
+      assertThat(runs).hasSize(1);
+      assertThat(runs.get(0).getValueString("status")).isEqualTo("FAILED");
+      assertThat(runs.get(0).getValueString("errorMessage")).contains("OpenSearch connection refused");
+
+      QRecord row = queryIndexRow();
+      assertThat(row.getValueString("lastRunStatus")).isEqualTo("FULL_REINDEX FAILED");
+      assertThat(row.getValueString("lastErrorMessage")).contains("OpenSearch connection refused");
    }
 
 
 
    /*******************************************************************************
-    ** Test: lastFullReindexTime is updated on the QuickSearchIndex row after reindex.
+    ** Test: per-document bulk failures also abort the rebuild, with the first
+    ** item error on the run record.
     *******************************************************************************/
    @Test
-   void testUpdatesLastFullReindexTime_afterReindex_fieldIsSet() throws QException
+   void testAllTables_bulkItemFailures_runFailedWithErrorMessage() throws QException
+   {
+      insertTestEntities(2);
+      BulkIndexResult partial = new BulkIndexResult();
+      partial.addSuccess();
+      partial.addFailure("testEntity:2: mapper_parsing_exception");
+      when(mockClient.indexDocuments(anyString(), anyList(), anyInt())).thenReturn(partial);
+
+      assertThatThrownBy(() -> new FullReindexStep().run(new RunBackendStepInput(), new RunBackendStepOutput()))
+         .isInstanceOf(QException.class)
+         .hasMessageContaining("mapper_parsing_exception");
+
+      verify(mockClient).deletePhysicalIndex(PHYSICAL_INDEX);
+      verify(mockClient, never()).swapAliasTo(anyString());
+
+      List<QRecord> runs = queryAll(QuickSearchIndexRun.TABLE_NAME);
+      assertThat(runs).hasSize(1);
+      assertThat(runs.get(0).getValueString("status")).isEqualTo("FAILED");
+      assertThat(runs.get(0).getValueInteger("errorCount")).isEqualTo(1);
+      assertThat(runs.get(0).getValueString("errorMessage")).contains("mapper_parsing_exception");
+   }
+
+
+
+   /*******************************************************************************
+    ** Test: a failure to delete the incomplete physical index does not hide
+    ** the original error.
+    *******************************************************************************/
+   @Test
+   void testAllTables_cleanupFails_originalErrorStillThrown() throws QException
+   {
+      insertTestEntities(1);
+      when(mockClient.indexDocuments(anyString(), anyList(), anyInt())).thenThrow(new QException("bulk failed"));
+      doThrow(new QException("delete failed")).when(mockClient).deletePhysicalIndex(PHYSICAL_INDEX);
+
+      assertThatThrownBy(() -> new FullReindexStep().run(new RunBackendStepInput(), new RunBackendStepOutput()))
+         .isInstanceOf(QException.class)
+         .hasMessageContaining("bulk failed");
+   }
+
+
+
+   /*******************************************************************************
+    ** Test: with a tableName input the table is rebuilt in place through the
+    ** reconcile algorithm: alias writes, refresh, stale delete, no wipe, no
+    ** physical index, no swap.
+    *******************************************************************************/
+   @Test
+   void testSingleTable_reconcilesInPlace_neverWipes() throws QException
    {
       insertTestEntities(2);
 
-      QuickSearchOpenSearchClient mockClient = mock(QuickSearchOpenSearchClient.class);
-      when(mockClient.indexDocuments(any(), anyInt())).thenReturn(new BulkIndexResult().withSuccessCount(2));
-      QuickSearchQBitContext.setClient(mockClient);
+      RunBackendStepOutput output = new RunBackendStepOutput();
+      new FullReindexStep().run(inputForTable(TEST_ENTITY_TABLE), output);
 
-      FullReindexStep step = new FullReindexStep();
-      step.run(buildEmptyInput(), new RunBackendStepOutput());
+      InOrder inOrder = inOrder(mockClient);
+      inOrder.verify(mockClient).indexDocuments(anyList(), anyInt());
+      inOrder.verify(mockClient).refreshIndex();
+      inOrder.verify(mockClient).deleteDocumentsIndexedBefore(eq(TEST_ENTITY_TABLE), any());
 
-      QRecord indexRecord = queryIndexByTableName(TEST_ENTITY_TABLE);
-      assertThat(indexRecord).isNotNull();
-      assertThat(indexRecord.getValue("lastFullReindexTime")).isNotNull();
-      assertThat(indexRecord.getValueInteger("recordCount")).isEqualTo(2);
+      verify(mockClient, never()).deleteDocumentsForTable(anyString());
+      verify(mockClient, never()).createPhysicalIndex(anyString());
+      verify(mockClient, never()).swapAliasTo(anyString());
+      verify(mockClient, never()).indexDocuments(anyString(), anyList(), anyInt());
+
+      List<QRecord> runs = queryAll(QuickSearchIndexRun.TABLE_NAME);
+      assertThat(runs).hasSize(1);
+      assertThat(runs.get(0).getValueString("runType")).isEqualTo("FULL_REINDEX");
+      assertThat(runs.get(0).getValueString("status")).isEqualTo("COMPLETED");
+      assertThat(runs.get(0).getValueInteger("recordsProcessed")).isEqualTo(2);
+
+      assertThat(queryIndexRow().getValue("lastFullReindexTime")).isNotNull();
+      assertThat(output.getValueInteger("recordsIndexed")).isEqualTo(2);
+      assertThat(output.getValueBoolean("aliasSwapped")).isFalse();
    }
 
 
 
    /*******************************************************************************
-    ** Test: run record has correct runType = "FULL_REINDEX".
+    ** Test: a tableName input naming an unknown table reindexes nothing.
     *******************************************************************************/
    @Test
-   void testRunRecord_runTypeIsFullReindex() throws QException
+   void testSingleTable_unknownTableName_nothingReindexed() throws QException
    {
-      QuickSearchOpenSearchClient mockClient = mock(QuickSearchOpenSearchClient.class);
-      when(mockClient.indexDocuments(any(), anyInt())).thenReturn(new BulkIndexResult());
-      QuickSearchQBitContext.setClient(mockClient);
+      insertTestEntities(1);
 
-      FullReindexStep step = new FullReindexStep();
-      step.run(buildEmptyInput(), new RunBackendStepOutput());
+      new FullReindexStep().run(inputForTable("someOtherTable"), new RunBackendStepOutput());
 
-      List<QRecord> runRecords = queryAllRunRecords();
-      assertThat(runRecords).hasSize(1);
-      assertThat(runRecords.get(0).getValueString("runType")).isEqualTo("FULL_REINDEX");
+      verify(mockClient, never()).indexDocuments(anyList(), anyInt());
+      verify(mockClient, never()).createPhysicalIndex(anyString());
+      assertThat(queryAll(QuickSearchIndexRun.TABLE_NAME)).isEmpty();
    }
 
 
 
    /*******************************************************************************
-    ** Test: documents are built and passed to indexDocuments with source records.
-    **
-    ** Verifies that the correct number of documents are submitted to the client.
+    ** Test: a disabled index row is skipped by the all-tables rebuild; the
+    ** swap still happens for the (empty) set of enabled tables.
     *******************************************************************************/
    @Test
-   void testIndexDocuments_documentsBuiltFromSourceRecords() throws QException
+   void testDisabledRow_skippedByAllTablesReindex() throws QException
    {
+      insertTestEntities(2);
+      insertIndexRow(false);
+
+      new FullReindexStep().run(new RunBackendStepInput(), new RunBackendStepOutput());
+
+      verify(mockClient, never()).indexDocuments(anyString(), anyList(), anyInt());
+      verify(mockClient, never()).indexDocuments(anyList(), anyInt());
+      assertThat(queryAll(QuickSearchIndexRun.TABLE_NAME)).isEmpty();
+   }
+
+
+
+   /*******************************************************************************
+    ** Test: a disabled index row is skipped by the single-table reindex too.
+    *******************************************************************************/
+   @Test
+   void testDisabledRow_skippedBySingleTableReindex() throws QException
+   {
+      insertTestEntities(2);
+      insertIndexRow(false);
+
+      RunBackendStepOutput output = new RunBackendStepOutput();
+      new FullReindexStep().run(inputForTable(TEST_ENTITY_TABLE), output);
+
+      verify(mockClient, never()).indexDocuments(anyList(), anyInt());
+      verify(mockClient, never()).deleteDocumentsIndexedBefore(anyString(), any());
+      assertThat(queryAll(QuickSearchIndexRun.TABLE_NAME)).isEmpty();
+      assertThat(output.getValueInteger("recordsIndexed")).isEqualTo(0);
+   }
+
+
+
+   /*******************************************************************************
+    ** Test: source records are paged by primary key into the physical index.
+    *******************************************************************************/
+   @Test
+   void testAllTables_pagesByPrimaryKey() throws QException
+   {
+      QuickSearchQBitContext.getConfig().withSourceBatchSize(2);
       insertTestEntities(5);
 
-      QuickSearchOpenSearchClient mockClient = mock(QuickSearchOpenSearchClient.class);
-      ArgumentCaptor<List<OpenSearchDocument>> docsCaptor = ArgumentCaptor.forClass(List.class);
-      when(mockClient.indexDocuments(docsCaptor.capture(), anyInt())).thenReturn(new BulkIndexResult().withSuccessCount(5));
-      QuickSearchQBitContext.setClient(mockClient);
+      new FullReindexStep().run(new RunBackendStepInput(), new RunBackendStepOutput());
 
-      FullReindexStep step = new FullReindexStep();
-      step.run(buildEmptyInput(), new RunBackendStepOutput());
-
-      assertThat(docsCaptor.getValue()).hasSize(5);
-
-      List<QRecord> runRecords = queryAllRunRecords();
-      assertThat(runRecords).hasSize(1);
-      assertThat(runRecords.get(0).getValueInteger("recordsProcessed")).isEqualTo(5);
+      verify(mockClient, times(3)).indexDocuments(eq(PHYSICAL_INDEX), anyList(), anyInt());
    }
 
 }

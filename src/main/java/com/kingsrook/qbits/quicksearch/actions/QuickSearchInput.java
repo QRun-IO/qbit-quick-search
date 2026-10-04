@@ -17,18 +17,24 @@
 package com.kingsrook.qbits.quicksearch.actions;
 
 
+import java.util.List;
+import com.kingsrook.qqq.backend.core.model.actions.AbstractActionInput;
+
+
 /*******************************************************************************
  ** Input DTO for the QuickSearch action.
  **
  ** Carries the search term plus optional filtering and pagination parameters.
  *******************************************************************************/
-public class QuickSearchInput
+public class QuickSearchInput extends AbstractActionInput
 {
 
    private String  searchTerm;
    private String  tableName;
    private Integer limit;
    private Integer offset;
+   private List<String> tableNames;
+   private Integer limitPerTable;
 
 
    /*******************************************************************************
@@ -139,6 +145,67 @@ public class QuickSearchInput
    public QuickSearchInput withOffset(Integer offset)
    {
       this.offset = offset;
+      return this;
+   }
+
+
+   /*******************************************************************************
+    ** Getter for tableNames (restrict the search to these tables)
+    *******************************************************************************/
+   public List<String> getTableNames()
+   {
+      return tableNames;
+   }
+
+
+
+   /*******************************************************************************
+    ** Setter for tableNames
+    *******************************************************************************/
+   public void setTableNames(List<String> tableNames)
+   {
+      this.tableNames = tableNames;
+   }
+
+
+
+   /*******************************************************************************
+    ** Fluent setter for tableNames
+    *******************************************************************************/
+   public QuickSearchInput withTableNames(List<String> tableNames)
+   {
+      this.tableNames = tableNames;
+      return this;
+   }
+
+
+
+   /*******************************************************************************
+    ** Getter for limitPerTable (search each table separately, up to this many)
+    *******************************************************************************/
+   public Integer getLimitPerTable()
+   {
+      return limitPerTable;
+   }
+
+
+
+   /*******************************************************************************
+    ** Setter for limitPerTable
+    *******************************************************************************/
+   public void setLimitPerTable(Integer limitPerTable)
+   {
+      this.limitPerTable = limitPerTable;
+   }
+
+
+
+   /*******************************************************************************
+    ** Fluent setter for limitPerTable
+    *******************************************************************************/
+   public QuickSearchInput withLimitPerTable(Integer limitPerTable)
+   {
+      this.limitPerTable = limitPerTable;
       return this;
    }
 
