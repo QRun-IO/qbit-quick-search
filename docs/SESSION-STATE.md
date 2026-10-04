@@ -19,6 +19,15 @@ Repo `QRun-IO/qbit-quick-search`, branch `feature/GH-6-repin-and-drift-fix`. Its
 - QQQ 4.1.0-RC.1 published 2026-10-02 (pre-release). Parent 2.1.0-RC.1 and quick-search 0.3.0-RC.1 proposed in qqq#921; qqq-all BOM pins 0.2.1-SNAPSHOT.
 - PR #8 (`feature/GH-10-public-stack-prep`) green, awaiting review. Dependabot PR #1 superseded by #8.
 
+## Implementation progress (goal: all audit issues, 1.0 ready)
+
+Branch `feature/GH-1-0-release-readiness`. Build with `./mvnw` (Homebrew Maven 3.10.0 rejects the parent POM's `${revision}` version; the wrapper pins 3.9.11). Plan: `docs/PLAN-1.0-release.md`.
+
+- Task 1 done (commit 90cd09d): qqq 4.1.0-RC.1 via default-active profile, opensearch-java 3.10.0, JaCoCo agent, JUnit from parent, image property `opensearch.test.image`.
+- Task 2 done (commit f18bf19): config surface, `QuickSearchRuntime`, deprecated `QuickSearchQBitContext` facade, validation tests.
+- Tasks 3+4 in progress (uncommitted until green): `QBitMetaDataProducer` producer with component producers in `metadata/`, `QuickSearchRuntimeService`, `listeners/QuickSearchRecordChangeListener` (after-commit publish, failed-event capture), `quickSearchFailedEvent` table, customizers deleted, producer tests rewritten, listener tests added.
+- Remaining: task 5 client (auth modes, TLS, timeouts, mapping v2, aliases, exception wrapping), task 6 steps (keyset paging, watermark, enabled, reindex alias swap, orphan sweep, drift, purge, failed-event replay, display values), task 7 search (permissions, bounds, tableNames, tableLabel), task 8 admin surface, task 9 docs and CI, task 10 close-out.
+
 ## Next
 
 See `docs/TODO.md`. Sponsor decisions D1 to D11 come first; then break Epic 1 into stories per the migration plan in `docs/audits/2026-10-04/01-qqq-4.1-integration.md`.

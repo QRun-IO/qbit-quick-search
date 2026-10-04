@@ -28,8 +28,7 @@ import com.kingsrook.qqq.backend.core.model.metadata.tables.QTableMetaData;
 import com.kingsrook.qqq.backend.core.model.session.QSession;
 import com.kingsrook.qqq.backend.core.modules.backend.implementations.memory.MemoryBackendModule;
 import com.kingsrook.qqq.backend.core.modules.backend.implementations.memory.MemoryRecordStore;
-import com.kingsrook.qbits.quicksearch.model.QuickSearchIndex;
-import com.kingsrook.qbits.quicksearch.model.QuickSearchIndexRun;
+import com.kingsrook.qbits.quicksearch.metadata.QuickSearchTableMetaDataHelper;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import static org.mockito.Mockito.mock;
@@ -84,14 +83,13 @@ public class BaseQuickSearchTest
          .withType(QAuthenticationType.FULLY_ANONYMOUS));
 
       ////////////////////////////////////////////////////
-      // quickSearchIndex table                         //
+      // operational tables, as the QBit produces them  //
       ////////////////////////////////////////////////////
-      qInstance.addTable(buildQuickSearchIndexTable());
-
-      ////////////////////////////////////////////////////
-      // quickSearchIndexRun table                      //
-      ////////////////////////////////////////////////////
-      qInstance.addTable(buildQuickSearchIndexRunTable());
+      QuickSearchQBitConfig tableConfig = new QuickSearchQBitConfig().withBackendName(TEST_BACKEND_NAME);
+      qInstance.addTable(QuickSearchTableMetaDataHelper.buildIndexTable(tableConfig));
+      qInstance.addTable(QuickSearchTableMetaDataHelper.buildIndexRunTable(tableConfig));
+      qInstance.addTable(QuickSearchTableMetaDataHelper.buildFailedEventTable(tableConfig));
+      qInstance.addPossibleValueSource(QuickSearchTableMetaDataHelper.buildIndexPossibleValueSource(tableConfig));
 
       ////////////////////////////////////////////////////
       // testEntity source table                        //
@@ -106,53 +104,9 @@ public class BaseQuickSearchTest
    /*******************************************************************************
     ** Build QTableMetaData for quickSearchIndex.
     *******************************************************************************/
-   private QTableMetaData buildQuickSearchIndexTable()
-   {
-      return new QTableMetaData()
-         .withName(QuickSearchIndex.TABLE_NAME)
-         .withBackendName(TEST_BACKEND_NAME)
-         .withPrimaryKeyField("id")
-         .withField(new QFieldMetaData("id", QFieldType.INTEGER).withIsEditable(false))
-         .withField(new QFieldMetaData("tableName", QFieldType.STRING))
-         .withField(new QFieldMetaData("enabled", QFieldType.BOOLEAN))
-         .withField(new QFieldMetaData("basepullIntervalMinutes", QFieldType.INTEGER))
-         .withField(new QFieldMetaData("basepullTimestampField", QFieldType.STRING))
-         .withField(new QFieldMetaData("searchableFieldsJson", QFieldType.STRING))
-         .withField(new QFieldMetaData("lastBasepullTime", QFieldType.DATE_TIME))
-         .withField(new QFieldMetaData("lastFullReindexTime", QFieldType.DATE_TIME))
-         .withField(new QFieldMetaData("recordCount", QFieldType.INTEGER))
-         .withField(new QFieldMetaData("status", QFieldType.STRING))
-         .withField(new QFieldMetaData("createDate", QFieldType.DATE_TIME))
-         .withField(new QFieldMetaData("modifyDate", QFieldType.DATE_TIME));
-   }
-
-
-
    /*******************************************************************************
     ** Build QTableMetaData for quickSearchIndexRun.
     *******************************************************************************/
-   private QTableMetaData buildQuickSearchIndexRunTable()
-   {
-      return new QTableMetaData()
-         .withName(QuickSearchIndexRun.TABLE_NAME)
-         .withBackendName(TEST_BACKEND_NAME)
-         .withPrimaryKeyField("id")
-         .withField(new QFieldMetaData("id", QFieldType.INTEGER).withIsEditable(false))
-         .withField(new QFieldMetaData("quickSearchIndexId", QFieldType.INTEGER))
-         .withField(new QFieldMetaData("runType", QFieldType.STRING))
-         .withField(new QFieldMetaData("status", QFieldType.STRING))
-         .withField(new QFieldMetaData("startTime", QFieldType.DATE_TIME))
-         .withField(new QFieldMetaData("endTime", QFieldType.DATE_TIME))
-         .withField(new QFieldMetaData("recordsProcessed", QFieldType.INTEGER))
-         .withField(new QFieldMetaData("recordsIndexed", QFieldType.INTEGER))
-         .withField(new QFieldMetaData("errorCount", QFieldType.INTEGER))
-         .withField(new QFieldMetaData("errorMessage", QFieldType.STRING))
-         .withField(new QFieldMetaData("createDate", QFieldType.DATE_TIME))
-         .withField(new QFieldMetaData("modifyDate", QFieldType.DATE_TIME));
-   }
-
-
-
    /*******************************************************************************
     ** Build QTableMetaData for the test source entity table.
     *******************************************************************************/

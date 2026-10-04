@@ -32,9 +32,10 @@ import com.kingsrook.qqq.backend.core.modules.backend.implementations.memory.Mem
 import com.kingsrook.qqq.backend.core.modules.backend.implementations.memory.MemoryRecordStore;
 import com.kingsrook.qbits.quicksearch.annotations.QuickSearchField;
 import com.kingsrook.qbits.quicksearch.annotations.QuickSearchable;
-import com.kingsrook.qbits.quicksearch.customizers.QuickSearchPostDeleteCustomizer;
-import com.kingsrook.qbits.quicksearch.customizers.QuickSearchPostInsertCustomizer;
-import com.kingsrook.qbits.quicksearch.customizers.QuickSearchPostUpdateCustomizer;
+import com.kingsrook.qqq.backend.core.model.metadata.code.QCodeReference;
+import com.kingsrook.qqq.backend.core.model.metadata.permissions.PermissionLevel;
+import com.kingsrook.qqq.backend.core.model.metadata.scheduleing.simple.SimpleSchedulerMetaData;
+import com.kingsrook.qbits.quicksearch.listeners.QuickSearchRecordChangeListener;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -94,6 +95,15 @@ class QuickSearchQBitProducerTest
    static class UnannotatedEntity
    {
       private String name;
+   }
+
+
+
+   @QuickSearchable(tableName = "person")
+   static class BadFieldEntity
+   {
+      @QuickSearchField
+      private String nope;
    }
 
 
@@ -266,70 +276,31 @@ class QuickSearchQBitProducerTest
     ** on source tables when enableRealTimeIndexing is true.
     ***************************************************************************/
    @Test
-   void testProduce_registersCustomizers() throws QException
+   void testProduce_registersRecordChangeListener() throws QException
    {
       QInstance qInstance = buildQInstance();
       QContext.init(qInstance, new QSession());
+      new QuickSearchQBitProducer().withConfig(buildValidConfig().withEnableRealTimeIndexing(true)).produce(qInstance);
 
-      QuickSearchQBitConfig config = buildValidConfig()
-         .withEnableRealTimeIndexing(true);
-
-      QuickSearchQBitProducer producer = new QuickSearchQBitProducer()
-         .withConfig(config);
-
-      producer.produce(qInstance);
-
-      QTableMetaData personTable = qInstance.getTable(SOURCE_TABLE);
-      assertThat(personTable).isNotNull();
-
-      Map<String, com.kingsrook.qqq.backend.core.model.metadata.code.QCodeReference> customizers =
-         personTable.getCustomizers();
-      assertThat(customizers).isNotNull();
-      assertThat(customizers).containsKey("postInsertRecord");
-      assertThat(customizers).containsKey("postUpdateRecord");
-      assertThat(customizers).containsKey("postDeleteRecord");
-
-      assertThat(customizers.get("postInsertRecord").getName())
-         .isEqualTo(QuickSearchPostInsertCustomizer.class.getName());
-      assertThat(customizers.get("postUpdateRecord").getName())
-         .isEqualTo(QuickSearchPostUpdateCustomizer.class.getName());
-      assertThat(customizers.get("postDeleteRecord").getName())
-         .isEqualTo(QuickSearchPostDeleteCustomizer.class.getName());
+      assertThat(qInstance.getRecordChangeListeners()).extracting(QCodeReference::getName).contains(QuickSearchRecordChangeListener.class.getName());
+      assertThat(qInstance.getTable(SOURCE_TABLE).getCustomizers() == null || qInstance.getTable(SOURCE_TABLE).getCustomizers().isEmpty()).isTrue();
+      assertThat(qInstance.getRuntimeServices()).extracting(QCodeReference::getName).contains(QuickSearchRuntimeService.class.getName());
    }
 
 
 
-   /***************************************************************************
-    ** Test that no customizers are registered when enableRealTimeIndexing
-    ** is false.
-    ***************************************************************************/
    @Test
-   void testProduce_realTimeIndexingDisabled_noCustomizers() throws QException
+   void testProduce_realTimeIndexingDisabled_noListener() throws QException
    {
       QInstance qInstance = buildQInstance();
       QContext.init(qInstance, new QSession());
+      new QuickSearchQBitProducer().withConfig(buildValidConfig().withEnableRealTimeIndexing(false)).produce(qInstance);
 
-      QuickSearchQBitConfig config = buildValidConfig()
-         .withEnableRealTimeIndexing(false);
-
-      QuickSearchQBitProducer producer = new QuickSearchQBitProducer()
-         .withConfig(config);
-
-      producer.produce(qInstance);
-
-      QTableMetaData personTable = qInstance.getTable(SOURCE_TABLE);
-      assertThat(personTable).isNotNull();
-
-      Map<String, com.kingsrook.qqq.backend.core.model.metadata.code.QCodeReference> customizers =
-         personTable.getCustomizers();
-      assertThat(customizers == null || customizers.isEmpty()).isTrue();
+      assertThat(qInstance.getRecordChangeListeners() == null || qInstance.getRecordChangeListeners().isEmpty()).isTrue();
    }
 
 
 
-   /***************************************************************************
-    ** Test that produce creates processes in the QInstance.
-    ***************************************************************************/
    @Test
    void testProduce_createsProcesses() throws QException
    {
@@ -488,6 +459,7 @@ class QuickSearchQBitProducerTest
       QContext.init(qInstance, new QSession());
 
       QuickSearchQBitConfig config = new QuickSearchQBitConfig()
+         .withStartupMode(QuickSearchStartupMode.DEGRADED)
          .withBackendName(BACKEND_NAME)
          .withOpensearchHost("localhost")
          .withOpensearchPort(9200)
@@ -514,39 +486,129 @@ class QuickSearchQBitProducerTest
     ** Test that config-driven tables register customizers on source tables.
     ***************************************************************************/
    @Test
-   void testProduce_configDriven_registersCustomizers() throws QException
+   void testProduce_registersQBitMetaDataWithRealVersion() throws QException
    {
       QInstance qInstance = buildQInstance();
       QContext.init(qInstance, new QSession());
+      QuickSearchQBitConfig config = buildValidConfig();
+      new QuickSearchQBitProducer().withConfig(config).produce(qInstance);
 
-      QuickSearchQBitConfig config = new QuickSearchQBitConfig()
-         .withBackendName(BACKEND_NAME)
-         .withOpensearchHost("localhost")
-         .withOpensearchPort(9200)
-         .withOpensearchIndexName("test-config-driven")
-         .withEnableRealTimeIndexing(true)
-         .withSearchableTable(SOURCE_TABLE, List.of(new SearchableFieldConfig("firstName")));
+      assertThat(qInstance.getQBits()).hasSize(1);
+      var qBit = qInstance.getQBits().values().iterator().next();
+      assertThat(qBit.getGroupId()).isEqualTo("com.kingsrook.qbits");
+      assertThat(qBit.getArtifactId()).isEqualTo("quick-search");
+      assertThat(qBit.getVersion()).isNotEqualTo("unknown").doesNotContain("${");
+      assertThat(qBit.getConfig()).isSameAs(config);
+      assertThat(config.getRuntime()).isNotNull();
+      assertThat(QuickSearchRuntime.get()).isSameAs(config.getRuntime());
 
-      QuickSearchQBitProducer producer = new QuickSearchQBitProducer()
-         .withConfig(config);
-
-      producer.produce(qInstance);
-
-      QTableMetaData personTable = qInstance.getTable(SOURCE_TABLE);
-      Map<String, com.kingsrook.qqq.backend.core.model.metadata.code.QCodeReference> customizers =
-         personTable.getCustomizers();
-
-      assertThat(customizers).containsKey("postInsertRecord");
-      assertThat(customizers).containsKey("postUpdateRecord");
-      assertThat(customizers).containsKey("postDeleteRecord");
+      assertThat(qInstance.getTable("quickSearchIndex").getSourceQBitName()).isEqualTo(qBit.getName());
+      assertThat(qInstance.getProcess(QuickSearchQBitProducer.BASEPULL_PROCESS_NAME).getSourceQBitName()).isEqualTo(qBit.getName());
+      assertThat(qInstance.getTable("quickSearchFailedEvent")).isNotNull();
    }
 
 
 
-   /***************************************************************************
-    ** Test mixed mode: both annotation-based and config-driven tables
-    ** are discovered and merged.
-    ***************************************************************************/
+   @Test
+   void testProduce_permissionRulesAndUniqueKey() throws QException
+   {
+      QInstance qInstance = buildQInstance();
+      QContext.init(qInstance, new QSession());
+      new QuickSearchQBitProducer().withConfig(buildValidConfig()).produce(qInstance);
+
+      assertThat(qInstance.getProcess(QuickSearchQBitProducer.FULL_REINDEX_PROCESS_NAME).getPermissionRules().getLevel()).isEqualTo(PermissionLevel.HAS_ACCESS_PERMISSION);
+      assertThat(qInstance.getProcess(QuickSearchQBitProducer.FULL_REINDEX_PROCESS_NAME).getPermissionRules().getPermissionBaseName()).isEqualTo("quickSearchAdmin");
+      assertThat(qInstance.getApp(QuickSearchQBitProducer.APP_NAME).getPermissionRules().getLevel()).isEqualTo(PermissionLevel.HAS_ACCESS_PERMISSION);
+      assertThat(qInstance.getTable("quickSearchIndex").getPermissionRules().getLevel()).isEqualTo(PermissionLevel.READ_WRITE_PERMISSIONS);
+      assertThat(qInstance.getTable("quickSearchIndex").getUniqueKeys()).anyMatch(uk -> uk.getFieldNames().equals(List.of("tableName")));
+   }
+
+
+
+   @Test
+   void testProduce_schedulesWhenSchedulerConfigured() throws QException
+   {
+      QInstance qInstance = buildQInstance();
+      qInstance.addScheduler(new SimpleSchedulerMetaData().withName("sched"));
+      QContext.init(qInstance, new QSession());
+      new QuickSearchQBitProducer().withConfig(buildValidConfig().withSchedulerName("sched").withBasepullRepeatSeconds(120).withReconcileCronExpression("0 0 3 * * ?")).produce(qInstance);
+
+      assertThat(qInstance.getProcess(QuickSearchQBitProducer.BASEPULL_PROCESS_NAME).getSchedule().getSchedulerName()).isEqualTo("sched");
+      assertThat(qInstance.getProcess(QuickSearchQBitProducer.BASEPULL_PROCESS_NAME).getSchedule().getRepeatSeconds()).isEqualTo(120);
+      assertThat(qInstance.getProcess(QuickSearchQBitProducer.RECONCILE_PROCESS_NAME).getSchedule().getCronExpression()).isEqualTo("0 0 3 * * ?");
+      assertThat(qInstance.getProcess(QuickSearchQBitProducer.FULL_REINDEX_PROCESS_NAME).getSchedule()).isNull();
+   }
+
+
+
+   @Test
+   void testProduce_noScheduler_processesUnscheduled() throws QException
+   {
+      QInstance qInstance = buildQInstance();
+      QContext.init(qInstance, new QSession());
+      new QuickSearchQBitProducer().withConfig(buildValidConfig()).produce(qInstance);
+      assertThat(qInstance.getProcess(QuickSearchQBitProducer.BASEPULL_PROCESS_NAME).getSchedule()).isNull();
+   }
+
+
+
+   @Test
+   void testProduce_flagsControlProcessRegistration() throws QException
+   {
+      QInstance qInstance = buildQInstance();
+      QContext.init(qInstance, new QSession());
+      new QuickSearchQBitProducer().withConfig(buildValidConfig().withEnableBasepullProcess(false)).produce(qInstance);
+      assertThat(qInstance.getProcess(QuickSearchQBitProducer.BASEPULL_PROCESS_NAME)).isNull();
+      assertThat(qInstance.getProcess(QuickSearchQBitProducer.FULL_REINDEX_PROCESS_NAME)).isNotNull();
+      assertThat(qInstance.getProcess(QuickSearchQBitProducer.RECONCILE_PROCESS_NAME)).isNotNull();
+   }
+
+
+
+   @Test
+   void testProduce_failFast_unreachableCluster_throws()
+   {
+      QInstance qInstance = buildQInstance();
+      QContext.init(qInstance, new QSession());
+      QuickSearchQBitConfig config = buildValidConfig().withStartupMode(QuickSearchStartupMode.FAIL_FAST).withOpensearchHost("127.0.0.1").withOpensearchPort(1);
+      assertThatThrownBy(() -> new QuickSearchQBitProducer().withConfig(config).produce(qInstance))
+         .isInstanceOf(QException.class)
+         .hasMessageContaining("startupMode=DEGRADED");
+   }
+
+
+
+   @Test
+   void testProduce_annotationFieldMissing_throws()
+   {
+      QInstance qInstance = buildQInstance();
+      QContext.init(qInstance, new QSession());
+      QuickSearchQBitConfig config = buildValidConfig().withSearchableEntityClasses(List.of(BadFieldEntity.class));
+      assertThatThrownBy(() -> new QuickSearchQBitProducer().withConfig(config).produce(qInstance))
+         .isInstanceOf(QException.class)
+         .hasMessageContaining("[nope]");
+   }
+
+
+
+   @Test
+   void testIsEnabled_falseWithoutConfig()
+   {
+      assertThat(new QuickSearchQBitProducer().isEnabled()).isFalse();
+      assertThat(new QuickSearchQBitProducer().withConfig(buildValidConfig()).isEnabled()).isTrue();
+   }
+
+
+
+   @Test
+   void testProduce_withoutConfig_throws()
+   {
+      QInstance qInstance = buildQInstance();
+      assertThatThrownBy(() -> new QuickSearchQBitProducer().produce(qInstance)).isInstanceOf(QException.class).hasMessageContaining("no config");
+   }
+
+
+
    @Test
    void testProduce_mixedMode_bothSourcesMerged() throws QException
    {
@@ -608,6 +670,7 @@ class QuickSearchQBitProducerTest
       QContext.init(qInstance, new QSession());
 
       QuickSearchQBitConfig config = new QuickSearchQBitConfig()
+         .withStartupMode(QuickSearchStartupMode.DEGRADED)
          .withBackendName(BACKEND_NAME)
          .withOpensearchHost("localhost")
          .withOpensearchPort(9200)
@@ -639,6 +702,7 @@ class QuickSearchQBitProducerTest
       QContext.init(qInstance, new QSession());
 
       QuickSearchQBitConfig config = new QuickSearchQBitConfig()
+         .withStartupMode(QuickSearchStartupMode.DEGRADED)
          .withBackendName(BACKEND_NAME)
          .withOpensearchHost("localhost")
          .withOpensearchPort(9200)
@@ -670,6 +734,7 @@ class QuickSearchQBitProducerTest
       QContext.init(qInstance, new QSession());
 
       QuickSearchQBitConfig config = new QuickSearchQBitConfig()
+         .withStartupMode(QuickSearchStartupMode.DEGRADED)
          .withBackendName(BACKEND_NAME)
          .withOpensearchHost("localhost")
          .withOpensearchPort(9200)
@@ -698,6 +763,7 @@ class QuickSearchQBitProducerTest
       QContext.init(qInstance, new QSession());
 
       QuickSearchQBitConfig config = new QuickSearchQBitConfig()
+         .withStartupMode(QuickSearchStartupMode.DEGRADED)
          .withBackendName(BACKEND_NAME)
          .withOpensearchHost("localhost")
          .withOpensearchPort(9200)
@@ -727,6 +793,7 @@ class QuickSearchQBitProducerTest
       QContext.init(qInstance, new QSession());
 
       QuickSearchQBitConfig config = new QuickSearchQBitConfig()
+         .withStartupMode(QuickSearchStartupMode.DEGRADED)
          .withBackendName(BACKEND_NAME)
          .withOpensearchHost("localhost")
          .withOpensearchPort(9200)
@@ -758,6 +825,7 @@ class QuickSearchQBitProducerTest
       QContext.init(qInstance, new QSession());
 
       QuickSearchQBitConfig config = new QuickSearchQBitConfig()
+         .withStartupMode(QuickSearchStartupMode.DEGRADED)
          .withBackendName(BACKEND_NAME)
          .withOpensearchHost("localhost")
          .withOpensearchPort(9200)
@@ -838,6 +906,7 @@ class QuickSearchQBitProducerTest
    private QuickSearchQBitConfig buildValidConfig()
    {
       return new QuickSearchQBitConfig()
+         .withStartupMode(QuickSearchStartupMode.DEGRADED)
          .withBackendName(BACKEND_NAME)
          .withOpensearchHost("localhost")
          .withOpensearchPort(9200)
