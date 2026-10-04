@@ -1,13 +1,17 @@
 ---
 tracker_key:        # fill with the GitHub tracking issue once created
 project: qbit-quick-search
-status: draft
+status: implemented-pending-release
 updated: 2026-10-04
 ---
 
 # Initiative: QBit Quick Search 1.0 on QQQ 4.1
 
 > Stakeholder-readable PRD. This markdown is canonical; the tracker mirrors it. Scope claims are grounded in the code at `develop` (`000e5bb`) and in QQQ `v4.1.0-RC.1`, and in the deep-dive audit of 2026-10-04 (`docs/audits/2026-10-04/README.md`, blockers B1 to B25).
+
+## Status
+
+Implemented on `feature/GH-1-0-release-readiness` (2026-10-04): all six epics are coded and tested (307 unit, 18 integration, coverage gate met). Decisions D1 to D11 were applied with the recommended answers, with two recorded adjustments: D4 (missing `schedulerName` warns rather than fails) and D5 (single-table full reindex uses the reconcile algorithm). Open before tagging 1.0.0: `qbit-build-parent` 2.1.0 re-pin, qqq-all follow-up PR, CI image matrix, qqq core SPI issue (1.1).
 
 ## Executive Summary
 

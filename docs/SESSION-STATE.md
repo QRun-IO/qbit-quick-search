@@ -21,13 +21,12 @@ Repo `QRun-IO/qbit-quick-search`, branch `feature/GH-6-repin-and-drift-fix`. Its
 
 ## Implementation progress (goal: all audit issues, 1.0 ready)
 
-Branch `feature/GH-1-0-release-readiness`. Build with `./mvnw` (Homebrew Maven 3.10.0 rejects the parent POM's `${revision}` version; the wrapper pins 3.9.11). Plan: `docs/PLAN-1.0-release.md`.
+Branch `feature/GH-1-0-release-readiness`, 8 local commits, nothing pushed. Build with `./mvnw` (Homebrew Maven 3.10.0 rejects the parent POM's `${revision}` version; the wrapper pins 3.9.11). Plan: `docs/PLAN-1.0-release.md`.
 
-- Task 1 done (commit 90cd09d): qqq 4.1.0-RC.1 via default-active profile, opensearch-java 3.10.0, JaCoCo agent, JUnit from parent, image property `opensearch.test.image`.
-- Task 2 done (commit f18bf19): config surface, `QuickSearchRuntime`, deprecated `QuickSearchQBitContext` facade, validation tests.
-- Tasks 3+4 in progress (uncommitted until green): `QBitMetaDataProducer` producer with component producers in `metadata/`, `QuickSearchRuntimeService`, `listeners/QuickSearchRecordChangeListener` (after-commit publish, failed-event capture), `quickSearchFailedEvent` table, customizers deleted, producer tests rewritten, listener tests added.
-- Remaining: task 5 client (auth modes, TLS, timeouts, mapping v2, aliases, exception wrapping), task 6 steps (keyset paging, watermark, enabled, reindex alias swap, orphan sweep, drift, purge, failed-event replay, display values), task 7 search (permissions, bounds, tableNames, tableLabel), task 8 admin surface, task 9 docs and CI, task 10 close-out.
+- Tasks 1 to 9 done: build on qqq 4.1.0-RC.1 and opensearch-java 3.10.0; config surface and `QuickSearchRuntime`; `QBitMetaDataProducer` contract with component producers; `QuickSearchRecordChangeListener` with after-commit publish and `quickSearchFailedEvent`; transport factory (NONE/BASIC/AWS_SIGV4, TLS, timeouts, customizer SPI); client mapping v2 with alias swap and versioned bulks; keyset-paged steps with start-anchored watermark, replay, orphan sweep, drift, purge; permission-aware bounded search; process input and result screens; README, CHANGELOG, migration guide.
+- Verification: 307 unit + 18 integration tests green (OpenSearch 2.19.6, qqq 4.1.0-RC.1), coverage 85% / 96%.
+- Open items are in `docs/TODO.md` ("Before tagging 1.0.0").
 
 ## Next
 
-See `docs/TODO.md`. Sponsor decisions D1 to D11 come first; then break Epic 1 into stories per the migration plan in `docs/audits/2026-10-04/01-qqq-4.1-integration.md`.
+Review the branch, then the pre-tag items in `docs/TODO.md`.

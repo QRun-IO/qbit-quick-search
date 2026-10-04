@@ -34,6 +34,10 @@ Full detail with file:line evidence in `01-qqq-4.1-integration.md`. The QBit com
 
 Ordered migration plan (from report 01): 1 contract and compat shims; 2 config surface; 3 record-change listener with after-commit publish; 4 runtime service and `SourceQBitAware` config resolution; 5 schedules, watermark, keyset paging; 6 permission-aware search; 7 build and parent 2.1.0 re-pin; 8 qqq-all follow-up (remove the manual `addQBit`, pass `withSchedulerName("demoScheduler")`) and the qqq SPI proposal.
 
+## Status (2026-10-04, branch feature/GH-1-0-release-readiness)
+
+All 25 blockers below are implemented on the release branch (commits 90cd09d through the admin-screen commit). Verification: 307 unit tests and 18 Testcontainers integration tests green against qqq 4.1.0-RC.1 and OpenSearch 2.19.6, JaCoCo 85% instruction / 96% class. Remaining before the 1.0.0 tag: parent 2.1.0 re-pin when published, qqq-all follow-up (remove its manual `addQBit`, set `schedulerName`, `startupMode DEGRADED` for its test), CI image matrix job, and the qqq core search SPI proposal (1.1).
+
 ## 2. Blockers for 1.0, deduplicated across reports
 
 Severity: Critical = wrong or leaked data; High = breaks a target platform or a core promise; Medium = operational risk. IDs reference the raw reports (A = auth, C = compatibility, F = correctness, G = features).
