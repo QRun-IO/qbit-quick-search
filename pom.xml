@@ -18,10 +18,13 @@
 <project xmlns="http://maven.apache.org/POM/4.0.0" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
 
    <properties>
-      <revision>0.2.1-SNAPSHOT</revision>
+      <revision>1.0.0-SNAPSHOT</revision>
       <maven.compiler.source>21</maven.compiler.source>
       <maven.compiler.target>21</maven.compiler.target>
-      <opensearch.version>2.10.0</opensearch.version>
+      <opensearch.version>3.10.0</opensearch.version>
+      <jacoco.version>0.8.15</jacoco.version>
+      <opensearch.test.image>opensearchproject/opensearch:2.19.6</opensearch.test.image>
+      <aws.sdk.version>2.41.10</aws.sdk.version>
    </properties>
 
    <parent>
@@ -66,18 +69,6 @@
       <tag>HEAD</tag>
    </scm>
 
-   <dependencyManagement>
-      <dependencies>
-         <dependency>
-            <groupId>org.junit</groupId>
-            <artifactId>junit-bom</artifactId>
-            <version>5.10.0</version>
-            <type>pom</type>
-            <scope>import</scope>
-         </dependency>
-      </dependencies>
-   </dependencyManagement>
-
    <dependencies>
       <dependency>
          <groupId>com.kingsrook.qqq</groupId>
@@ -102,6 +93,22 @@
          <artifactId>jackson-datatype-jsr310</artifactId>
       </dependency>
 
+      <!-- Only needed for authMode AWS_SIGV4 (Amazon OpenSearch Service with IAM). -->
+      <!-- Optional: hosts that use it declare them; the core modules already come  -->
+      <!-- through qqq-backend-core at the same version.                            -->
+      <dependency>
+         <groupId>software.amazon.awssdk</groupId>
+         <artifactId>apache-client</artifactId>
+         <version>${aws.sdk.version}</version>
+         <optional>true</optional>
+      </dependency>
+      <dependency>
+         <groupId>software.amazon.awssdk</groupId>
+         <artifactId>sts</artifactId>
+         <version>${aws.sdk.version}</version>
+         <optional>true</optional>
+      </dependency>
+
       <dependency>
          <groupId>com.kingsrook.qqq</groupId>
          <artifactId>qqq-backend-module-rdbms</artifactId>
@@ -118,7 +125,6 @@
       <dependency>
          <groupId>org.junit.jupiter</groupId>
          <artifactId>junit-jupiter</artifactId>
-         <version>5.10.0</version>
          <scope>test</scope>
       </dependency>
 
@@ -152,6 +158,22 @@
    </dependencies>
 
    <build>
+      <resources>
+         <resource>
+            <directory>src/main/resources</directory>
+            <filtering>true</filtering>
+            <includes>
+               <include>quick-search.properties</include>
+            </includes>
+         </resource>
+         <resource>
+            <directory>src/main/resources</directory>
+            <filtering>false</filtering>
+            <excludes>
+               <exclude>quick-search.properties</exclude>
+            </excludes>
+         </resource>
+      </resources>
       <plugins>
          <plugin>
             <groupId>org.apache.maven.plugins</groupId>
@@ -170,6 +192,9 @@
             <artifactId>maven-failsafe-plugin</artifactId>
             <version>3.1.2</version>
             <configuration>
+               <systemPropertyVariables>
+                  <opensearch.test.image>${opensearch.test.image}</opensearch.test.image>
+               </systemPropertyVariables>
                <includes>
                   <include>**/*IntegrationTest.java</include>
                   <include>**/*IT.java</include>
@@ -187,7 +212,21 @@
          <plugin>
             <groupId>org.jacoco</groupId>
             <artifactId>jacoco-maven-plugin</artifactId>
+            <version>${jacoco.version}</version>
             <executions>
+               <execution>
+                  <id>prepare-agent</id>
+                  <goals>
+                     <goal>prepare-agent</goal>
+                  </goals>
+               </execution>
+               <execution>
+                  <id>report</id>
+                  <phase>verify</phase>
+                  <goals>
+                     <goal>report</goal>
+                  </goals>
+               </execution>
                <execution>
                   <id>check</id>
                   <goals>
@@ -219,13 +258,19 @@
    </build>
 
    <profiles>
-      <!-- Opt-in check against the next qqq line: mvn -B verify -Pqqq-snapshot       -->
-      <!-- (override the version with -Dqqq.snapshot.version=...).  Default builds   -->
-      <!-- take the qqq version only from qbit-build-parent (ADR-0007).              -->
+      <!-- 1.0 requires qqq 4.1 APIs (record-change listeners, after-commit        -->
+      <!-- callbacks, runtime services). Until qbit-build-parent 2.1.0 imports the -->
+      <!-- released 4.1 BOM, this profile is active by default and imports          -->
+      <!-- qqq-bom-pom 4.1.0-RC.1 ahead of the parent's 4.0.0 BOM. Override with    -->
+      <!-- -Dqqq.snapshot.version=... ; deactivate with -P!qqq-snapshot. Remove the -->
+      <!-- activation when the parent moves to 4.1 (ADR-0007).                      -->
       <profile>
          <id>qqq-snapshot</id>
+         <activation>
+            <activeByDefault>true</activeByDefault>
+         </activation>
          <properties>
-            <qqq.snapshot.version>4.1.0-SNAPSHOT</qqq.snapshot.version>
+            <qqq.snapshot.version>4.1.0-RC.1</qqq.snapshot.version>
          </properties>
          <dependencyManagement>
             <dependencies>

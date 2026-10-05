@@ -13,271 +13,271 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+
 package com.kingsrook.qbits.quicksearch;
 
 
+import java.io.InputStream;
 import java.lang.reflect.Field;
 import java.util.ArrayList;
-import java.util.HashMap;
+import java.util.Arrays;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
-import com.kingsrook.qqq.backend.core.actions.customizers.TableCustomizers;
+import java.util.Properties;
 import com.kingsrook.qqq.backend.core.exceptions.QException;
 import com.kingsrook.qqq.backend.core.logging.QLogger;
+import com.kingsrook.qqq.backend.core.model.metadata.MetaDataProducerMultiOutput;
 import com.kingsrook.qqq.backend.core.model.metadata.QInstance;
 import com.kingsrook.qqq.backend.core.model.metadata.code.QCodeReference;
-import com.kingsrook.qqq.backend.core.model.metadata.fields.QFieldMetaData;
-import com.kingsrook.qqq.backend.core.model.metadata.fields.QFieldType;
-import com.kingsrook.qqq.backend.core.model.metadata.layout.QAppMetaData;
-import com.kingsrook.qqq.backend.core.model.metadata.processes.QBackendStepMetaData;
-import com.kingsrook.qqq.backend.core.model.metadata.processes.QProcessMetaData;
+import com.kingsrook.qqq.backend.core.model.metadata.qbits.QBitMetaData;
+import com.kingsrook.qqq.backend.core.model.metadata.qbits.QBitMetaDataProducer;
 import com.kingsrook.qqq.backend.core.model.metadata.tables.QTableMetaData;
+import com.kingsrook.qqq.backend.core.utils.StringUtils;
 import com.kingsrook.qbits.quicksearch.annotations.QuickSearchField;
 import com.kingsrook.qbits.quicksearch.annotations.QuickSearchable;
-import com.kingsrook.qbits.quicksearch.customizers.QuickSearchPostDeleteCustomizer;
-import com.kingsrook.qbits.quicksearch.customizers.QuickSearchPostInsertCustomizer;
-import com.kingsrook.qbits.quicksearch.customizers.QuickSearchPostUpdateCustomizer;
-import com.kingsrook.qbits.quicksearch.model.QuickSearchIndex;
-import com.kingsrook.qbits.quicksearch.model.QuickSearchIndexRun;
-import com.kingsrook.qbits.quicksearch.opensearch.QuickSearchOpenSearchClient;
-import com.kingsrook.qbits.quicksearch.processes.BasepullIndexStep;
-import com.kingsrook.qbits.quicksearch.processes.FullReindexStep;
-import com.kingsrook.qbits.quicksearch.processes.ReconcileIndexStep;
-import com.kingsrook.qbits.quicksearch.publisher.IndexEventPublisher;
-import com.kingsrook.qbits.quicksearch.publisher.SynchronousIndexEventPublisher;
+import com.kingsrook.qbits.quicksearch.listeners.QuickSearchRecordChangeListener;
+import com.kingsrook.qbits.quicksearch.metadata.QuickSearchAdminAppMetaDataProducer;
+import com.kingsrook.qbits.quicksearch.metadata.QuickSearchProcessMetaDataHelper;
+import static com.kingsrook.qqq.backend.core.logging.LogUtils.logPair;
 
 
 /*******************************************************************************
- ** Central orchestrator for the Quick Search QBit.
+ ** Entry point of the Quick Search QBit, a QQQ 4.1 QBitMetaDataProducer.
  **
- ** Validates config, discovers annotated tables, produces QQQ metadata
- ** (tables, processes, app), initializes the OpenSearch client, and registers
- ** real-time customizers on source tables.
+ ** The framework's default produce() registers QBitMetaData, validates the
+ ** config, runs the component producers in this package (operational tables,
+ ** processes, admin app), applies the config's table customizer and default
+ ** backend, stamps sourceQBitName, then calls {@link #postProduceActions}, which
+ ** discovers searchable tables, builds the runtime, registers the record-change
+ ** listener and runtime service, and (in FAIL_FAST mode) prepares the index.
  **
- ** Entry point: {@link #produce(QInstance)}.
+ ** Host usage, unchanged from 0.x:
+ **   new QuickSearchQBitProducer().withConfig(config).produce(qInstance);
+ ** That overload adds everything to the instance itself; hosts that discover
+ ** this producer through MetaDataProducerHelper get the standard contract.
  *******************************************************************************/
-public class QuickSearchQBitProducer
+public class QuickSearchQBitProducer implements QBitMetaDataProducer<QuickSearchQBitConfig>
 {
    private static final QLogger LOG = QLogger.getLogger(QuickSearchQBitProducer.class);
 
-   public static final String BASEPULL_PROCESS_NAME      = "quickSearchBasepullIndex";
-   public static final String FULL_REINDEX_PROCESS_NAME  = "quickSearchFullReindex";
-   public static final String RECONCILE_PROCESS_NAME     = "quickSearchReconcileIndex";
-   public static final String APP_NAME                   = "quickSearchAdmin";
+   public static final String GROUP_ID    = "com.kingsrook.qbits";
+   public static final String ARTIFACT_ID = "quick-search";
 
-   private QuickSearchQBitConfig config;
+   public static final String BASEPULL_PROCESS_NAME     = QuickSearchProcessMetaDataHelper.BASEPULL_PROCESS_NAME;
+   public static final String FULL_REINDEX_PROCESS_NAME = QuickSearchProcessMetaDataHelper.FULL_REINDEX_PROCESS_NAME;
+   public static final String RECONCILE_PROCESS_NAME    = QuickSearchProcessMetaDataHelper.RECONCILE_PROCESS_NAME;
+   public static final String APP_NAME                  = QuickSearchAdminAppMetaDataProducer.APP_NAME;
+
+   private static final String VERSION = loadVersion();
+
+   private QuickSearchQBitConfig qBitConfig;
+   private String                namespace;
 
 
 
-   /***************************************************************************
-    ** Fluent setter for config.
-    ***************************************************************************/
+   /*******************************************************************************
+    ** Fluent setter for the config (0.x name).
+    *******************************************************************************/
    public QuickSearchQBitProducer withConfig(QuickSearchQBitConfig config)
    {
-      this.config = config;
+      this.qBitConfig = config;
       return (this);
    }
 
 
 
-   /***************************************************************************
-    ** Getter for config.
-    ***************************************************************************/
+   /*******************************************************************************
+    ** Getter for the config (0.x name).
+    *******************************************************************************/
    public QuickSearchQBitConfig getConfig()
    {
-      return (this.config);
+      return (this.qBitConfig);
    }
 
 
 
-   /***************************************************************************
-    ** Produce all QQQ metadata for the Quick Search QBit and register it
-    ** into the given QInstance.
-    **
-    ** Steps:
-    ** 1. Validate configuration
-    ** 2. Discover @QuickSearchable annotated entity classes
-    ** 3. Create and initialize the OpenSearch client
-    ** 4. Create the index event publisher
-    ** 5. Store everything in QuickSearchQBitContext
-    ** 6. Produce operational tables
-    ** 7. Produce processes
-    ** 8. Register customizers on source tables (if real-time indexing enabled)
-    ** 9. Produce an admin app
-    **
-    ** @param qInstance the QQQ instance to register metadata into
-    ** @throws QException if validation fails or an unrecoverable error occurs
-    ***************************************************************************/
-   public void produce(QInstance qInstance) throws QException
+   /*******************************************************************************
+    ** Fluent setter for the config.
+    *******************************************************************************/
+   public QuickSearchQBitProducer withQBitConfig(QuickSearchQBitConfig config)
    {
-      ////////////////////////////////////////////////////
-      // 1. Validate config                             //
-      ////////////////////////////////////////////////////
-      List<String> errors = new ArrayList<>();
-      config.validate(qInstance, errors);
-      if(!errors.isEmpty())
+      this.qBitConfig = config;
+      return (this);
+   }
+
+
+
+   /*******************************************************************************
+    ** Setter for the config.
+    *******************************************************************************/
+   public void setQBitConfig(QuickSearchQBitConfig config)
+   {
+      this.qBitConfig = config;
+   }
+
+
+
+   /*******************************************************************************
+    **
+    *******************************************************************************/
+   @Override
+   public QuickSearchQBitConfig getQBitConfig()
+   {
+      return (this.qBitConfig);
+   }
+
+
+
+   /*******************************************************************************
+    ** Namespace for this QBit instance; also the default tableNamePrefix.
+    *******************************************************************************/
+   public QuickSearchQBitProducer withNamespace(String namespace)
+   {
+      this.namespace = namespace;
+      return (this);
+   }
+
+
+
+   /*******************************************************************************
+    **
+    *******************************************************************************/
+   @Override
+   public String getNamespace()
+   {
+      return (this.namespace);
+   }
+
+
+
+   /*******************************************************************************
+    **
+    *******************************************************************************/
+   @Override
+   public QBitMetaData getQBitMetaData()
+   {
+      return (new QBitMetaData()
+         .withGroupId(GROUP_ID)
+         .withArtifactId(ARTIFACT_ID)
+         .withVersion(VERSION)
+         .withNamespace(getNamespace())
+         .withConfig(getQBitConfig()));
+   }
+
+
+
+   /*******************************************************************************
+    ** A producer found by package scanning has no config; skip it.
+    *******************************************************************************/
+   @Override
+   public boolean isEnabled()
+   {
+      return (qBitConfig != null);
+   }
+
+
+
+   /*******************************************************************************
+    ** Produce and add everything to the instance. Returns an empty output so a
+    ** host that also calls addSelfToInstance on the result adds nothing twice.
+    **
+    ** Validation errors are reported as one QException listing every error.
+    *******************************************************************************/
+   @Override
+   public MetaDataProducerMultiOutput produce(QInstance qInstance) throws QException
+   {
+      if(qBitConfig == null)
       {
-         throw new QException("QuickSearchQBit configuration validation failed: " + String.join("; ", errors));
+         throw (new QException("QuickSearchQBit configuration validation failed: no config was supplied (call withConfig)"));
       }
 
-      ////////////////////////////////////////////////////
-      // 2. Discover searchable tables from annotations //
-      ////////////////////////////////////////////////////
+      if(StringUtils.hasContent(namespace) && !StringUtils.hasContent(qBitConfig.getTableNamePrefix()))
+      {
+         qBitConfig.setTableNamePrefix(namespace);
+      }
+
+      List<String> errors = new ArrayList<>();
+      qBitConfig.validate(qInstance, errors);
+      if(!errors.isEmpty())
+      {
+         throw (new QException("QuickSearchQBit configuration validation failed: " + String.join("; ", errors)));
+      }
+
+      MetaDataProducerMultiOutput output = QBitMetaDataProducer.super.produce(qInstance);
+      output.addSelfToInstance(qInstance);
+
+      return (new MetaDataProducerMultiOutput());
+   }
+
+
+
+   /*******************************************************************************
+    ** Discover tables, build the runtime, register the listener and runtime
+    ** service, and prepare the index in FAIL_FAST mode.
+    *******************************************************************************/
+   @Override
+   public void postProduceActions(MetaDataProducerMultiOutput output, QInstance qInstance) throws QException
+   {
       List<QuickSearchableTableConfig> annotationTables = discoverSearchableTables(qInstance);
+      List<QuickSearchableTableConfig> configTables     = convertConfigDrivenTables(qInstance);
 
-      ////////////////////////////////////////////////////
-      // 2b. Convert config-driven searchable tables    //
-      ////////////////////////////////////////////////////
-      List<QuickSearchableTableConfig> configTables = convertConfigDrivenTables(qInstance);
-
-      ////////////////////////////////////////////////////
-      // 2c. Detect duplicate table names across both   //
-      //     annotation-based and config-driven sources //
-      ////////////////////////////////////////////////////
       for(QuickSearchableTableConfig annotationTable : annotationTables)
       {
          for(QuickSearchableTableConfig configTable : configTables)
          {
             if(annotationTable.getTableName().equals(configTable.getTableName()))
             {
-               throw new QException("Duplicate table name found in both annotation-based and config-driven searchable tables: " + annotationTable.getTableName());
+               throw (new QException("Duplicate table name found in both annotation-based and config-driven searchable tables: " + annotationTable.getTableName()));
             }
          }
       }
 
-      ////////////////////////////////////////////////////
-      // 2d. Merge both lists into discoveredTables     //
-      ////////////////////////////////////////////////////
       List<QuickSearchableTableConfig> discoveredTables = new ArrayList<>();
       discoveredTables.addAll(annotationTables);
       discoveredTables.addAll(configTables);
 
-      ////////////////////////////////////////////////////
-      // 3. Create OpenSearch client                    //
-      ////////////////////////////////////////////////////
-      QuickSearchOpenSearchClient client = null;
-      try
+      QuickSearchRuntime previous = qBitConfig.getRuntime();
+      if(previous != null)
       {
-         client = new QuickSearchOpenSearchClient(config);
-      }
-      catch(Exception e)
-      {
-         LOG.warn("Failed to create OpenSearch client during produce; continuing without client", e);
+         previous.close();
       }
 
-      ////////////////////////////////////////////////////
-      // 4. Initialize index (best-effort)              //
-      ////////////////////////////////////////////////////
-      if(client != null)
+      QuickSearchRuntime runtime = new QuickSearchRuntime(qBitConfig);
+      runtime.setDiscoveredTables(discoveredTables);
+      qBitConfig.setRuntime(runtime);
+
+      if(Boolean.TRUE.equals(qBitConfig.getEnableRealTimeIndexing()))
       {
-         try
-         {
-            client.ensureIndexExists();
-         }
-         catch(Exception e)
-         {
-            LOG.warn("Failed to ensure OpenSearch index exists during produce; continuing", e);
-         }
+         qInstance.withRecordChangeListener(new QCodeReference(QuickSearchRecordChangeListener.class));
       }
 
-      ////////////////////////////////////////////////////
-      // 5. Create publisher                            //
-      ////////////////////////////////////////////////////
-      IndexEventPublisher publisher = null;
-      if(config.getIndexEventPublisher() != null)
+      qInstance.withRuntimeService(new QCodeReference(QuickSearchRuntimeService.class));
+
+      if(!StringUtils.hasContent(qBitConfig.getSchedulerName()) && Boolean.TRUE.equals(qBitConfig.getEnableBasepullProcess()))
       {
-         publisher = config.getIndexEventPublisher();
-      }
-      else if(client != null)
-      {
-         publisher = new SynchronousIndexEventPublisher(client, discoveredTables, config.getBulkBatchSize());
+         LOG.warn("Quick Search has no schedulerName; the basepull and reconcile processes are registered but will not run on a schedule");
       }
 
-      ////////////////////////////////////////////////////
-      // 6. Store in context                            //
-      ////////////////////////////////////////////////////
-      QuickSearchQBitContext.setConfig(config);
-      QuickSearchQBitContext.setClient(client);
-      QuickSearchQBitContext.setPublisher(publisher);
-      QuickSearchQBitContext.setDiscoveredTables(discoveredTables);
-
-      ////////////////////////////////////////////////////
-      // 7. Produce operational tables                  //
-      ////////////////////////////////////////////////////
-      String indexTableName    = config.applyPrefix(QuickSearchIndex.TABLE_NAME);
-      String indexRunTableName = config.applyPrefix(QuickSearchIndexRun.TABLE_NAME);
-
-      QTableMetaData indexTable = buildQuickSearchIndexTable(indexTableName, config.getBackendName());
-      QTableMetaData indexRunTable = buildQuickSearchIndexRunTable(indexRunTableName, config.getBackendName());
-
-      qInstance.addTable(indexTable);
-      qInstance.addTable(indexRunTable);
-
-      ////////////////////////////////////////////////////
-      // 8. Produce processes                           //
-      ////////////////////////////////////////////////////
-      String basepullProcessName   = config.applyPrefix(BASEPULL_PROCESS_NAME);
-      String fullReindexProcessName = config.applyPrefix(FULL_REINDEX_PROCESS_NAME);
-      String reconcileProcessName   = config.applyPrefix(RECONCILE_PROCESS_NAME);
-
-      QProcessMetaData basepullProcess = buildBasepullProcess(basepullProcessName);
-      QProcessMetaData fullReindexProcess = buildFullReindexProcess(fullReindexProcessName);
-      QProcessMetaData reconcileProcess = buildReconcileProcess(reconcileProcessName);
-
-      if(Boolean.TRUE.equals(config.getEnableScheduledProcesses()))
+      if(qBitConfig.getStartupMode() == QuickSearchStartupMode.FAIL_FAST)
       {
-         qInstance.addProcess(basepullProcess);
-         qInstance.addProcess(fullReindexProcess);
-         qInstance.addProcess(reconcileProcess);
+         runtime.start();
       }
 
-      ////////////////////////////////////////////////////
-      // 9. Register customizers on source tables       //
-      ////////////////////////////////////////////////////
-      if(Boolean.TRUE.equals(config.getEnableRealTimeIndexing()))
-      {
-         registerCustomizers(qInstance, discoveredTables);
-      }
-
-      ////////////////////////////////////////////////////
-      // 10. Produce admin app                          //
-      ////////////////////////////////////////////////////
-      String appName = config.applyPrefix(APP_NAME);
-      QAppMetaData app = new QAppMetaData()
-         .withName(appName)
-         .withLabel("Quick Search Admin")
-         .withChild(indexTable)
-         .withChild(indexRunTable);
-
-      if(Boolean.TRUE.equals(config.getEnableScheduledProcesses()))
-      {
-         app.withChild(basepullProcess);
-         app.withChild(fullReindexProcess);
-         app.withChild(reconcileProcess);
-      }
-
-      qInstance.addApp(app);
+      LOG.info("Quick Search QBit produced", logPair("version", VERSION), logPair("tables", discoveredTables.size()),
+         logPair("indexName", qBitConfig.getOpensearchIndexName()), logPair("startupMode", qBitConfig.getStartupMode()));
    }
 
 
 
-   /***************************************************************************
-    ** Discover searchable table configurations by scanning annotated entity
-    ** classes from the config.
-    **
-    ** For each class, extracts @QuickSearchable annotation attributes and
-    ** scans fields for @QuickSearchField annotations. Falls back to the
-    ** annotation's fields() array if no @QuickSearchField-annotated fields
-    ** are found.
-    **
-    ** @param qInstance the QInstance to look up table primary keys
-    ** @return list of discovered table configurations
-    ***************************************************************************/
-   List<QuickSearchableTableConfig> discoverSearchableTables(QInstance qInstance)
+   /*******************************************************************************
+    ** Discover searchable tables from @QuickSearchable entity classes. Fails when
+    ** a configured field does not exist on a table that is in the instance.
+    *******************************************************************************/
+   List<QuickSearchableTableConfig> discoverSearchableTables(QInstance qInstance) throws QException
    {
-      List<QuickSearchableTableConfig> tables = new ArrayList<>();
-      List<Class<?>> entityClasses = config.getSearchableEntityClasses();
+      List<QuickSearchableTableConfig> tables        = new ArrayList<>();
+      List<Class<?>>                   entityClasses = qBitConfig.getSearchableEntityClasses();
 
       if(entityClasses == null || entityClasses.isEmpty())
       {
@@ -289,81 +289,65 @@ public class QuickSearchQBitProducer
          QuickSearchable annotation = entityClass.getAnnotation(QuickSearchable.class);
          if(annotation == null)
          {
-            LOG.warn("Entity class does not have @QuickSearchable annotation; skipping",
-               "className", entityClass.getName());
+            LOG.warn("Entity class does not have @QuickSearchable annotation; skipping", logPair("className", entityClass.getName()));
             continue;
          }
 
-         String tableName                  = annotation.tableName();
-         Integer basepullIntervalMinutes   = annotation.basepullIntervalMinutes();
-         String basepullTimestampField     = annotation.basepullTimestampField();
-         Boolean enabledByDefault          = annotation.enabledByDefault();
+         String tableName = annotation.tableName();
 
-         //////////////////////////////////////////////////////////
-         // Scan fields for @QuickSearchField annotations        //
-         //////////////////////////////////////////////////////////
-         List<String> searchableFields         = new ArrayList<>();
-         Map<String, Integer> fieldWeights     = new LinkedHashMap<>();
+         List<String>         searchableFields   = new ArrayList<>();
+         Map<String, Integer> fieldWeights       = new LinkedHashMap<>();
          Map<String, Boolean> fieldIncludeLabels = new LinkedHashMap<>();
 
          List<Field> allFields = new ArrayList<>();
-         Class<?> current = entityClass;
+         Class<?>    current   = entityClass;
          while(current != null && current != Object.class)
          {
-            allFields.addAll(java.util.Arrays.asList(current.getDeclaredFields()));
+            allFields.addAll(Arrays.asList(current.getDeclaredFields()));
             current = current.getSuperclass();
          }
+
          for(Field field : allFields)
          {
             QuickSearchField fieldAnnotation = field.getAnnotation(QuickSearchField.class);
             if(fieldAnnotation != null)
             {
-               String fieldName = field.getName();
-               searchableFields.add(fieldName);
-               fieldWeights.put(fieldName, fieldAnnotation.weight());
-               fieldIncludeLabels.put(fieldName, fieldAnnotation.includeLabel());
+               searchableFields.add(field.getName());
+               fieldWeights.put(field.getName(), fieldAnnotation.weight());
+               fieldIncludeLabels.put(field.getName(), fieldAnnotation.includeLabel());
             }
          }
 
-         //////////////////////////////////////////////////////////
-         // Fall back to @QuickSearchable.fields() if no         //
-         // @QuickSearchField-annotated fields were found        //
-         //////////////////////////////////////////////////////////
-         if(searchableFields.isEmpty())
+         if(searchableFields.isEmpty() && annotation.fields() != null)
          {
-            String[] annotationFields = annotation.fields();
-            if(annotationFields != null)
+            for(String fieldName : annotation.fields())
             {
-               for(String fieldName : annotationFields)
-               {
-                  searchableFields.add(fieldName);
-                  fieldWeights.put(fieldName, 1);
-                  fieldIncludeLabels.put(fieldName, false);
-               }
+               searchableFields.add(fieldName);
+               fieldWeights.put(fieldName, 1);
+               fieldIncludeLabels.put(fieldName, false);
             }
          }
 
-         //////////////////////////////////////////////////////////
-         // Get primary key field from QInstance table metadata   //
-         //////////////////////////////////////////////////////////
-         String primaryKeyField = "id";
-         QTableMetaData table = qInstance.getTable(tableName);
+         String         primaryKeyField        = "id";
+         String         basepullTimestampField = StringUtils.hasContent(annotation.basepullTimestampField()) ? annotation.basepullTimestampField() : null;
+         QTableMetaData table                  = qInstance.getTable(tableName);
          if(table != null)
          {
-            primaryKeyField = table.getPrimaryKeyField();
+            primaryKeyField        = table.getPrimaryKeyField();
+            basepullTimestampField = resolveTimestampField(table, searchableFields, basepullTimestampField);
+            removeHiddenFields(table, searchableFields, fieldWeights, fieldIncludeLabels);
          }
 
-         QuickSearchableTableConfig tableConfig = new QuickSearchableTableConfig()
+         tables.add(new QuickSearchableTableConfig()
             .withTableName(tableName)
             .withPrimaryKeyField(primaryKeyField)
             .withSearchableFields(searchableFields)
             .withFieldWeights(fieldWeights)
             .withFieldIncludeLabels(fieldIncludeLabels)
-            .withBasepullIntervalMinutes(basepullIntervalMinutes)
+            .withBasepullIntervalMinutes(annotation.basepullIntervalMinutes())
             .withBasepullTimestampField(basepullTimestampField)
-            .withEnabledByDefault(enabledByDefault);
-
-         tables.add(tableConfig);
+            .withEnabledByDefault(annotation.enabledByDefault())
+            .withMaxFieldLength(qBitConfig.getMaxFieldLength()));
       }
 
       return (tables);
@@ -371,24 +355,13 @@ public class QuickSearchQBitProducer
 
 
 
-   /***************************************************************************
-    ** Convert config-driven SearchableTableConfig entries into
-    ** QuickSearchableTableConfig objects.
-    **
-    ** Maps each SearchableFieldConfig into the searchableFields list,
-    ** fieldWeights map, and fieldIncludeLabels map. Resolves the primary
-    ** key field from the QInstance table metadata (falls back to "id").
-    ** Applies the default basepullIntervalMinutes from QBit config when
-    ** the table-level value is null. Transfers recordLabelFormat and
-    ** recordLabelFields.
-    **
-    ** @param qInstance the QInstance to look up table primary keys
-    ** @return list of converted table configurations, empty if none configured
-    ***************************************************************************/
+   /*******************************************************************************
+    ** Convert config-driven tables, resolving primary keys and defaults.
+    *******************************************************************************/
    private List<QuickSearchableTableConfig> convertConfigDrivenTables(QInstance qInstance)
    {
-      List<QuickSearchableTableConfig> tables = new ArrayList<>();
-      List<SearchableTableConfig> searchableTables = config.getSearchableTables();
+      List<QuickSearchableTableConfig> tables           = new ArrayList<>();
+      List<SearchableTableConfig>      searchableTables = qBitConfig.getSearchableTables();
 
       if(searchableTables == null || searchableTables.isEmpty())
       {
@@ -397,53 +370,45 @@ public class QuickSearchQBitProducer
 
       for(SearchableTableConfig stc : searchableTables)
       {
-         List<String> searchableFields           = new ArrayList<>();
-         Map<String, Integer> fieldWeights        = new LinkedHashMap<>();
-         Map<String, Boolean> fieldIncludeLabels  = new LinkedHashMap<>();
+         List<String>         searchableFields   = new ArrayList<>();
+         Map<String, Integer> fieldWeights       = new LinkedHashMap<>();
+         Map<String, Boolean> fieldIncludeLabels = new LinkedHashMap<>();
 
-         if(stc.getFields() != null)
+         for(SearchableFieldConfig fieldConfig : stc.getFields() == null ? List.<SearchableFieldConfig>of() : stc.getFields())
          {
-            for(SearchableFieldConfig fieldConfig : stc.getFields())
-            {
-               String fieldName = fieldConfig.getFieldName();
-               searchableFields.add(fieldName);
-               fieldWeights.put(fieldName, fieldConfig.getWeight() != null ? fieldConfig.getWeight() : 1);
-               fieldIncludeLabels.put(fieldName, fieldConfig.getIncludeLabel() != null ? fieldConfig.getIncludeLabel() : false);
-            }
+            searchableFields.add(fieldConfig.getFieldName());
+            fieldWeights.put(fieldConfig.getFieldName(), fieldConfig.getWeight() != null ? fieldConfig.getWeight() : 1);
+            fieldIncludeLabels.put(fieldConfig.getFieldName(), fieldConfig.getIncludeLabel() != null ? fieldConfig.getIncludeLabel() : false);
          }
 
-         //////////////////////////////////////////////////////////
-         // Resolve primary key from QInstance table metadata     //
-         //////////////////////////////////////////////////////////
-         String primaryKeyField = "id";
-         QTableMetaData table = qInstance.getTable(stc.getTableName());
+         String         primaryKeyField        = "id";
+         String         basepullTimestampField = stc.getBasepullTimestampField();
+         QTableMetaData table                  = qInstance.getTable(stc.getTableName());
          if(table != null)
          {
-            primaryKeyField = table.getPrimaryKeyField();
+            primaryKeyField        = table.getPrimaryKeyField();
+            basepullTimestampField = (basepullTimestampField != null && !table.getFields().containsKey(basepullTimestampField)) ? null : basepullTimestampField;
+            removeHiddenFields(table, searchableFields, fieldWeights, fieldIncludeLabels);
          }
 
-         //////////////////////////////////////////////////////////
-         // Apply default basepullIntervalMinutes from config    //
-         //////////////////////////////////////////////////////////
          Integer basepullInterval = stc.getBasepullIntervalMinutes();
          if(basepullInterval == null)
          {
-            basepullInterval = config.getDefaultBasepullIntervalMinutes();
+            basepullInterval = qBitConfig.getDefaultBasepullIntervalMinutes();
          }
 
-         QuickSearchableTableConfig tableConfig = new QuickSearchableTableConfig()
+         tables.add(new QuickSearchableTableConfig()
             .withTableName(stc.getTableName())
             .withPrimaryKeyField(primaryKeyField)
             .withSearchableFields(searchableFields)
             .withFieldWeights(fieldWeights)
             .withFieldIncludeLabels(fieldIncludeLabels)
             .withBasepullIntervalMinutes(basepullInterval)
-            .withBasepullTimestampField(stc.getBasepullTimestampField())
+            .withBasepullTimestampField(basepullTimestampField)
             .withEnabledByDefault(stc.getEnabledByDefault())
             .withRecordLabelFormat(stc.getRecordLabelFormat())
-            .withRecordLabelFields(stc.getRecordLabelFields());
-
-         tables.add(tableConfig);
+            .withRecordLabelFields(stc.getRecordLabelFields())
+            .withMaxFieldLength(qBitConfig.getMaxFieldLength()));
       }
 
       return (tables);
@@ -451,132 +416,102 @@ public class QuickSearchQBitProducer
 
 
 
-   /***************************************************************************
-    ** Build QTableMetaData for the quickSearchIndex operational table.
-    ***************************************************************************/
-   private QTableMetaData buildQuickSearchIndexTable(String tableName, String backendName)
+   /*******************************************************************************
+    **
+    *******************************************************************************/
+   /*******************************************************************************
+    ** Fail on missing searchable fields. A missing timestamp field disables
+    ** incremental basepull for the table (reconcile still covers it): the
+    ** default "modifyDate" is downgraded with a warning, an explicit other name
+    ** is an error.
+    *******************************************************************************/
+   private static String resolveTimestampField(QTableMetaData table, List<String> searchableFields, String basepullTimestampField) throws QException
    {
-      return new QTableMetaData()
-         .withName(tableName)
-         .withLabel("Quick Search Index")
-         .withBackendName(backendName)
-         .withPrimaryKeyField("id")
-         .withField(new QFieldMetaData("id", QFieldType.INTEGER).withIsEditable(false))
-         .withField(new QFieldMetaData("tableName", QFieldType.STRING))
-         .withField(new QFieldMetaData("enabled", QFieldType.BOOLEAN))
-         .withField(new QFieldMetaData("basepullIntervalMinutes", QFieldType.INTEGER))
-         .withField(new QFieldMetaData("basepullTimestampField", QFieldType.STRING))
-         .withField(new QFieldMetaData("searchableFieldsJson", QFieldType.STRING))
-         .withField(new QFieldMetaData("lastBasepullTime", QFieldType.DATE_TIME))
-         .withField(new QFieldMetaData("lastFullReindexTime", QFieldType.DATE_TIME))
-         .withField(new QFieldMetaData("recordCount", QFieldType.INTEGER))
-         .withField(new QFieldMetaData("status", QFieldType.STRING))
-         .withField(new QFieldMetaData("createDate", QFieldType.DATE_TIME))
-         .withField(new QFieldMetaData("modifyDate", QFieldType.DATE_TIME));
-   }
-
-
-
-   /***************************************************************************
-    ** Build QTableMetaData for the quickSearchIndexRun operational table.
-    ***************************************************************************/
-   private QTableMetaData buildQuickSearchIndexRunTable(String tableName, String backendName)
-   {
-      return new QTableMetaData()
-         .withName(tableName)
-         .withLabel("Quick Search Index Run")
-         .withBackendName(backendName)
-         .withPrimaryKeyField("id")
-         .withField(new QFieldMetaData("id", QFieldType.INTEGER).withIsEditable(false))
-         .withField(new QFieldMetaData("quickSearchIndexId", QFieldType.INTEGER))
-         .withField(new QFieldMetaData("runType", QFieldType.STRING))
-         .withField(new QFieldMetaData("status", QFieldType.STRING))
-         .withField(new QFieldMetaData("startTime", QFieldType.DATE_TIME))
-         .withField(new QFieldMetaData("endTime", QFieldType.DATE_TIME))
-         .withField(new QFieldMetaData("recordsProcessed", QFieldType.INTEGER))
-         .withField(new QFieldMetaData("recordsIndexed", QFieldType.INTEGER))
-         .withField(new QFieldMetaData("errorCount", QFieldType.INTEGER))
-         .withField(new QFieldMetaData("errorMessage", QFieldType.STRING))
-         .withField(new QFieldMetaData("createDate", QFieldType.DATE_TIME))
-         .withField(new QFieldMetaData("modifyDate", QFieldType.DATE_TIME));
-   }
-
-
-
-   /***************************************************************************
-    ** Build the basepull indexing process metadata.
-    ***************************************************************************/
-   private QProcessMetaData buildBasepullProcess(String processName)
-   {
-      return new QProcessMetaData()
-         .withName(processName)
-         .withLabel("Quick Search Basepull Index")
-         .withStep(new QBackendStepMetaData()
-            .withName("basepull")
-            .withCode(new QCodeReference(BasepullIndexStep.class)));
-   }
-
-
-
-   /***************************************************************************
-    ** Build the full reindex process metadata with optional tableName input.
-    ***************************************************************************/
-   private QProcessMetaData buildFullReindexProcess(String processName)
-   {
-      return new QProcessMetaData()
-         .withName(processName)
-         .withLabel("Quick Search Full Reindex")
-         .withStep(new QBackendStepMetaData()
-            .withName("fullReindex")
-            .withCode(new QCodeReference(FullReindexStep.class)));
-   }
-
-
-
-   /***************************************************************************
-    ** Build the reconcile process metadata: re-index each table from its
-    ** source and remove documents with no source record, without wiping the
-    ** index first. Takes the same optional tableName input as full reindex.
-    ***************************************************************************/
-   private QProcessMetaData buildReconcileProcess(String processName)
-   {
-      return new QProcessMetaData()
-         .withName(processName)
-         .withLabel("Quick Search Reconcile Index")
-         .withStep(new QBackendStepMetaData()
-            .withName("reconcile")
-            .withCode(new QCodeReference(ReconcileIndexStep.class)));
-   }
-
-
-
-   /***************************************************************************
-    ** Register post-insert, post-update, and post-delete customizers on each
-    ** discovered source table.
-    ***************************************************************************/
-   private void registerCustomizers(QInstance qInstance, List<QuickSearchableTableConfig> discoveredTables)
-   {
-      for(QuickSearchableTableConfig tableConfig : discoveredTables)
+      List<String> missing = new ArrayList<>();
+      for(String fieldName : searchableFields)
       {
-         String tableName = tableConfig.getTableName();
-         QTableMetaData table = qInstance.getTable(tableName);
-
-         if(table == null)
+         if(!table.getFields().containsKey(fieldName))
          {
-            LOG.warn("Source table not found in QInstance; skipping customizer registration",
-               "tableName", tableName);
-            continue;
+            missing.add(fieldName);
          }
-
-         table.withCustomizer(TableCustomizers.POST_INSERT_RECORD,
-            new QCodeReference(QuickSearchPostInsertCustomizer.class));
-
-         table.withCustomizer(TableCustomizers.POST_UPDATE_RECORD,
-            new QCodeReference(QuickSearchPostUpdateCustomizer.class));
-
-         table.withCustomizer(TableCustomizers.POST_DELETE_RECORD,
-            new QCodeReference(QuickSearchPostDeleteCustomizer.class));
       }
+      if(!missing.isEmpty())
+      {
+         throw (new QException("Searchable field(s) " + missing + " do not exist on table [" + table.getName() + "]"));
+      }
+
+      if(basepullTimestampField != null && !table.getFields().containsKey(basepullTimestampField))
+      {
+         if(QuickSearchQBitConfig.DEFAULT_BASEPULL_TIMESTAMP_FIELD.equals(basepullTimestampField))
+         {
+            LOG.warn("Table has no modifyDate field; incremental basepull is disabled for it (reconcile still covers it)", logPair("tableName", table.getName()));
+            return (null);
+         }
+         throw (new QException("basepullTimestampField [" + basepullTimestampField + "] does not exist on table [" + table.getName() + "]"));
+      }
+      return (basepullTimestampField);
+   }
+
+
+
+   /*******************************************************************************
+    ** Hidden fields are never indexed: their values would leak through
+    ** searchable text and highlights.
+    *******************************************************************************/
+   private static void removeHiddenFields(QTableMetaData table, List<String> searchableFields, Map<String, Integer> fieldWeights, Map<String, Boolean> fieldIncludeLabels)
+   {
+      List<String> hidden = new ArrayList<>();
+      for(String fieldName : searchableFields)
+      {
+         if(table.getFields().containsKey(fieldName) && Boolean.TRUE.equals(table.getField(fieldName).getIsHidden()))
+         {
+            hidden.add(fieldName);
+         }
+      }
+      if(!hidden.isEmpty())
+      {
+         LOG.warn("Hidden fields are excluded from Quick Search indexing", logPair("tableName", table.getName()), logPair("fields", hidden));
+         searchableFields.removeAll(hidden);
+         hidden.forEach(fieldWeights::remove);
+         hidden.forEach(fieldIncludeLabels::remove);
+      }
+   }
+
+
+
+   /*******************************************************************************
+    ** The artifact version, from the Maven-filtered quick-search.properties.
+    *******************************************************************************/
+   static String loadVersion()
+   {
+      try(InputStream inputStream = QuickSearchQBitProducer.class.getClassLoader().getResourceAsStream("quick-search.properties"))
+      {
+         if(inputStream != null)
+         {
+            Properties properties = new Properties();
+            properties.load(inputStream);
+            String version = properties.getProperty("version");
+            if(StringUtils.hasContent(version) && !version.contains("${"))
+            {
+               return (version);
+            }
+         }
+      }
+      catch(Exception e)
+      {
+         LOG.debug("Could not read quick-search.properties", e);
+      }
+      return ("unknown");
+   }
+
+
+
+   /*******************************************************************************
+    ** Getter for the artifact version.
+    *******************************************************************************/
+   public static String getVersion()
+   {
+      return (VERSION);
    }
 
 }

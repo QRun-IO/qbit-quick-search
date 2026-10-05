@@ -18,26 +18,38 @@ package com.kingsrook.qbits.quicksearch.processes;
 
 
 import java.time.Instant;
+import java.util.Collections;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import com.kingsrook.qqq.backend.core.actions.values.QValueFormatter;
+import com.kingsrook.qqq.backend.core.context.QContext;
+import com.kingsrook.qqq.backend.core.logging.QLogger;
 import com.kingsrook.qqq.backend.core.model.data.QRecord;
+import com.kingsrook.qqq.backend.core.model.metadata.QInstance;
+import com.kingsrook.qqq.backend.core.model.metadata.tables.QTableMetaData;
+import com.kingsrook.qqq.backend.core.utils.StringUtils;
 import com.kingsrook.qbits.quicksearch.QuickSearchableTableConfig;
 import com.kingsrook.qbits.quicksearch.opensearch.OpenSearchDocument;
+import static com.kingsrook.qqq.backend.core.logging.LogUtils.logPair;
 
 
 /*******************************************************************************
- ** Static utility class for text normalization and OpenSearch document building.
+ ** Text normalization and OpenSearch document building.
  **
- ** Provides helpers used during the indexing pipeline to normalize field values
- ** into searchable text and to assemble OpenSearchDocument instances from
- ** QRecord data.
+ ** Indexed text uses a record's display value when the query generated one
+ ** (possible-value labels, formatted dates) and the raw value otherwise. Every
+ ** value is stored as a string (fieldValues are mapped as text), truncated to
+ ** the table's maxFieldLength when set.
  *******************************************************************************/
 public class IndexingUtils
 {
+   private static final QLogger LOG = QLogger.getLogger(IndexingUtils.class);
+
+
 
    /*******************************************************************************
-    ** Private constructor to prevent instantiation of this utility class.
+    ** Private constructor to prevent instantiation.
     *******************************************************************************/
    private IndexingUtils()
    {
@@ -46,14 +58,7 @@ public class IndexingUtils
 
 
    /*******************************************************************************
-    ** Normalize text for search indexing.
-    **
-    ** Converts to lowercase, trims leading/trailing whitespace, and collapses
-    ** runs of internal whitespace to a single space. Returns empty string for
-    ** null or blank input.
-    **
-    ** @param text the raw text to normalize
-    ** @return the normalized text, never null
+    ** Trim and collapse whitespace. Lower-casing is left to the analyzers.
     *******************************************************************************/
    public static String normalizeSearchText(String text)
    {
@@ -61,39 +66,39 @@ public class IndexingUtils
       {
          return ("");
       }
-
-      return (text.toLowerCase().trim().replaceAll("\\s+", " "));
+      return (text.trim().replaceAll("\\s+", " "));
    }
 
 
 
    /*******************************************************************************
-    ** Build a concatenated searchable text string from selected record fields.
-    **
-    ** Iterates over each field name in {@code fields}, retrieves the string value
-    ** from the record, and appends it to the result. Fields with a null or blank
-    ** value are skipped. When {@code includeLabels} maps a field name to
-    ** {@code true}, the value is prefixed with {@code "fieldName: "}.
-    **
-    ** @param record        the QRecord to read field values from
-    ** @param fields        ordered list of field names to include
-    ** @param includeLabels map of field name to whether its label should be prefixed
-    ** @return the concatenated text, trimmed; empty string if fields is null or empty
+    ** Concatenate the display values of the given fields. A field whose
+    ** includeLabels entry is true is prefixed with the field's label (or name).
     *******************************************************************************/
    public static String buildSearchableText(QRecord record, List<String> fields, Map<String, Boolean> includeLabels)
+   {
+      return (buildSearchableText(record, fields, includeLabels, null, null));
+   }
+
+
+
+   /*******************************************************************************
+    **
+    *******************************************************************************/
+   static String buildSearchableText(QRecord record, List<String> fields, Map<String, Boolean> includeLabels, QTableMetaData table, Integer maxFieldLength)
    {
       if(fields == null || fields.isEmpty())
       {
          return ("");
       }
 
-      StringBuilder sb = new StringBuilder();
+      Map<String, Boolean> labels = includeLabels == null ? Collections.emptyMap() : includeLabels;
+      StringBuilder        sb     = new StringBuilder();
 
       for(String fieldName : fields)
       {
-         String value = record.getValueString(fieldName);
-
-         if(value == null || value.isBlank())
+         String value = displayValue(record, fieldName, maxFieldLength);
+         if(value == null)
          {
             continue;
          }
@@ -103,9 +108,11 @@ public class IndexingUtils
             sb.append(" ");
          }
 
-         if(Boolean.TRUE.equals(includeLabels.get(fieldName)))
+         if(Boolean.TRUE.equals(labels.get(fieldName)))
          {
-            sb.append(fieldName).append(": ");
+            String label = (table != null && table.getFields().containsKey(fieldName) && StringUtils.hasContent(table.getField(fieldName).getLabel()))
+               ? table.getField(fieldName).getLabel() : fieldName;
+            sb.append(label).append(": ");
          }
 
          sb.append(value);
@@ -117,42 +124,105 @@ public class IndexingUtils
 
 
    /*******************************************************************************
-    ** Build an OpenSearchDocument from a QRecord.
-    **
-    ** Delegates to {@link #buildSearchableText} for the searchable text, reads the
-    ** record ID from {@code primaryKeyField}, and populates {@code fieldValues} with
-    ** only those entries where the record's value is non-null.
-    **
-    ** @param record          the source QRecord
-    ** @param tableName       the QQQ table name used as the document's sourceTable
-    ** @param primaryKeyField the field name whose value becomes the document's recordId
-    ** @param fields          ordered list of field names for searchable text
-    ** @param fieldWeights    map of field name to search weight (reserved for future use)
-    ** @param includeLabels   map of field name to whether its label should be prefixed
-    ** @return a fully populated OpenSearchDocument with indexedAt set to now
+    ** Display value when present, else the raw value as a string; blank is null.
+    *******************************************************************************/
+   static String displayValue(QRecord record, String fieldName, Integer maxFieldLength)
+   {
+      String value = record.getDisplayValue(fieldName);
+      if(!StringUtils.hasContent(value))
+      {
+         value = record.getValueString(fieldName);
+      }
+      if(!StringUtils.hasContent(value))
+      {
+         return (null);
+      }
+      if(maxFieldLength != null && value.length() > maxFieldLength)
+      {
+         value = value.substring(0, maxFieldLength);
+      }
+      return (value);
+   }
+
+
+
+   /*******************************************************************************
+    ** Build a document from explicit field lists (no table config).
     *******************************************************************************/
    public static OpenSearchDocument buildDocument(QRecord record, String tableName, String primaryKeyField, List<String> fields, Map<String, Integer> fieldWeights, Map<String, Boolean> includeLabels)
    {
-      String searchableText = buildSearchableText(record, fields, includeLabels);
+      return (buildDocument(record, tableName, primaryKeyField, fields, includeLabels, lookupTable(tableName), null, null));
+   }
+
+
+
+   /*******************************************************************************
+    ** Build a document for a configured table: display values, label fallback,
+    ** truncation, and an external version from the basepull timestamp field.
+    ** Returns null when the record has no primary key.
+    *******************************************************************************/
+   public static OpenSearchDocument buildDocument(QRecord record, QuickSearchableTableConfig tableConfig)
+   {
+      QTableMetaData     table = lookupTable(tableConfig.getTableName());
+      OpenSearchDocument doc   = buildDocument(record, tableConfig.getTableName(), tableConfig.getPrimaryKeyField(), tableConfig.getSearchableFields(),
+         tableConfig.getFieldIncludeLabels(), table, tableConfig.getMaxFieldLength(), tableConfig.getBasepullTimestampField());
+
+      if(doc != null && tableConfig.getRecordLabelFormat() != null && tableConfig.getRecordLabelFields() != null)
+      {
+         doc.withRecordLabel(formatLabel(record, tableConfig, doc.getRecordLabel()));
+      }
+
+      return (doc);
+   }
+
+
+
+   /*******************************************************************************
+    **
+    *******************************************************************************/
+   private static OpenSearchDocument buildDocument(QRecord record, String tableName, String primaryKeyField, List<String> fields, Map<String, Boolean> includeLabels,
+      QTableMetaData table, Integer maxFieldLength, String timestampField)
+   {
       String recordId = record.getValueString(primaryKeyField);
       if(recordId == null)
       {
          return (null);
       }
-      String recordLabel = record.getRecordLabel();
 
       Map<String, Object> fieldValues = new HashMap<>();
-
-      if(fields != null)
+      for(String fieldName : fields == null ? List.<String>of() : fields)
       {
-         for(String fieldName : fields)
+         String value = displayValue(record, fieldName, maxFieldLength);
+         if(value != null)
          {
-            Object value = record.getValue(fieldName);
+            fieldValues.put(fieldName, value);
+         }
+      }
 
-            if(value != null)
-            {
-               fieldValues.put(fieldName, value);
-            }
+      String recordLabel = record.getRecordLabel();
+      if(!StringUtils.hasContent(recordLabel) && table != null)
+      {
+         try
+         {
+            recordLabel = QValueFormatter.formatRecordLabel(table, record);
+         }
+         catch(Exception e)
+         {
+            LOG.debug("Could not format record label", e, logPair("tableName", tableName));
+         }
+      }
+
+      Long version = null;
+      if(timestampField != null)
+      {
+         try
+         {
+            Instant timestamp = record.getValueInstant(timestampField);
+            version = timestamp == null ? null : timestamp.toEpochMilli();
+         }
+         catch(Exception e)
+         {
+            version = null;
          }
       }
 
@@ -160,47 +230,45 @@ public class IndexingUtils
          .withSourceTable(tableName)
          .withRecordId(recordId)
          .withRecordLabel(recordLabel)
-         .withSearchableText(searchableText)
+         .withSearchableText(buildSearchableText(record, fields, includeLabels, table, maxFieldLength))
          .withIndexedAt(Instant.now())
-         .withFieldValues(fieldValues));
+         .withFieldValues(fieldValues)
+         .withVersion(version));
    }
 
 
 
    /*******************************************************************************
-    ** Build an OpenSearchDocument from a QRecord using a QuickSearchableTableConfig.
-    **
-    ** Delegates to the existing buildDocument overload for core document
-    ** construction. When recordLabelFormat is set on the table config, overrides
-    ** the record label by formatting the specified field values using
-    ** String.format. Falls back to QRecord.getRecordLabel() when no format is set.
-    **
-    ** @param record      the source QRecord
-    ** @param tableConfig the table configuration containing fields, weights, and label format
-    ** @return a fully populated OpenSearchDocument, or null if the primary key is null
+    ** Apply recordLabelFormat; a bad format or null value never breaks indexing.
     *******************************************************************************/
-   public static OpenSearchDocument buildDocument(QRecord record, QuickSearchableTableConfig tableConfig)
+   private static String formatLabel(QRecord record, QuickSearchableTableConfig tableConfig, String fallback)
    {
-      OpenSearchDocument doc = buildDocument(
-         record,
-         tableConfig.getTableName(),
-         tableConfig.getPrimaryKeyField(),
-         tableConfig.getSearchableFields(),
-         tableConfig.getFieldWeights(),
-         tableConfig.getFieldIncludeLabels() != null ? tableConfig.getFieldIncludeLabels() : java.util.Collections.emptyMap());
-
-      if(doc != null && tableConfig.getRecordLabelFormat() != null && tableConfig.getRecordLabelFields() != null)
+      try
       {
          Object[] labelValues = new Object[tableConfig.getRecordLabelFields().size()];
-         for(int i = 0; i < tableConfig.getRecordLabelFields().size(); i++)
+         for(int i = 0; i < labelValues.length; i++)
          {
-            Object v = record.getValue(tableConfig.getRecordLabelFields().get(i));
-            labelValues[i] = v != null ? v : "";
+            String value = displayValue(record, tableConfig.getRecordLabelFields().get(i), null);
+            labelValues[i] = value == null ? "" : value;
          }
-         doc.withRecordLabel(String.format(tableConfig.getRecordLabelFormat(), labelValues));
+         return (String.format(tableConfig.getRecordLabelFormat(), labelValues));
       }
+      catch(Exception e)
+      {
+         LOG.warn("recordLabelFormat could not be applied; using default label", e, logPair("tableName", tableConfig.getTableName()));
+         return (fallback);
+      }
+   }
 
-      return (doc);
+
+
+   /*******************************************************************************
+    **
+    *******************************************************************************/
+   private static QTableMetaData lookupTable(String tableName)
+   {
+      QInstance qInstance = QContext.getQInstance();
+      return (qInstance == null || tableName == null ? null : qInstance.getTable(tableName));
    }
 
 }

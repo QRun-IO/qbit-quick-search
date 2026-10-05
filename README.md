@@ -1,86 +1,58 @@
 # QBit: Quick Search
 
-[![Version](https://img.shields.io/badge/version-0.2.0-blue.svg)](https://github.com/QRun-IO/qbit-quick-search)
+[![Version](https://img.shields.io/badge/version-1.0.0--SNAPSHOT-blue.svg)](https://github.com/QRun-IO/qbit-quick-search)
 [![License](https://img.shields.io/badge/license-Apache%202.0-green.svg)](https://www.apache.org/licenses/LICENSE-2.0)
 [![Java](https://img.shields.io/badge/java-21+-blue.svg)](https://adoptium.net/)
 
-> **OpenSearch-Powered Full-Text Search for QQQ Applications**
+> OpenSearch-backed full-text search across the tables of a QQQ application.
 
-This QBit provides global search across QQQ application tables via OpenSearch. Annotate entity classes or declare tables via config, configure a connection, produce the QBit, and gain real-time indexing, scheduled basepull catch-up, per-field relevance boosting, and a pagination-aware search API.
+Annotate entity classes or declare tables in config, point the QBit at an OpenSearch cluster, produce it into your `QInstance`, and you get real-time indexing of committed writes, a scheduled catch-up and reconcile, a blackout-free full rebuild, and a permission-aware search API with relevance scoring, typeahead, highlights and pagination.
 
-## Core Capabilities
+Requires QQQ 4.1 (the QBit uses 4.1's record-change listeners, after-commit callbacks and runtime services).
 
-- **Real-Time Indexing**: Post-insert, post-update, and post-delete customizers index records immediately on write
-- **Basepull Safety Net**: Scheduled process catches records missed during downtime or bulk imports
-- **Field-Level Boosting**: `@QuickSearchField(weight = N)` controls relevance ranking per field
-- **Edge-Ngram Typeahead**: Custom analyzer enables prefix matching ("ord" finds "order")
-- **Paginated Search**: `QuickSearchAction` returns results with scores, highlights, total hits, and hasMore flag
-- **Config-Driven Indexing**: `SearchableTableConfig` API indexes tables from third-party QBit jars without modifying their source
-- **Extensible Publisher**: `IndexEventPublisher` interface allows swapping in RabbitMQ, Kafka, or any async transport
-- **Admin Observability**: Operational tables track index status and run history
+## What it does
 
-## Open Source & Full Control
+| Capability | How |
+|---|---|
+| Real-time indexing | One `RecordChangeListenerInterface` registered on the instance; events are published after the write's transaction commits, so rolled-back writes never reach the index. Failures are recorded in `quickSearchFailedEvent` and replayed by the scheduled basepull. |
+| Basepull catch-up | Scheduled process (`schedulerName` plus `basepullRepeatSeconds`) that re-indexes rows changed since the previous run's start, with a configurable overlap, paging by primary key. |
+| Reconcile | Scheduled or on-demand process that re-indexes everything in place, then removes documents whose source row is gone, including documents of tables no longer configured. No search blackout. |
+| Full rebuild | Indexes every table into a fresh physical index and atomically swaps the alias; the old index keeps serving until the new one is complete. Also upgrades an index created by an older release. |
+| Search | `QuickSearchAction`: AND semantics, edge-ngram typeahead with a plain search analyzer, per-field weights, highlights, `tableNames` and `limitPerTable`, bounded paging, `tableLabel` on results. Only tables the session may read are searched; hits are re-read through `QueryAction` so record security locks apply. |
+| Connections | HTTP or HTTPS, basic auth, AWS IAM SigV4, custom CA or trust store, mTLS, timeouts, pool size, a transport customizer SPI for anything else. Secrets by `${env.X}` reference. |
+| Operations | `quickSearchIndex` (per-table status, counts, last run, last error), `quickSearchIndexRun` (history, purged after `runHistoryRetentionDays`), `quickSearchFailedEvent`, a `quickSearchAdmin` app, explicit permission rules, fail-fast or degraded startup. |
 
-QBit Quick Search is 100% open source under Apache 2.0. All data stays in your OpenSearch cluster.
+## Supported platforms
 
-## Architecture
+Tested in CI against the Docker images named in `pom.xml` (`opensearch.test.image`).
 
-### Design Principles
+| Target | Status |
+|---|---|
+| Self-managed OpenSearch 2.19.x and 3.x | Supported, security plugin disabled or HTTP basic authentication, HTTP or HTTPS with a trusted, configured or (development only) unverified certificate |
+| Amazon OpenSearch Service managed domains, OpenSearch 2.x or 3.x | Supported with fine-grained access control: either an internal-database master user with `authMode BASIC`, or IAM with `authMode AWS_SIGV4` (`awsRegion`, `awsServiceName es`, optional `awsAssumeRoleArn`). Port 443 over HTTPS. Keep `bulkBatchSize` and `maxBulkRequestBytes` under the instance type's 10 MiB payload limit on small instances. |
+| Amazon OpenSearch Serverless | Not supported in 1.0 (`_delete_by_query` and `_refresh`, used by reconcile and full rebuild, are not offered there) |
+| Elasticsearch, OpenSearch 1.x | Not supported |
 
-1. **Real-time first, basepull as safety net**: Table customizers index records synchronously on every insert, update, and delete. The basepull process runs on a schedule as a catch-up mechanism for bulk imports, OpenSearch downtime, or any records the real-time path missed.
+Least-privilege role for the identity the QBit uses, on the alias and its physical indexes (`{indexName}*`): `create_index`, `read`, `write`, `delete`, plus `indices:admin/refresh*`, `indices:admin/aliases`, `indices:admin/delete` (for the alias swap) and `indices:admin/mapping/get`; cluster level `cluster_composite_ops` for `_bulk`. For AWS fine-grained access control map the same to the basic-auth user or the IAM role. Treat the index as sensitive data: it holds copies of every indexed field value.
 
-2. **Annotation and config-driven discovery**: Entity classes marked with `@QuickSearchable` and `@QuickSearchField` are discovered at produce time. Tables from third-party jars can be declared via `SearchableTableConfig` in code. Both paths merge during `produce()`.
+For `AWS_SIGV4` add these optional dependencies to your host (the QBit declares them `optional`):
 
-3. **Extensible transport**: The `IndexEventPublisher` strategy interface decouples the write path from the indexing path. The default `SynchronousIndexEventPublisher` writes directly to OpenSearch. Consumers can provide a queue-backed implementation for async indexing.
-
-### Technology Stack
-
-- **Java 21** with QQQ 4.x backend modules (versions from `qbit-build-parent` 2.0.0)
-- **OpenSearch 2.x** for full-text search with custom edge-ngram analyzer
-- **QQQ Framework**: Entities, processes, customizers, permissions, API layer
-
-### Module Organization
-
-```
-qbit-quick-search/
-  src/main/java/com/kingsrook/qbits/quicksearch/
-    QuickSearchQBitConfig.java        -- Configuration and validation
-    QuickSearchQBitProducer.java      -- Produces tables, processes, customizers
-    QuickSearchQBitContext.java       -- Static runtime context
-    QuickSearchableTableConfig.java   -- Per-table index configuration
-    SearchableFieldConfig.java        -- Config-driven field definition
-    SearchableTableConfig.java        -- Config-driven table definition
-    annotations/                      -- @QuickSearchable, @QuickSearchField
-    model/                            -- QuickSearchIndex, QuickSearchIndexRun entities
-    opensearch/                       -- OpenSearch client, document model, bulk results
-    actions/                          -- QuickSearchAction, input/output DTOs
-    processes/                        -- AbstractIndexingStep, BasepullIndexStep, FullReindexStep, ReconcileIndexStep
-    customizers/                      -- Post-insert, post-update, post-delete customizers
-    publisher/                        -- IndexEventPublisher interface, SynchronousIndexEventPublisher
+```xml
+<dependency><groupId>software.amazon.awssdk</groupId><artifactId>apache-client</artifactId></dependency>
+<dependency><groupId>software.amazon.awssdk</groupId><artifactId>sts</artifactId></dependency> <!-- only for awsAssumeRoleArn -->
 ```
 
-## Getting Started
-
-### Prerequisites
-
-- **Java 21+**
-- **Maven 3.8+**
-- **OpenSearch 2.x** instance
-- **QQQ Application** (this is a QBit, not a standalone application)
-
-### Usage
-
-#### Maven dependency
+## Getting started
 
 ```xml
 <dependency>
     <groupId>com.kingsrook.qbits</groupId>
     <artifactId>qbit-quick-search</artifactId>
-    <version>0.2.0-SNAPSHOT</version>
+    <version>1.0.0</version>
 </dependency>
 ```
 
-#### Annotate entity classes
+Annotate entity classes:
 
 ```java
 @QuickSearchable(tableName = "customer")
@@ -97,293 +69,124 @@ public class Customer
 }
 ```
 
-#### Minimal setup
+Produce the QBit (after your backends, tables and scheduler are in the instance):
 
 ```java
 QuickSearchQBitConfig config = new QuickSearchQBitConfig()
-   .withBackendName("yourBackendName")
-   .withOpensearchHost("localhost")
-   .withOpensearchPort(9200)
+   .withBackendName("rdbms")
+   .withOpensearchUrl("https://search.example.com:443")
+   .withAuthMode(QuickSearchAuthMode.BASIC)
+   .withOpensearchUsername("${env.OPENSEARCH_USER}")
+   .withOpensearchPassword("${env.OPENSEARCH_PASSWORD}")
    .withOpensearchIndexName("my-app-search")
+   .withSchedulerName("myScheduler")
    .withSearchableEntityClasses(List.of(Customer.class, Order.class));
 
-new QuickSearchQBitProducer()
-   .withConfig(config)
-   .produce(qInstance);
+new QuickSearchQBitProducer().withConfig(config).produce(qInstance);
 ```
 
-#### With authentication and SSL
+The producer implements QQQ's `QBitMetaDataProducer`, registers its own `QBitMetaData` (`com.kingsrook.qbits:quick-search`), and adds its tables, processes and app to the instance. Do not add a `QBitMetaData` for it yourself.
+
+Tables from other QBits or jars, without annotations:
 
 ```java
-QuickSearchQBitConfig config = new QuickSearchQBitConfig()
-   .withBackendName("yourBackendName")
-   .withOpensearchHost("search.example.com")
-   .withOpensearchPort(443)
-   .withUseSsl(true)
-   .withOpensearchUsername("admin")
-   .withOpensearchPassword("secretPassword")
-   .withOpensearchIndexName("my-app-search")
-   .withSearchableEntityClasses(List.of(Customer.class));
-```
-
-#### With custom publisher (async indexing)
-
-```java
-QuickSearchQBitConfig config = new QuickSearchQBitConfig()
-   .withBackendName("yourBackendName")
-   .withOpensearchHost("localhost")
-   .withOpensearchPort(9200)
-   .withOpensearchIndexName("my-app-search")
-   .withSearchableEntityClasses(List.of(Customer.class))
-   .withIndexEventPublisher(new RabbitMqIndexEventPublisher(connectionFactory));
-```
-
-#### Config-driven table indexing
-
-When tables come from third-party QBit jars (like qbit-crm or qbit-wms), you cannot add annotations to their entity classes. Use `SearchableTableConfig` and `SearchableFieldConfig` to declare those tables as searchable in your host application config.
-
-```java
-QuickSearchQBitConfig config = new QuickSearchQBitConfig()
-   .withBackendName("rdbms")
-   .withOpensearchHost("localhost")
-   .withOpensearchPort(9200)
-   .withOpensearchIndexName("voyage-search")
-   .withSearchableTable("crmContact", List.of(
+config.withSearchableTable(new SearchableTableConfig("crmContact", List.of(
       new SearchableFieldConfig("firstName").withWeight(2),
       new SearchableFieldConfig("lastName").withWeight(2),
-      new SearchableFieldConfig("email").withWeight(3),
-      new SearchableFieldConfig("phone").withWeight(1)))
-   .withSearchableTable(new SearchableTableConfig("crmFormSubmission", List.of(
-      new SearchableFieldConfig("email").withWeight(3),
-      new SearchableFieldConfig("firstName").withWeight(1),
-      new SearchableFieldConfig("message").withWeight(1)))
-      .withRecordLabelFormat("%s - %s", "formType", "email"));
+      new SearchableFieldConfig("email").withWeight(3)))
+   .withRecordLabelFormat("%s %s", "firstName", "lastName"));
 ```
 
-`withSearchableTable()` accepts either a `(String tableName, List<SearchableFieldConfig> fields)` shorthand or a full `SearchableTableConfig` for advanced options.
+Annotation and config-driven tables can be mixed; a table may appear in only one of them. Hidden fields are never indexed. A table without the change-detection field (`modifyDate` by default) is covered by reconcile instead of incremental basepull.
 
-##### SearchableFieldConfig
-
-| Method | Description |
-|--------|-------------|
-| `new SearchableFieldConfig(fieldName)` | Constructor; QQQ field name is required |
-| `.withWeight(int)` | Boost factor for relevance ranking (default 1) |
-| `.withIncludeLabel(boolean)` | Prefix indexed text with the field label (default false) |
-
-##### SearchableTableConfig
-
-| Method | Description |
-|--------|-------------|
-| `new SearchableTableConfig(tableName, fields)` | Constructor; table name and at least one field required |
-| `.withBasepullIntervalMinutes(int)` | Override basepull schedule (defaults to config-level setting) |
-| `.withBasepullTimestampField(String)` | Change detection field (default `"modifyDate"`) |
-| `.withEnabledByDefault(boolean)` | Whether indexing starts active (default `true`) |
-| `.withRecordLabelFormat(String format, String... fields)` | `String.format` pattern and field names for search result display label |
-
-##### Record label override
-
-By default, search results use QQQ's record label for display. Config-driven tables can override this with `withRecordLabelFormat()`. The format string is passed to `String.format()` with field values pulled from the record in the order specified.
+### Searching
 
 ```java
-new SearchableTableConfig("crmFormSubmission", fields)
-   .withRecordLabelFormat("%s - %s", "formType", "email");
-// produces labels like "Contact Form - user@example.com"
-```
-
-#### Mixing annotations and config
-
-Annotations and config-driven declarations can be used together. Both paths merge during `produce()`. Each table must appear in only one source; duplicate table names across annotation and config sources will produce a validation error.
-
-```java
-QuickSearchQBitConfig config = new QuickSearchQBitConfig()
-   .withBackendName("rdbms")
-   .withOpensearchHost("localhost")
-   .withOpensearchPort(9200)
-   .withOpensearchIndexName("my-app-search")
-   .withSearchableEntityClasses(List.of(Customer.class, Order.class))
-   .withSearchableTable("crmContact", List.of(
-      new SearchableFieldConfig("firstName").withWeight(2),
-      new SearchableFieldConfig("lastName").withWeight(2),
-      new SearchableFieldConfig("email").withWeight(3)));
-```
-
-## Searching
-
-Once the QBit is produced, use `QuickSearchAction` to execute searches:
-
-```java
-QuickSearchOutput output = new QuickSearchAction().execute(
-   new QuickSearchInput()
-      .withSearchTerm("widget")
-      .withLimit(25)
-      .withOffset(0));
-
-// Check results
-System.out.println("Total hits: " + output.getTotalHits());
-System.out.println("Has more: " + output.getHasMore());
+QuickSearchOutput output = new QuickSearchAction().execute(new QuickSearchInput()
+   .withSearchTerm("widget")
+   .withTableNames(List.of("customer", "order"))   // optional
+   .withLimit(25)
+   .withOffset(0));
 
 for(QuickSearchResult result : output.getResults())
 {
-   System.out.println(result.getTableName() + ":" + result.getRecordId()
-      + " - " + result.getRecordLabel()
-      + " (score: " + result.getScore() + ")");
+   result.getTableName(); result.getTableLabel(); result.getRecordId();
+   result.getRecordLabel(); result.getScore(); result.getHighlightSnippet();
 }
+output.getTotalHits(); output.getTotalHitsIsLowerBound(); output.getHasMore();
 ```
 
-To filter results to a single table:
+`limitPerTable` returns up to that many hits from each table instead of one ranked list. Terms shorter than 2 characters return nothing; longer than 100 characters are rejected. `limit` is capped at `maxSearchLimit` and `offset + limit` at 10,000.
 
-```java
-QuickSearchOutput output = new QuickSearchAction().execute(
-   new QuickSearchInput()
-      .withSearchTerm("blue")
-      .withTableName("customer")
-      .withLimit(10));
-```
+Search runs as the current `QContext` session: tables the session cannot read are skipped, and with `applyRecordSecurityLocks` (default) hits are re-read through `QueryAction` so record security locks apply.
 
-### Triggering a Full Reindex
+### Processes
 
-The full reindex process can be triggered programmatically:
+| Process | Trigger | What it does |
+|---|---|---|
+| Quick Search Basepull Index | Scheduled every `basepullRepeatSeconds` when `schedulerName` is set; also on demand | Replays failed real-time events, re-indexes rows changed since the last run start minus `basepullOverlapSeconds`, purges old run history |
+| Quick Search Reconcile Index | Cron via `reconcileCronExpression` when `schedulerName` is set; also on demand (optional `tableName` input) | Re-indexes everything in place, removes documents without a source row and documents of unconfigured tables |
+| Quick Search Full Reindex | On demand (optional `tableName` input) | All tables: build a fresh physical index and swap the alias. One table: reconcile algorithm in place |
 
-```java
-RunBackendStepInput input = new RunBackendStepInput();
-input.addValue("tableName", "customer"); // optional: omit to reindex all tables
-RunBackendStepOutput output = new RunBackendStepOutput();
-new FullReindexStep().run(input, output);
-```
+Without `schedulerName` the processes exist but nothing runs them; the QBit logs a warning at startup.
 
-Or through the QQQ admin UI via the "Full Reindex" process.
+## Configuration reference
 
-### Reconciling the Index
+| Field | Default | Description |
+|---|---|---|
+| `backendName` | required | QQQ backend for the operational tables |
+| `opensearchUrl` | | `https://host[:port]`; preferred over `opensearchHost`, `opensearchPort`, `useSsl` |
+| `opensearchHost`, `opensearchPort`, `useSsl` | `useSsl=false` | Legacy connection fields |
+| `opensearchIndexName` | required | Alias name owned by this QBit; lowercase, OpenSearch naming rules |
+| `authMode` | inferred | `NONE`, `BASIC` (inferred when credentials are set), `AWS_SIGV4` |
+| `opensearchUsername`, `opensearchPassword` | | BASIC credentials; `${env.X}` references recommended; refused over plain HTTP unless `allowPlaintextCredentials` |
+| `awsRegion`, `awsServiceName`, `awsAssumeRoleArn` | region from `AWS_REGION`; `es` | AWS_SIGV4 settings |
+| `tls` | JVM defaults | `caCertificatePath` or `trustStorePath`/`trustStorePassword`/`trustStoreType`, `keyStorePath`/`keyStorePassword`/`keyStoreType` (mTLS), `hostnameVerification`, `insecureSkipVerify` (loopback only unless `allowInsecureInProduction`) |
+| `connectTimeoutMillis`, `responseTimeoutMillis`, `maxConnections` | 5000, 60000, 30 | Transport settings |
+| `transportCustomizer` | | `QCodeReference` to an `OpenSearchTransportCustomizer` (bearer tokens, API keys, interceptors) |
+| `startupMode` | `FAIL_FAST` | `FAIL_FAST` fails `produce()` when the cluster is unreachable; `DEGRADED` boots and retries on first use |
+| `enableRealTimeIndexing` | `true` | Register the record-change listener |
+| `enableBasepullProcess`, `enableMaintenanceProcesses` | `true` | Register basepull; register full reindex and reconcile. `enableScheduledProcesses` is a deprecated alias for both |
+| `schedulerName`, `basepullRepeatSeconds`, `reconcileCronExpression`, `reconcileCronTimeZoneId` | none, 300, none | Scheduling |
+| `basepullOverlapSeconds` | 300 | Re-read window before the previous run start |
+| `defaultBasepullIntervalMinutes` | 5 | Per-table due interval for config-driven tables |
+| `runHistoryRetentionDays` | 30 | Purge run records older than this; null keeps them |
+| `bulkBatchSize`, `maxBulkRequestBytes`, `sourceBatchSize` | 500, 5 MiB, 1000 | Batch sizes |
+| `maxFieldLength` | 10000 | Truncate each indexed value |
+| `maxSearchLimit` | 100 | Largest page size |
+| `applyRecordSecurityLocks` | `true` | Re-read hits through `QueryAction` |
+| `adminPermissionRules` | `HAS_ACCESS_PERMISSION`, base name `quickSearchAdmin` | Rules for the app and processes |
+| `tablePermissionRules` | `READ_WRITE_PERMISSIONS` | Rules for the operational tables |
+| `tableMetaDataCustomizer` | | Applied to every produced table (backend details, for example) |
+| `searchableEntityClasses`, `searchableTables` | at least one | What to index |
+| `indexEventPublisher` | synchronous | Replace the publisher (experimental SPI; see below) |
 
-If the index may have drifted from the source tables (for example, deletes that
-happened while OpenSearch was down), run the reconcile process. It re-indexes
-every source record, then removes documents whose source record no longer
-exists. It does not wipe the index first, so search keeps working while it runs.
+`@QuickSearchable(tableName, fields, basepullIntervalMinutes, basepullTimestampField, enabledByDefault)` and `@QuickSearchField(weight, includeLabel)` keep their 0.x meaning.
 
-```java
-RunBackendStepInput input = new RunBackendStepInput();
-input.addValue("tableName", "customer"); // optional: omit to reconcile all tables
-RunBackendStepOutput output = new RunBackendStepOutput();
-new ReconcileIndexStep().run(input, output);
-// output values: recordsIndexed, documentsRemoved
-```
+## Operational tables
 
-Or through the QQQ admin UI via the "Reconcile Index" process. If any document
-fails to index, the run is marked `FAILED` and no documents are removed.
+- `quickSearchIndex`: one row per table with `enabled` (honoured by indexing and search, cached for one minute), `basepullIntervalMinutes`, `lastBasepullTime`, `lastReconcileTime`, `lastFullReindexTime`, `lastRunStatus`, `lastErrorMessage`, `recordCount`, `documentCount`, `realTimeErrorCount`, `status` (`ACTIVE` or `NEEDS_REINDEX` when the configured fields changed since the row was created). Unique on `tableName`.
+- `quickSearchIndexRun`: `runType` (`BASEPULL`, `RECONCILE`, `FULL_REINDEX`), `status`, counts, `errorMessage`.
+- `quickSearchFailedEvent`: real-time events that could not be applied; `status` `PENDING` or `EXHAUSTED` after 10 attempts.
 
-## Data Model
+## Extending
 
-### Tables (2)
+`IndexEventPublisher` lets a host replace the synchronous publisher with a queue. In 1.0 the SPI is experimental: `IndexEvent` carries the table, record id, action and the record snapshot, but no sequence number, so an asynchronous consumer must order INDEX and DELETE for the same record itself. `OpenSearchTransportCustomizer` customizes the HTTP transport.
 
-| Table | Description |
-|-------|-------------|
-| `quickSearchIndex` | Per-table index configuration, status, and basepull tracking |
-| `quickSearchIndexRun` | Individual indexing run history with record counts and error tracking |
-
-### Processes (3)
-
-| Process | Description |
-|---------|-------------|
-| Basepull Index | Scheduled: queries each source table for records modified since last run, indexes in batches |
-| Full Reindex | On-demand: deletes and re-indexes all records for one or all tables |
-| Reconcile Index | On-demand: re-indexes all records for one or all tables, then removes documents with no source record, without wiping the index first |
-
-## Configuration Reference
-
-| Field | Type | Default | Description |
-|-------|------|---------|-------------|
-| `backendName` | `String` | required | QQQ backend for operational tables |
-| `opensearchHost` | `String` | required | OpenSearch hostname |
-| `opensearchPort` | `Integer` | required | OpenSearch port |
-| `opensearchIndexName` | `String` | required | OpenSearch index name |
-| `searchableEntityClasses` | `List<Class<?>>` | none | Entity classes with `@QuickSearchable` |
-| `searchableTables` | `List<SearchableTableConfig>` | none | Config-driven table definitions |
-| `opensearchUsername` | `String` | none | HTTP basic auth username |
-| `opensearchPassword` | `String` | none | HTTP basic auth password |
-| `useSsl` | `Boolean` | `false` | Use HTTPS |
-| `tableNamePrefix` | `String` | none | Prefix for produced table names |
-| `enableRealTimeIndexing` | `Boolean` | `true` | Register post-insert/update/delete customizers |
-| `enableScheduledProcesses` | `Boolean` | `true` | Register scheduled basepull process |
-| `defaultBasepullIntervalMinutes` | `Integer` | `5` | Default basepull schedule |
-| `bulkBatchSize` | `Integer` | `500` | Documents per OpenSearch bulk request |
-| `sourceBatchSize` | `Integer` | `1000` | Records per source table query batch |
-| `indexEventPublisher` | `IndexEventPublisher` | sync | Custom publisher for async transport |
-
-At least one of `searchableEntityClasses` or `searchableTables` must be provided. Both can be used together.
-
-## Annotations
-
-### `@QuickSearchable`
-
-| Attribute | Type | Default | Description |
-|-----------|------|---------|-------------|
-| `tableName` | `String` | required | QQQ table name |
-| `fields` | `String[]` | `{}` | Fallback field list if no `@QuickSearchField` annotations |
-| `basepullIntervalMinutes` | `int` | `5` | Basepull schedule for this table |
-| `basepullTimestampField` | `String` | `"modifyDate"` | Field for change detection |
-| `enabledByDefault` | `boolean` | `true` | Active on first produce |
-
-### `@QuickSearchField`
-
-| Attribute | Type | Default | Description |
-|-----------|------|---------|-------------|
-| `weight` | `int` | `1` | Boost factor for search relevance |
-| `includeLabel` | `boolean` | `false` | Prefix value with field label in indexed text |
-
-## Companion QBit Integration
-
-### qbit-crm
-
-Index `crmContact`, `crmCompany`, and `crmDeal` for full-text global search across CRM records.
-
-### qbit-wms
-
-Index `wmsItem` and `wmsLocation` for warehouse item and location search.
-
-## Testing
+## Building
 
 ```bash
-mvn test                    # Run unit tests
-mvn verify                  # Run unit tests + integration tests (requires Docker)
-mvn test -Dtest=ClassName   # Run single test class
-mvn verify -Pqqq-snapshot    # Verify against the next qqq line (4.1.0-SNAPSHOT)
+./mvnw test                                 # unit tests (memory backend, mocked client)
+CI=true ./mvnw verify                       # plus Testcontainers integration tests and the coverage gate (Docker required)
+./mvnw verify -Dopensearch.test.image=opensearchproject/opensearch:3.9.0
 ```
 
-The qqq version comes from `qbit-build-parent`. The opt-in `qqq-snapshot`
-profile imports `qqq-bom-pom` at `${qqq.snapshot.version}` (default
-`4.1.0-SNAPSHOT`) ahead of the parent's BOM and adds the Central snapshots
-repository. Pick another version with `-Dqqq.snapshot.version=...`.
+Use the wrapper: Maven 3.10 cannot read the published parent POM. The build imports qqq 4.1.0-RC.1 through the default-active `qqq-snapshot` profile until `qbit-build-parent` 2.1.0 ships (override with `-Dqqq.snapshot.version=...`). Without Docker the integration tests are skipped locally; with `CI=true` they fail instead.
 
-Without Docker, integration tests are skipped locally. With `CI=true`, they fail
-instead, so a CI build cannot pass with its integration tests silently skipped.
+## Upgrading from 0.x
 
-### Coverage
-
-- **70%+ instruction coverage** (JaCoCo enforced)
-- **90%+ class coverage** (JaCoCo enforced)
-- All unit tests run in-memory via MemoryRecordStore (no OpenSearch required)
-- Integration tests use Testcontainers with real OpenSearch
-
-## Documentation
-
-- **[QQQ Wiki](https://github.com/Kingsrook/qqq/wiki)** - Framework documentation
-- **[QBit Development Guide](https://github.com/Kingsrook/qqq/wiki/QBit-Development)** - How QBits work
-
-## Contributing
-
-QBit Quick Search is open source and welcomes contributions.
-
-- **[Report Issues](https://github.com/QRun-IO/qbit-quick-search/issues)** - Bug reports and feature requests
-- **[QQQ Contribution Guide](https://github.com/Kingsrook/qqq/wiki/Contribution-Guidelines)** - How to contribute
-
-## About Kingsrook
-
-QBit Quick Search is built by **[Kingsrook](https://qrun.io)** - making engineers more productive through intelligent automation and developer tools.
-
-- **Website**: [https://qrun.io](https://qrun.io)
-- **Contact**: [contact@kingsrook.com](mailto:contact@kingsrook.com)
-- **GitHub**: [https://github.com/QRun-IO](https://github.com/QRun-IO)
+See [docs/MIGRATION-1.0.md](docs/MIGRATION-1.0.md). In short: QQQ 4.1 is required, remove any manual `addQBit` for this QBit, set `schedulerName`, prefer `opensearchUrl` and `${env.}` secrets, and run a full reindex once so the index gets the new mapping.
 
 ## License
 
-This project is licensed under the **Apache License, Version 2.0** - see the [LICENSE](LICENSE) file for details.
+Apache License, Version 2.0. See [LICENSE](LICENSE).

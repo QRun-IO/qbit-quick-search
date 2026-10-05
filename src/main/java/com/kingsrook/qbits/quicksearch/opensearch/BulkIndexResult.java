@@ -29,6 +29,7 @@ public class BulkIndexResult
 
    private Integer      successCount = 0;
    private Integer      failureCount = 0;
+   private Integer      skippedCount = 0;
    private List<String> errors       = new ArrayList<>();
 
 
@@ -123,6 +124,26 @@ public class BulkIndexResult
    {
       this.errors = errors;
       return (this);
+   }
+
+
+
+   /*******************************************************************************
+    ** Count a document skipped because a newer version is already indexed.
+    *******************************************************************************/
+   public void addSkipped()
+   {
+      skippedCount++;
+   }
+
+
+
+   /*******************************************************************************
+    ** Getter for skippedCount
+    *******************************************************************************/
+   public Integer getSkippedCount()
+   {
+      return (skippedCount);
    }
 
 }

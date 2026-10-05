@@ -13,96 +13,104 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+
 package com.kingsrook.qbits.quicksearch.processes;
 
 
+import java.io.Serializable;
 import java.time.Instant;
 import java.time.temporal.ChronoUnit;
 import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.LinkedHashMap;
 import java.util.List;
-import com.kingsrook.qqq.backend.core.actions.tables.UpdateAction;
+import java.util.Map;
+import com.kingsrook.qqq.backend.core.actions.tables.DeleteAction;
 import com.kingsrook.qqq.backend.core.actions.tables.QueryAction;
+import com.kingsrook.qqq.backend.core.actions.tables.UpdateAction;
 import com.kingsrook.qqq.backend.core.exceptions.QException;
 import com.kingsrook.qqq.backend.core.logging.QLogger;
 import com.kingsrook.qqq.backend.core.model.actions.processes.RunBackendStepInput;
 import com.kingsrook.qqq.backend.core.model.actions.processes.RunBackendStepOutput;
+import com.kingsrook.qqq.backend.core.model.actions.tables.delete.DeleteInput;
 import com.kingsrook.qqq.backend.core.model.actions.tables.query.QCriteriaOperator;
 import com.kingsrook.qqq.backend.core.model.actions.tables.query.QFilterCriteria;
+import com.kingsrook.qqq.backend.core.model.actions.tables.query.QFilterOrderBy;
 import com.kingsrook.qqq.backend.core.model.actions.tables.query.QQueryFilter;
 import com.kingsrook.qqq.backend.core.model.actions.tables.query.QueryInput;
-import com.kingsrook.qqq.backend.core.model.actions.tables.query.QueryOutput;
 import com.kingsrook.qqq.backend.core.model.actions.tables.update.UpdateInput;
 import com.kingsrook.qqq.backend.core.model.data.QRecord;
+import com.kingsrook.qqq.backend.core.utils.CollectionUtils;
 import com.kingsrook.qbits.quicksearch.QuickSearchQBitConfig;
 import com.kingsrook.qbits.quicksearch.QuickSearchableTableConfig;
+import com.kingsrook.qbits.quicksearch.model.QuickSearchFailedEvent;
 import com.kingsrook.qbits.quicksearch.model.QuickSearchIndex;
 import com.kingsrook.qbits.quicksearch.model.QuickSearchIndexRun;
 import com.kingsrook.qbits.quicksearch.opensearch.BulkIndexResult;
 import com.kingsrook.qbits.quicksearch.opensearch.OpenSearchDocument;
 import com.kingsrook.qbits.quicksearch.opensearch.QuickSearchOpenSearchClient;
+import static com.kingsrook.qqq.backend.core.logging.LogUtils.logPair;
 
 
 /*******************************************************************************
- ** Incremental basepull indexing process step.
+ ** Scheduled catch-up. For each enabled table that is due, re-indexes records
+ ** whose basepull timestamp is at or after the previous run's start minus the
+ ** configured overlap, paging by primary key. First replays failed real-time
+ ** events, and afterwards purges old run history.
  **
- ** Queries all enabled QuickSearchIndex rows, checks whether each is due for a
- ** basepull run, and for those that are, queries the source table for records
- ** modified since the last basepull, builds OpenSearch documents, and bulk-indexes
- ** them.
+ ** The watermark stored on the quickSearchIndex row is the run's start time,
+ ** captured before the first query, so rows modified during the run are read
+ ** again next time (re-indexing is idempotent). A table without a timestamp
+ ** field is left to the reconcile process.
  **
- ** Run records are created at the start of each per-table run and updated with
- ** final status and counts on completion.  Per-table failures are caught and
- ** logged so that one bad table does not prevent others from being processed.
+ ** One table's failure does not stop the others, but the step fails at the end
+ ** if any table failed, so the scheduler and run history show it.
  *******************************************************************************/
 public class BasepullIndexStep extends AbstractIndexingStep
 {
    private static final QLogger LOG = QLogger.getLogger(BasepullIndexStep.class);
 
+   public static final String RUN_TYPE          = "BASEPULL";
+   public static final int    MAX_REPLAY_ATTEMPTS = 10;
+
 
 
    /*******************************************************************************
-    ** Main entry point called by the QQQ process engine.
     **
-    ** 1. For each discovered table, ensure a quickSearchIndex row exists.
-    ** 2. Query all enabled quickSearchIndex rows.
-    ** 3. For each enabled row, check isDueForBasepull and run basepullIndex.
-    **
-    ** @param input  process step input (not directly used)
-    ** @param output process step output (not directly used)
-    ** @throws QException if an unrecoverable error occurs (per-table errors are caught)
     *******************************************************************************/
    @Override
    public void run(RunBackendStepInput input, RunBackendStepOutput output) throws QException
    {
-      ////////////////////////////////////////////////////
-      // 1. Ensure index rows exist for all tables      //
-      ////////////////////////////////////////////////////
-      List<QuickSearchableTableConfig> discoveredTables = getDiscoveredTables();
-      for(QuickSearchableTableConfig tableConfig : discoveredTables)
+      List<String> failures = new ArrayList<>();
+
+      try
+      {
+         replayFailedEvents(output);
+      }
+      catch(Exception e)
+      {
+         LOG.warn("Replaying failed events did not complete", e);
+         failures.add("failed-event replay: " + e.getMessage());
+      }
+
+      for(QuickSearchableTableConfig tableConfig : getDiscoveredTables())
       {
          ensureIndexRowExists(tableConfig.getTableName(), tableConfig);
       }
 
-      ////////////////////////////////////////////////////
-      // 2. Query all enabled quickSearchIndex rows     //
-      ////////////////////////////////////////////////////
       QueryInput queryInput = new QueryInput();
       queryInput.setTableName(getConfig().getQuickSearchIndexTableName());
-      queryInput.setFilter(new QQueryFilter()
-         .withCriteria(new QFilterCriteria("enabled", QCriteriaOperator.EQUALS, true)));
+      queryInput.setFilter(new QQueryFilter(new QFilterCriteria("enabled", QCriteriaOperator.EQUALS, true)));
+      List<QRecord> indexRecords = new QueryAction().execute(queryInput).getRecords();
 
-      QueryOutput queryOutput = new QueryAction().execute(queryInput);
-      List<QRecord> indexRecords = queryOutput.getRecords();
-
-      if(indexRecords == null || indexRecords.isEmpty())
+      if(CollectionUtils.nullSafeIsEmpty(indexRecords))
       {
          LOG.info("No enabled quickSearchIndex rows found; nothing to basepull");
+         purgeOldRuns();
          return;
       }
 
-      ////////////////////////////////////////////////////
-      // 3. Process each enabled index row              //
-      ////////////////////////////////////////////////////
+      Integer tablesIndexed = 0;
       for(QRecord indexRecord : indexRecords)
       {
          QuickSearchIndex index = new QuickSearchIndex()
@@ -113,188 +121,313 @@ public class BasepullIndexStep extends AbstractIndexingStep
             .withBasepullTimestampField(indexRecord.getValueString("basepullTimestampField"))
             .withLastBasepullTime(indexRecord.getValueInstant("lastBasepullTime"));
 
+         QuickSearchableTableConfig tableConfig = getTableConfig(index.getTableName());
+         detectDrift(indexRecord, tableConfig);
+
          if(!isDueForBasepull(index))
          {
-            LOG.info("Index not due for basepull; skipping",
-               "tableName", index.getTableName(),
-               "lastBasepullTime", index.getLastBasepullTime());
+            LOG.debug("Index not due for basepull; skipping", logPair("tableName", index.getTableName()), logPair("lastBasepullTime", index.getLastBasepullTime()));
             continue;
          }
 
          try
          {
             basepullIndex(index);
+            tablesIndexed++;
          }
          catch(Exception e)
          {
-            LOG.warn("Error during basepull for table; continuing with next table",
-               e, "tableName", index.getTableName());
+            LOG.warn("Error during basepull for table; continuing with next table", e, logPair("tableName", index.getTableName()));
+            failures.add(index.getTableName() + ": " + e.getMessage());
          }
+      }
+
+      purgeOldRuns();
+      output.addValue("tablesIndexed", tablesIndexed);
+
+      if(!failures.isEmpty())
+      {
+         throw (new QException("Basepull failed for " + failures.size() + " item(s): " + String.join("; ", failures)));
       }
    }
 
 
 
    /*******************************************************************************
-    ** Determine whether this index is due for a basepull run.
-    **
-    ** Returns true when lastBasepullTime is null (never run), or when the elapsed
-    ** time since the last run has exceeded the configured interval.
-    **
-    ** @param index the QuickSearchIndex row to evaluate
-    ** @return true if a basepull should be executed for this index
+    ** Due when never run, or when the interval has elapsed since the last run.
     *******************************************************************************/
    boolean isDueForBasepull(QuickSearchIndex index)
    {
       Instant lastBasepullTime = index.getLastBasepullTime();
-
-      if(lastBasepullTime == null)
+      Integer intervalMinutes  = index.getBasepullIntervalMinutes();
+      if(lastBasepullTime == null || intervalMinutes == null)
       {
          return (true);
       }
-
-      Integer intervalMinutes = index.getBasepullIntervalMinutes();
-      if(intervalMinutes == null)
-      {
-         return (true);
-      }
-
       return (lastBasepullTime.plus(intervalMinutes, ChronoUnit.MINUTES).isBefore(Instant.now()));
    }
 
 
 
    /*******************************************************************************
-    ** Execute a basepull indexing run for one QuickSearchIndex row.
-    **
-    ** Steps:
-    ** 1. Resolve table config and client.
-    ** 2. Create a run record (status=RUNNING).
-    ** 3. Build an optional QQueryFilter using lastBasepullTime.
-    ** 4. Paginate through the source table, building and indexing documents.
-    ** 5. Update lastBasepullTime on the QuickSearchIndex row.
-    ** 6. Complete the run record with final status and counts.
-    **
-    ** @param index the QuickSearchIndex row driving this run
-    ** @throws QException if an error occurs that cannot be handled locally
+    ** One table's basepull run.
     *******************************************************************************/
    void basepullIndex(QuickSearchIndex index) throws QException
    {
-      String                   tableName   = index.getTableName();
-      QuickSearchableTableConfig tableConfig = getTableConfig(tableName);
-      QuickSearchOpenSearchClient client    = getClient();
-      QuickSearchQBitConfig    config      = getConfig();
+      String                      tableName   = index.getTableName();
+      QuickSearchableTableConfig  tableConfig = getTableConfig(tableName);
+      QuickSearchOpenSearchClient client      = getClient();
+      QuickSearchQBitConfig       config      = getConfig();
 
-      QuickSearchIndexRun run = createRunRecord(index.getId(), "BASEPULL");
+      QuickSearchIndexRun run = createRunRecord(index.getId(), RUN_TYPE);
 
-      Integer totalProcessed = 0;
-      Integer totalIndexed   = 0;
-      Integer totalErrors    = 0;
-      String  errorMessage   = null;
+      if(tableConfig == null)
+      {
+         String message = "Table is no longer configured for Quick Search; disable or remove its quickSearchIndex row";
+         completeRunRecord(run, RUN_FAILED, 0, 0, 1, message);
+         throw (new QException(tableName + ": " + message));
+      }
+
+      Instant runStart = Instant.now();
 
       try
       {
-         ///////////////////////////////////////////////////////////////////
-         // Build filter: timestamp field > lastBasepullTime (if set)     //
-         ///////////////////////////////////////////////////////////////////
-         QQueryFilter filter = null;
-
-         if(index.getLastBasepullTime() != null && tableConfig != null
-            && tableConfig.getBasepullTimestampField() != null)
+         String timestampField = tableConfig.getBasepullTimestampField();
+         if(timestampField == null && index.getLastBasepullTime() != null)
          {
-            filter = new QQueryFilter()
-               .withCriteria(new QFilterCriteria(
-                  tableConfig.getBasepullTimestampField(),
-                  QCriteriaOperator.GREATER_THAN,
-                  index.getLastBasepullTime()));
+            ////////////////////////////////////////////////////////////////////////
+            // no change-detection field: only the first run indexes everything;  //
+            // later changes are caught by reconcile                              //
+            ////////////////////////////////////////////////////////////////////////
+            completeRunRecord(run, RUN_COMPLETED, 0, 0, 0, null);
+            return;
          }
 
-         Integer sourceBatchSize = config.getSourceBatchSize();
-         Integer bulkBatchSize   = config.getBulkBatchSize();
-
-         ///////////////////////////////////////////////////////////////////
-         // Paginate through the source table                             //
-         ///////////////////////////////////////////////////////////////////
-         int offset = 0;
-
-         while(true)
+         List<QFilterCriteria> criteria = new ArrayList<>();
+         if(timestampField != null && index.getLastBasepullTime() != null)
          {
-            List<QRecord> batch = querySourceTableBatch(tableName, filter, sourceBatchSize, offset);
-
-            if(batch.isEmpty())
-            {
-               break;
-            }
-
-            ////////////////////////////////////////////////////
-            // Build documents for this batch                 //
-            ////////////////////////////////////////////////////
-            List<OpenSearchDocument> documents = new ArrayList<>();
-
-            for(QRecord record : batch)
-            {
-               if(tableConfig != null)
-               {
-                  OpenSearchDocument doc = IndexingUtils.buildDocument(record, tableConfig);
-                  documents.add(doc);
-               }
-            }
-
-            documents.removeIf(doc -> doc == null);
-
-            ////////////////////////////////////////////////////
-            // Bulk-index the batch                           //
-            ////////////////////////////////////////////////////
-            if(!documents.isEmpty())
-            {
-               BulkIndexResult result = client.indexDocuments(documents, bulkBatchSize);
-               totalIndexed   = totalIndexed + result.getSuccessCount();
-               totalErrors    = totalErrors + result.getFailureCount();
-
-               if(!result.getErrors().isEmpty() && errorMessage == null)
-               {
-                  errorMessage = result.getErrors().get(0);
-               }
-            }
-
-            totalProcessed = totalProcessed + batch.size();
-            offset         = offset + batch.size();
+            int     overlap = config.getBasepullOverlapSeconds() == null ? 0 : config.getBasepullOverlapSeconds();
+            Instant since   = index.getLastBasepullTime().minusSeconds(overlap);
+            criteria.add(new QFilterCriteria(timestampField, QCriteriaOperator.GREATER_THAN_OR_EQUALS, since));
          }
 
-         ////////////////////////////////////////////////////
-         // Update lastBasepullTime on the index row       //
-         // only when no indexing errors occurred           //
-         ////////////////////////////////////////////////////
-         if(totalErrors.equals(0))
+         IndexCounts counts = indexAllRecords(client, tableConfig, criteria, null);
+
+         if(counts.errors() == 0)
          {
-            QRecord updateRecord = new QRecord()
-               .withValue("id", index.getId())
-               .withValue("lastBasepullTime", Instant.now());
-
-            UpdateInput updateInput = new UpdateInput();
-            updateInput.setTableName(getConfig().getQuickSearchIndexTableName());
-            updateInput.setRecords(List.of(updateRecord));
-
-            new UpdateAction().execute(updateInput);
+            Map<String, Serializable> values = new HashMap<>();
+            values.put("lastBasepullTime", runStart);
+            values.put("documentCount", safeCount(client, tableName));
+            updateIndexRow(index.getId(), values);
          }
 
-         ////////////////////////////////////////////////////
-         // Complete the run record                        //
-         ////////////////////////////////////////////////////
-         String finalStatus = (totalErrors > 0) ? "FAILED" : "COMPLETED";
-         completeRunRecord(run, finalStatus, totalProcessed, totalIndexed, totalErrors, errorMessage);
+         String status = counts.errors() > 0 ? RUN_FAILED : RUN_COMPLETED;
+         completeRunRecord(run, status, counts.processed(), counts.indexed(), counts.errors(), counts.firstError());
 
-         LOG.info("Basepull complete",
-            "tableName", tableName,
-            "totalProcessed", totalProcessed,
-            "totalIndexed", totalIndexed,
-            "totalErrors", totalErrors);
+         LOG.info("Basepull complete", logPair("tableName", tableName), logPair("processed", counts.processed()), logPair("indexed", counts.indexed()),
+            logPair("skippedStale", counts.skipped()), logPair("errors", counts.errors()));
+
+         if(counts.errors() > 0)
+         {
+            throw (new QException("Basepull indexed " + counts.indexed() + " of " + counts.processed() + " records for table [" + tableName + "]; first error: " + counts.firstError()));
+         }
+      }
+      catch(QException e)
+      {
+         if(!RUN_FAILED.equals(run.getStatus()))
+         {
+            completeRunRecord(run, RUN_FAILED, 0, 0, 1, e.getMessage());
+            run.withStatus(RUN_FAILED);
+         }
+         throw e;
       }
       catch(Exception e)
       {
-         LOG.warn("Basepull failed for table", e, "tableName", tableName);
-         completeRunRecord(run, "FAILED", totalProcessed, totalIndexed, totalErrors, e.getMessage());
-         throw e;
+         completeRunRecord(run, RUN_FAILED, 0, 0, 1, e.getMessage());
+         throw (new QException("Basepull failed for table [" + tableName + "]: " + e.getMessage(), e));
+      }
+   }
+
+
+
+   /*******************************************************************************
+    ** Replay PENDING failed real-time events: re-read and index records for
+    ** INDEX events, delete documents for DELETE events. Successes are removed;
+    ** failures bump attempts and become EXHAUSTED at the limit.
+    *******************************************************************************/
+   void replayFailedEvents(RunBackendStepOutput output) throws QException
+   {
+      QuickSearchQBitConfig config          = getConfig();
+      String                failedEventTable = config.applyPrefix(QuickSearchFailedEvent.TABLE_NAME);
+
+      QueryInput queryInput = new QueryInput();
+      queryInput.setTableName(failedEventTable);
+      queryInput.setFilter(new QQueryFilter(new QFilterCriteria("status", QCriteriaOperator.EQUALS, QuickSearchFailedEvent.STATUS_PENDING))
+         .withOrderBy(new QFilterOrderBy("id", true))
+         .withLimit(config.getSourceBatchSize()));
+      List<QRecord> events = new QueryAction().execute(queryInput).getRecords();
+
+      if(CollectionUtils.nullSafeIsEmpty(events))
+      {
+         output.addValue("failedEventsReplayed", 0);
+         return;
+      }
+
+      QuickSearchOpenSearchClient client = getClient();
+
+      Map<String, List<QRecord>> indexByTable  = new LinkedHashMap<>();
+      Map<String, List<QRecord>> deleteByTable = new LinkedHashMap<>();
+      for(QRecord event : events)
+      {
+         Map<String, List<QRecord>> target = "DELETE".equals(event.getValueString("action")) ? deleteByTable : indexByTable;
+         target.computeIfAbsent(event.getValueString("tableName"), k -> new ArrayList<>()).add(event);
+      }
+
+      List<Serializable> succeeded = new ArrayList<>();
+      List<QRecord>      failed    = new ArrayList<>();
+
+      for(Map.Entry<String, List<QRecord>> entry : deleteByTable.entrySet())
+      {
+         List<String> documentIds = new ArrayList<>();
+         for(QRecord event : entry.getValue())
+         {
+            documentIds.add(OpenSearchDocument.buildDocumentId(entry.getKey(), event.getValueString("recordId")));
+         }
+         try
+         {
+            BulkIndexResult result = client.deleteDocuments(documentIds, config.getBulkBatchSize());
+            markReplayOutcome(entry.getValue(), result.getFailureCount() == 0, result.getErrors(), succeeded, failed);
+         }
+         catch(Exception e)
+         {
+            markReplayOutcome(entry.getValue(), false, List.of(e.getMessage() == null ? e.toString() : e.getMessage()), succeeded, failed);
+         }
+      }
+
+      for(Map.Entry<String, List<QRecord>> entry : indexByTable.entrySet())
+      {
+         String                     tableName   = entry.getKey();
+         QuickSearchableTableConfig tableConfig = getTableConfig(tableName);
+         if(tableConfig == null)
+         {
+            markReplayOutcome(entry.getValue(), false, List.of("table is no longer configured"), succeeded, failed);
+            continue;
+         }
+
+         try
+         {
+            String             primaryKeyField = tableConfig.getPrimaryKeyField() == null ? "id" : tableConfig.getPrimaryKeyField();
+            List<Serializable> ids             = new ArrayList<>();
+            for(QRecord event : entry.getValue())
+            {
+               ids.add(event.getValueString("recordId"));
+            }
+
+            QueryInput sourceQuery = new QueryInput();
+            sourceQuery.setTableName(tableName);
+            sourceQuery.setFilter(new QQueryFilter(new QFilterCriteria(primaryKeyField, QCriteriaOperator.IN, ids)));
+            sourceQuery.setShouldGenerateDisplayValues(true);
+            sourceQuery.setShouldTranslatePossibleValues(true);
+            List<QRecord> records = CollectionUtils.nonNullList(new QueryAction().execute(sourceQuery).getRecords());
+
+            List<OpenSearchDocument> documents = new ArrayList<>();
+            List<String>             foundIds  = new ArrayList<>();
+            for(QRecord record : records)
+            {
+               OpenSearchDocument document = IndexingUtils.buildDocument(record, tableConfig);
+               if(document != null)
+               {
+                  documents.add(document);
+                  foundIds.add(document.getRecordId());
+               }
+            }
+
+            ///////////////////////////////////////////////////////////////////////
+            // a record deleted since the event was recorded has no document to //
+            // index; remove any stale document for it instead                  //
+            ///////////////////////////////////////////////////////////////////////
+            List<String> goneDocumentIds = new ArrayList<>();
+            for(Serializable id : ids)
+            {
+               if(!foundIds.contains(String.valueOf(id)))
+               {
+                  goneDocumentIds.add(OpenSearchDocument.buildDocumentId(tableName, String.valueOf(id)));
+               }
+            }
+
+            BulkIndexResult result = client.indexDocuments(documents, config.getBulkBatchSize());
+            if(!goneDocumentIds.isEmpty())
+            {
+               BulkIndexResult deleteResult = client.deleteDocuments(goneDocumentIds, config.getBulkBatchSize());
+               deleteResult.getErrors().forEach(result::addFailure);
+            }
+            markReplayOutcome(entry.getValue(), result.getFailureCount() == 0, result.getErrors(), succeeded, failed);
+         }
+         catch(Exception e)
+         {
+            markReplayOutcome(entry.getValue(), false, List.of(e.getMessage() == null ? e.toString() : e.getMessage()), succeeded, failed);
+         }
+      }
+
+      if(!succeeded.isEmpty())
+      {
+         DeleteInput deleteInput = new DeleteInput();
+         deleteInput.setTableName(failedEventTable);
+         deleteInput.setPrimaryKeys(succeeded);
+         new DeleteAction().execute(deleteInput);
+      }
+
+      if(!failed.isEmpty())
+      {
+         UpdateInput updateInput = new UpdateInput();
+         updateInput.setTableName(failedEventTable);
+         updateInput.setRecords(failed);
+         new UpdateAction().execute(updateInput);
+      }
+
+      LOG.info("Replayed failed real-time events", logPair("succeeded", succeeded.size()), logPair("stillFailing", failed.size()));
+      output.addValue("failedEventsReplayed", succeeded.size());
+   }
+
+
+
+   /*******************************************************************************
+    **
+    *******************************************************************************/
+   private static void markReplayOutcome(List<QRecord> events, boolean success, List<String> errors, List<Serializable> succeeded, List<QRecord> failed)
+   {
+      for(QRecord event : events)
+      {
+         if(success)
+         {
+            succeeded.add(event.getValue("id"));
+            continue;
+         }
+
+         int attempts = (event.getValueInteger("attempts") == null ? 0 : event.getValueInteger("attempts")) + 1;
+         failed.add(new QRecord()
+            .withValue("id", event.getValue("id"))
+            .withValue("attempts", attempts)
+            .withValue("errorMessage", truncate(errors == null || errors.isEmpty() ? "replay failed" : errors.get(0), 4000))
+            .withValue("status", attempts >= MAX_REPLAY_ATTEMPTS ? QuickSearchFailedEvent.STATUS_EXHAUSTED : QuickSearchFailedEvent.STATUS_PENDING));
+      }
+   }
+
+
+
+   /*******************************************************************************
+    **
+    *******************************************************************************/
+   private static Integer safeCount(QuickSearchOpenSearchClient client, String tableName)
+   {
+      try
+      {
+         Long count = client.countDocumentsForTable(tableName);
+         return (count == null ? null : count.intValue());
+      }
+      catch(Exception e)
+      {
+         return (null);
       }
    }
 

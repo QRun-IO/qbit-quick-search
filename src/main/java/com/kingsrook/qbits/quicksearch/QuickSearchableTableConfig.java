@@ -39,6 +39,7 @@ public class QuickSearchableTableConfig
    private Boolean             enabledByDefault;
    private String              recordLabelFormat;
    private List<String>        recordLabelFields;
+   private Integer             maxFieldLength;
 
 
 
@@ -347,6 +348,37 @@ public class QuickSearchableTableConfig
    public QuickSearchableTableConfig withRecordLabelFields(List<String> recordLabelFields)
    {
       this.recordLabelFields = recordLabelFields;
+      return (this);
+   }
+
+
+
+   /*******************************************************************************
+    ** Getter for maxFieldLength
+    *******************************************************************************/
+   public Integer getMaxFieldLength()
+   {
+      return (this.maxFieldLength);
+   }
+
+
+
+   /*******************************************************************************
+    ** Setter for maxFieldLength
+    *******************************************************************************/
+   public void setMaxFieldLength(Integer maxFieldLength)
+   {
+      this.maxFieldLength = maxFieldLength;
+   }
+
+
+
+   /*******************************************************************************
+    ** Fluent setter for maxFieldLength
+    *******************************************************************************/
+   public QuickSearchableTableConfig withMaxFieldLength(Integer maxFieldLength)
+   {
+      this.maxFieldLength = maxFieldLength;
       return (this);
    }
 

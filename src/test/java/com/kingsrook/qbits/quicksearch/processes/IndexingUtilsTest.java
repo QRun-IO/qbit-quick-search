@@ -17,12 +17,24 @@
 package com.kingsrook.qbits.quicksearch.processes;
 
 
+import java.time.Instant;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import com.kingsrook.qqq.backend.core.context.QContext;
 import com.kingsrook.qqq.backend.core.model.data.QRecord;
+import com.kingsrook.qqq.backend.core.model.metadata.QAuthenticationType;
+import com.kingsrook.qqq.backend.core.model.metadata.QBackendMetaData;
+import com.kingsrook.qqq.backend.core.model.metadata.QInstance;
+import com.kingsrook.qqq.backend.core.model.metadata.authentication.QAuthenticationMetaData;
+import com.kingsrook.qqq.backend.core.model.metadata.fields.QFieldMetaData;
+import com.kingsrook.qqq.backend.core.model.metadata.fields.QFieldType;
+import com.kingsrook.qqq.backend.core.model.metadata.tables.QTableMetaData;
+import com.kingsrook.qqq.backend.core.model.session.QSession;
+import com.kingsrook.qqq.backend.core.modules.backend.implementations.memory.MemoryBackendModule;
 import com.kingsrook.qbits.quicksearch.QuickSearchableTableConfig;
 import com.kingsrook.qbits.quicksearch.opensearch.OpenSearchDocument;
+import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -34,12 +46,13 @@ class IndexingUtilsTest
 {
 
    /*******************************************************************************
-    ** Test that normal input is lowercased and trimmed.
+    ** Test that normal input is trimmed and its case is preserved (the analyzer
+    ** lower-cases at index and search time).
     *******************************************************************************/
    @Test
-   void testNormalizeSearchText_normalInput_lowercaseTrimmed()
+   void testNormalizeSearchText_normalInput_trimmedCasePreserved()
    {
-      assertThat(IndexingUtils.normalizeSearchText("Hello World")).isEqualTo("hello world");
+      assertThat(IndexingUtils.normalizeSearchText("  Hello World  ")).isEqualTo("Hello World");
    }
 
 
@@ -84,12 +97,12 @@ class IndexingUtilsTest
 
 
    /*******************************************************************************
-    ** Test that mixed case input is fully lowercased.
+    ** Test that mixed case input is not lower-cased.
     *******************************************************************************/
    @Test
-   void testNormalizeSearchText_mixedCase_lowercased()
+   void testNormalizeSearchText_mixedCase_preserved()
    {
-      assertThat(IndexingUtils.normalizeSearchText("HeLLo WoRLd")).isEqualTo("hello world");
+      assertThat(IndexingUtils.normalizeSearchText("HeLLo WoRLd")).isEqualTo("HeLLo WoRLd");
    }
 
 
@@ -270,7 +283,7 @@ class IndexingUtilsTest
 
    /*******************************************************************************
     ** Test the new buildDocument overload with QuickSearchableTableConfig that
-    ** has a recordLabelFormat -- verifies the formatted label is applied.
+    ** has a recordLabelFormat; verifies the formatted label is applied.
     *******************************************************************************/
    @Test
    void testBuildDocument_tableConfig_withRecordLabelFormat_usesFormattedLabel()
@@ -302,7 +315,7 @@ class IndexingUtilsTest
 
    /*******************************************************************************
     ** Test the new buildDocument overload with QuickSearchableTableConfig that
-    ** does NOT have a recordLabelFormat -- falls back to QRecord.getRecordLabel().
+    ** does NOT have a recordLabelFormat; falls back to QRecord.getRecordLabel().
     *******************************************************************************/
    @Test
    void testBuildDocument_tableConfig_withoutRecordLabelFormat_usesQRecordLabel()
@@ -376,6 +389,241 @@ class IndexingUtilsTest
       OpenSearchDocument doc = IndexingUtils.buildDocument(record, tableConfig);
 
       assertThat(doc).isNull();
+   }
+
+
+
+   /*******************************************************************************
+    ** Clear any QContext a test installed.
+    *******************************************************************************/
+   @AfterEach
+   void clearContext()
+   {
+      QContext.clear();
+   }
+
+
+
+   /*******************************************************************************
+    ** Install a QInstance holding one "person" table with a record label format
+    ** and a labelled "sku" field.
+    *******************************************************************************/
+   private void initContextWithPersonTable()
+   {
+      QInstance qInstance = new QInstance();
+      qInstance.addBackend(new QBackendMetaData().withName("memory").withBackendType(MemoryBackendModule.class));
+      qInstance.withInstanceDefaultAuthentication(new QAuthenticationMetaData().withName("anonymous").withType(QAuthenticationType.FULLY_ANONYMOUS));
+      qInstance.addTable(new QTableMetaData()
+         .withName("person")
+         .withBackendName("memory")
+         .withPrimaryKeyField("id")
+         .withRecordLabelFormat("%s %s")
+         .withRecordLabelFields(List.of("firstName", "lastName"))
+         .withField(new QFieldMetaData("id", QFieldType.INTEGER))
+         .withField(new QFieldMetaData("firstName", QFieldType.STRING))
+         .withField(new QFieldMetaData("lastName", QFieldType.STRING))
+         .withField(new QFieldMetaData("sku", QFieldType.STRING).withLabel("SKU Code"))
+         .withField(new QFieldMetaData("modifyDate", QFieldType.DATE_TIME)));
+      QContext.init(qInstance, new QSession());
+   }
+
+
+
+   /*******************************************************************************
+    ** Test: a display value (possible-value label, formatted date) wins over
+    ** the raw value, both in fieldValues and in the searchable text.
+    *******************************************************************************/
+   @Test
+   void testBuildDocument_displayValuePresent_usedInsteadOfRawValue()
+   {
+      QRecord record = new QRecord();
+      record.setValue("id", 1);
+      record.setValue("statusId", 3);
+      record.setDisplayValue("statusId", "Shipped");
+
+      QuickSearchableTableConfig tableConfig = new QuickSearchableTableConfig()
+         .withTableName("order")
+         .withPrimaryKeyField("id")
+         .withSearchableFields(List.of("statusId"));
+
+      OpenSearchDocument doc = IndexingUtils.buildDocument(record, tableConfig);
+
+      assertThat(doc.getFieldValues().get("statusId")).isEqualTo("Shipped");
+      assertThat(doc.getSearchableText()).isEqualTo("Shipped");
+   }
+
+
+
+   /*******************************************************************************
+    ** Test: non-string values are stored as strings in fieldValues, since the
+    ** mapping types every fieldValues.* entry as text.
+    *******************************************************************************/
+   @Test
+   void testBuildDocument_integerValue_storedAsString()
+   {
+      QRecord record = new QRecord();
+      record.setValue("id", 1);
+      record.setValue("quantity", 42);
+
+      QuickSearchableTableConfig tableConfig = new QuickSearchableTableConfig()
+         .withTableName("order")
+         .withPrimaryKeyField("id")
+         .withSearchableFields(List.of("quantity"));
+
+      OpenSearchDocument doc = IndexingUtils.buildDocument(record, tableConfig);
+
+      assertThat(doc.getFieldValues().get("quantity")).isEqualTo("42");
+      assertThat(doc.getSearchableText()).isEqualTo("42");
+   }
+
+
+
+   /*******************************************************************************
+    ** Test: values longer than maxFieldLength are truncated.
+    *******************************************************************************/
+   @Test
+   void testBuildDocument_valueLongerThanMaxFieldLength_truncated()
+   {
+      QRecord record = new QRecord();
+      record.setValue("id", 1);
+      record.setValue("notes", "abcdefghijklmnop");
+
+      QuickSearchableTableConfig tableConfig = new QuickSearchableTableConfig()
+         .withTableName("order")
+         .withPrimaryKeyField("id")
+         .withSearchableFields(List.of("notes"))
+         .withMaxFieldLength(5);
+
+      OpenSearchDocument doc = IndexingUtils.buildDocument(record, tableConfig);
+
+      assertThat(doc.getFieldValues().get("notes")).isEqualTo("abcde");
+      assertThat(doc.getSearchableText()).isEqualTo("abcde");
+   }
+
+
+
+   /*******************************************************************************
+    ** Test: a record without a label gets one from the table's record label
+    ** format when the table is known to the QInstance in QContext.
+    *******************************************************************************/
+   @Test
+   void testBuildDocument_noRecordLabel_fallsBackToTableRecordLabelFormat()
+   {
+      initContextWithPersonTable();
+
+      QRecord record = new QRecord();
+      record.setValue("id", 1);
+      record.setValue("firstName", "Ada");
+      record.setValue("lastName", "Lovelace");
+
+      QuickSearchableTableConfig tableConfig = new QuickSearchableTableConfig()
+         .withTableName("person")
+         .withPrimaryKeyField("id")
+         .withSearchableFields(List.of("firstName"));
+
+      OpenSearchDocument doc = IndexingUtils.buildDocument(record, tableConfig);
+
+      assertThat(doc.getRecordLabel()).isEqualTo("Ada Lovelace");
+   }
+
+
+
+   /*******************************************************************************
+    ** Test: a recordLabelFormat that cannot be applied to the values never
+    ** throws; the default label is kept.
+    *******************************************************************************/
+   @Test
+   void testBuildDocument_badRecordLabelFormat_fallsBackToDefaultLabel()
+   {
+      QRecord record = new QRecord();
+      record.setValue("id", 1);
+      record.setValue("firstName", "Ada");
+      record.setRecordLabel("Default Label");
+
+      QuickSearchableTableConfig tableConfig = new QuickSearchableTableConfig()
+         .withTableName("person")
+         .withPrimaryKeyField("id")
+         .withSearchableFields(List.of("firstName"))
+         .withRecordLabelFormat("%d-%s")
+         .withRecordLabelFields(List.of("firstName", "lastName"));
+
+      OpenSearchDocument doc = IndexingUtils.buildDocument(record, tableConfig);
+
+      assertThat(doc).isNotNull();
+      assertThat(doc.getRecordLabel()).isEqualTo("Default Label");
+   }
+
+
+
+   /*******************************************************************************
+    ** Test: the document version is the basepull timestamp in epoch millis,
+    ** and null when the record has no timestamp or the table has no field.
+    *******************************************************************************/
+   @Test
+   void testBuildDocument_version_fromBasepullTimestampField()
+   {
+      Instant modifyDate = Instant.parse("2026-10-04T12:34:56.789Z");
+
+      QRecord record = new QRecord();
+      record.setValue("id", 1);
+      record.setValue("name", "Widget");
+      record.setValue("modifyDate", modifyDate);
+
+      QuickSearchableTableConfig withTimestamp = new QuickSearchableTableConfig()
+         .withTableName("product")
+         .withPrimaryKeyField("id")
+         .withSearchableFields(List.of("name"))
+         .withBasepullTimestampField("modifyDate");
+
+      assertThat(IndexingUtils.buildDocument(record, withTimestamp).getVersion()).isEqualTo(modifyDate.toEpochMilli());
+
+      QRecord withoutValue = new QRecord().withValue("id", 2).withValue("name", "Gadget");
+      assertThat(IndexingUtils.buildDocument(withoutValue, withTimestamp).getVersion()).isNull();
+
+      QuickSearchableTableConfig withoutTimestamp = new QuickSearchableTableConfig()
+         .withTableName("product")
+         .withPrimaryKeyField("id")
+         .withSearchableFields(List.of("name"));
+      assertThat(IndexingUtils.buildDocument(record, withoutTimestamp).getVersion()).isNull();
+   }
+
+
+
+   /*******************************************************************************
+    ** Test: the label prefix uses the QQQ field label when the table is known,
+    ** and the field name otherwise.
+    *******************************************************************************/
+   @Test
+   void testBuildSearchableText_includeLabel_usesFieldLabelWhenTableKnown()
+   {
+      QRecord record = new QRecord();
+      record.setValue("id", 1);
+      record.setValue("sku", "AB-1");
+
+      QuickSearchableTableConfig tableConfig = new QuickSearchableTableConfig()
+         .withTableName("person")
+         .withPrimaryKeyField("id")
+         .withSearchableFields(List.of("sku"))
+         .withFieldIncludeLabels(Map.of("sku", true));
+
+      assertThat(IndexingUtils.buildDocument(record, tableConfig).getSearchableText()).isEqualTo("sku: AB-1");
+
+      initContextWithPersonTable();
+      assertThat(IndexingUtils.buildDocument(record, tableConfig).getSearchableText()).isEqualTo("SKU Code: AB-1");
+   }
+
+
+
+   /*******************************************************************************
+    ** Test: a null includeLabels map is tolerated.
+    *******************************************************************************/
+   @Test
+   void testBuildSearchableText_nullIncludeLabels_doesNotThrow()
+   {
+      QRecord record = new QRecord();
+      record.setValue("name", "Widget");
+
+      assertThat(IndexingUtils.buildSearchableText(record, List.of("name"), null)).isEqualTo("Widget");
    }
 
 }
