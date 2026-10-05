@@ -279,8 +279,13 @@ public class QuickSearchOpenSearchClient implements Closeable
 
          if(previous.isEmpty() && client.indices().exists(ExistsRequest.of(r -> r.index(indexName))).value())
          {
-            client.indices().delete(d -> d.index(indexName));
-            client.indices().updateAliases(u -> u.actions(a -> a.add(ad -> ad.index(newPhysicalIndex).alias(indexName))));
+            ///////////////////////////////////////////////////////////////////////////
+            // one request: an alias cannot share the legacy index's name, and two //
+            // calls would leave a window with neither index nor alias            //
+            ///////////////////////////////////////////////////////////////////////////
+            client.indices().updateAliases(u -> u
+               .actions(a -> a.removeIndex(ri -> ri.index(indexName)))
+               .actions(a -> a.add(ad -> ad.index(newPhysicalIndex).alias(indexName))));
          }
          else
          {
@@ -297,7 +302,14 @@ public class QuickSearchOpenSearchClient implements Closeable
             {
                if(!old.equals(newPhysicalIndex))
                {
-                  client.indices().delete(d -> d.index(old));
+                  try
+                  {
+                     client.indices().delete(d -> d.index(old));
+                  }
+                  catch(OpenSearchException | java.io.IOException cleanup)
+                  {
+                     LOG.warn("Alias swapped but the previous physical index could not be deleted", cleanup, logPair("physicalIndex", old));
+                  }
                }
             }
          }

@@ -116,6 +116,8 @@ public class FullReindexStep extends AbstractIndexingStep
       Map<String, Instant>                                  startTimes = new LinkedHashMap<>();
       Integer                                               indexed    = 0;
 
+      boolean swapped = false;
+
       try
       {
          for(QuickSearchableTableConfig tableConfig : tables)
@@ -137,6 +139,7 @@ public class FullReindexStep extends AbstractIndexingStep
 
          client.refreshIndex(physicalIndex);
          client.swapAliasTo(physicalIndex);
+         swapped = true;
 
          for(QuickSearchableTableConfig tableConfig : tables)
          {
@@ -160,7 +163,7 @@ public class FullReindexStep extends AbstractIndexingStep
       }
       catch(Exception e)
       {
-         LOG.warn("Full reindex failed; the previous index stays in service", e, logPair("physicalIndex", physicalIndex));
+         LOG.warn(swapped ? "Full reindex failed after the alias swap; the new index stays in service" : "Full reindex failed; the previous index stays in service", e, logPair("physicalIndex", physicalIndex));
 
          for(Map.Entry<QuickSearchableTableConfig, QuickSearchIndexRun> entry : runs.entrySet())
          {
@@ -172,13 +175,16 @@ public class FullReindexStep extends AbstractIndexingStep
                e.getMessage());
          }
 
-         try
+         if(!swapped)
          {
-            client.deletePhysicalIndex(physicalIndex);
-         }
-         catch(Exception cleanup)
-         {
-            LOG.warn("Could not delete the incomplete physical index", cleanup, logPair("physicalIndex", physicalIndex));
+            try
+            {
+               client.deletePhysicalIndex(physicalIndex);
+            }
+            catch(Exception cleanup)
+            {
+               LOG.warn("Could not delete the incomplete physical index", cleanup, logPair("physicalIndex", physicalIndex));
+            }
          }
 
          if(e instanceof QException qException)

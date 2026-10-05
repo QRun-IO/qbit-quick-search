@@ -22,6 +22,7 @@ import java.util.ArrayList;
 import java.util.Collections;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -145,13 +146,11 @@ public class QuickSearchAction
 
       SearchResponse<OpenSearchDocument> response = runSearch(client, normalizedTerm, allowedTables, fetchSize, offset, tableConfigs);
       List<QuickSearchResult>            results  = toResults(response);
-      boolean                            filtered = false;
+      int                                rawHits  = results.size();
 
       if(applyLocks)
       {
-         int before = results.size();
-         results  = filterByRecordAccess(results, tableConfigs);
-         filtered = results.size() != before;
+         results = filterByRecordAccess(results, tableConfigs);
       }
 
       boolean truncated = results.size() > limit;
@@ -162,7 +161,7 @@ public class QuickSearchAction
 
       long    totalHits  = response.hits().total() != null ? response.hits().total().value() : results.size();
       boolean lowerBound = response.hits().total() != null && response.hits().total().relation() == TotalHitsRelation.Gte;
-      boolean hasMore    = truncated || (offset + results.size()) < totalHits;
+      boolean hasMore    = truncated || (offset + rawHits) < totalHits;
 
       if(applyLocks)
       {
@@ -171,8 +170,8 @@ public class QuickSearchAction
          // not see; report only what was verified accessible                 //
          ///////////////////////////////////////////////////////////////////////
          totalHits  = offset + results.size() + (truncated ? 1 : 0);
-         lowerBound = truncated || (!filtered && hasMore);
-         hasMore    = truncated || (!filtered && hasMore);
+         lowerBound = truncated || hasMore;
+         hasMore    = truncated || hasMore;
       }
 
       return (new QuickSearchOutput()
@@ -256,7 +255,7 @@ public class QuickSearchAction
 
       boolean      checkPermissions = QContext.getQInstance() != null && QContext.getQSession() != null;
       List<String> allowed          = new ArrayList<>();
-      for(String tableName : requested)
+      for(String tableName : new LinkedHashSet<>(requested))
       {
          if(!configured.contains(tableName))
          {
