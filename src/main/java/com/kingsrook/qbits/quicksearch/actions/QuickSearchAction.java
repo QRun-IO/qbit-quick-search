@@ -165,10 +165,12 @@ public class QuickSearchAction
 
       if(applyLocks)
       {
-         ///////////////////////////////////////////////////////////////////////
-         // the raw total would reveal how many matching rows the session may //
-         // not see; report only what was verified accessible                 //
-         ///////////////////////////////////////////////////////////////////////
+         ////////////////////////////////////////////////////////////////////////////
+         // the raw total would reveal how many matching rows the session may not //
+         // see; report only what was verified accessible. hasMore still follows  //
+         // the raw window: it says only that more candidates exist past it, so a //
+         // caller can page on to accessible rows instead of stopping short.      //
+         ////////////////////////////////////////////////////////////////////////////
          totalHits  = offset + results.size() + (truncated ? 1 : 0);
          lowerBound = truncated || hasMore;
          hasMore    = truncated || hasMore;
