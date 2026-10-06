@@ -21,9 +21,11 @@ import java.io.Serializable;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import com.kingsrook.qqq.backend.core.actions.tables.DeleteAction;
 import com.kingsrook.qqq.backend.core.actions.tables.QueryAction;
 import com.kingsrook.qqq.backend.core.actions.tables.UpdateAction;
@@ -32,6 +34,7 @@ import com.kingsrook.qqq.backend.core.logging.QLogger;
 import com.kingsrook.qqq.backend.core.model.actions.processes.RunBackendStepInput;
 import com.kingsrook.qqq.backend.core.model.actions.processes.RunBackendStepOutput;
 import com.kingsrook.qqq.backend.core.model.actions.tables.delete.DeleteInput;
+import com.kingsrook.qqq.backend.core.model.actions.tables.delete.DeleteOutput;
 import com.kingsrook.qqq.backend.core.model.actions.tables.query.QCriteriaOperator;
 import com.kingsrook.qqq.backend.core.model.actions.tables.query.QFilterCriteria;
 import com.kingsrook.qqq.backend.core.model.actions.tables.query.QFilterOrderBy;
@@ -272,10 +275,14 @@ public class FullReindexStep extends AbstractIndexingStep
     ** Apply the deletes the listener captured during the rebuild (failed-event
     ** rows with status AWAITING_REINDEX) through the alias, after the rebuild's
     ** own writes, so an in-flight page cannot bring a deleted record back.
-    ** Deleting a missing document is harmless. Applied rows are removed; rows
-    ** the cluster rejects become PENDING for basepull to retry. Called once the
-    ** tables are no longer REBUILDING, so the listener stops adding rows (one
-    ** that races the status change hands its own rows to basepull). Never throws.
+    ** Called once the tables are no longer REBUILDING, so the listener stops
+    ** adding rows (one that races the status change hands its own rows to
+    ** basepull).
+    **
+    ** Rows are read in id order, past the previous batch, so a batch whose rows
+    ** could not be removed or updated (QQQ reports those as per-row errors, not
+    ** exceptions) is not read again; such rows stay AWAITING_REINDEX for the next
+    ** full reindex. Never throws.
     *******************************************************************************/
    void applyCapturedDeletes(QuickSearchOpenSearchClient client, List<QuickSearchableTableConfig> tables)
    {
@@ -291,63 +298,31 @@ public class FullReindexStep extends AbstractIndexingStep
       {
          QuickSearchQBitConfig config           = getConfig();
          String                failedEventTable = config.applyPrefix(QuickSearchFailedEvent.TABLE_NAME);
+         Serializable          afterId          = null;
 
          while(true)
          {
-            QueryInput queryInput = new QueryInput();
-            queryInput.setTableName(failedEventTable);
-            queryInput.setFilter(new QQueryFilter(
+            QQueryFilter filter = new QQueryFilter(
                new QFilterCriteria("status", QCriteriaOperator.EQUALS, QuickSearchFailedEvent.STATUS_AWAITING_REINDEX),
                new QFilterCriteria("tableName", QCriteriaOperator.IN, tableNames))
                .withOrderBy(new QFilterOrderBy("id", true))
-               .withLimit(config.getSourceBatchSize()));
+               .withLimit(config.getSourceBatchSize());
+            if(afterId != null)
+            {
+               filter.addCriteria(new QFilterCriteria("id", QCriteriaOperator.GREATER_THAN, afterId));
+            }
+
+            QueryInput queryInput = new QueryInput();
+            queryInput.setTableName(failedEventTable);
+            queryInput.setFilter(filter);
             List<QRecord> rows = new QueryAction().execute(queryInput).getRecords();
             if(CollectionUtils.nullSafeIsEmpty(rows))
             {
                break;
             }
 
-            List<String> documentIds = new ArrayList<>();
-            for(QRecord row : rows)
-            {
-               documentIds.add(OpenSearchDocument.buildDocumentId(row.getValueString("tableName"), row.getValueString("recordId")));
-            }
-
-            String error;
-            try
-            {
-               BulkIndexResult result = client.deleteDocuments(documentIds, config.getBulkBatchSize());
-               error = result.getFailureCount() == 0 ? null : String.join("; ", result.getErrors());
-            }
-            catch(Exception e)
-            {
-               error = e.getMessage() == null ? e.toString() : e.getMessage();
-            }
-
-            if(error == null)
-            {
-               DeleteInput deleteInput = new DeleteInput();
-               deleteInput.setTableName(failedEventTable);
-               deleteInput.setPrimaryKeys(rows.stream().map(row -> row.getValue("id")).toList());
-               new DeleteAction().execute(deleteInput);
-               applied = applied + rows.size();
-            }
-            else
-            {
-               List<QRecord> updates = new ArrayList<>();
-               for(QRecord row : rows)
-               {
-                  updates.add(new QRecord()
-                     .withValue("id", row.getValue("id"))
-                     .withValue("errorMessage", truncate(error, 4000))
-                     .withValue("status", QuickSearchFailedEvent.STATUS_PENDING));
-               }
-               UpdateInput updateInput = new UpdateInput();
-               updateInput.setTableName(failedEventTable);
-               updateInput.setRecords(updates);
-               new UpdateAction().execute(updateInput);
-               LOG.warn("Could not apply deletes captured during the full reindex; basepull will retry them", logPair("count", rows.size()), logPair("error", error));
-            }
+            afterId = rows.get(rows.size() - 1).getValue("id");
+            applied = applied + applyCapturedDeleteBatch(client, config, failedEventTable, rows);
          }
       }
       catch(Exception e)
@@ -356,6 +331,137 @@ public class FullReindexStep extends AbstractIndexingStep
       }
 
       LOG.info("Applied deletes captured during the full reindex", logPair("count", applied));
+   }
+
+
+
+   /*******************************************************************************
+    ** Apply one batch of captured deletes; returns how many were applied.
+    ** A record that exists again (re-created with the same key since it was
+    ** deleted) keeps its document, and its row is just removed. Deleting a
+    ** missing document is harmless. Applied rows are removed; rows the cluster
+    ** rejects become PENDING for basepull to retry.
+    *******************************************************************************/
+   private Integer applyCapturedDeleteBatch(QuickSearchOpenSearchClient client, QuickSearchQBitConfig config, String failedEventTable, List<QRecord> rows) throws QException
+   {
+      Map<String, List<QRecord>> rowsByTable = new LinkedHashMap<>();
+      for(QRecord row : rows)
+      {
+         rowsByTable.computeIfAbsent(row.getValueString("tableName"), k -> new ArrayList<>()).add(row);
+      }
+
+      List<QRecord> finished = new ArrayList<>();
+      List<QRecord> toApply  = new ArrayList<>();
+      for(Map.Entry<String, List<QRecord>> entry : rowsByTable.entrySet())
+      {
+         Set<String> existingIds = queryExistingRecordIds(entry.getKey(), entry.getValue());
+         for(QRecord row : entry.getValue())
+         {
+            if(existingIds.contains(row.getValueString("recordId")))
+            {
+               finished.add(row);
+            }
+            else
+            {
+               toApply.add(row);
+            }
+         }
+      }
+
+      String error = null;
+      if(!toApply.isEmpty())
+      {
+         List<String> documentIds = new ArrayList<>();
+         for(QRecord row : toApply)
+         {
+            documentIds.add(OpenSearchDocument.buildDocumentId(row.getValueString("tableName"), row.getValueString("recordId")));
+         }
+
+         try
+         {
+            BulkIndexResult result = client.deleteDocuments(documentIds, config.getBulkBatchSize());
+            error = result.getFailureCount() == 0 ? null : String.join("; ", result.getErrors());
+         }
+         catch(Exception e)
+         {
+            error = e.getMessage() == null ? e.toString() : e.getMessage();
+         }
+
+         if(error == null)
+         {
+            finished.addAll(toApply);
+         }
+      }
+
+      if(!finished.isEmpty())
+      {
+         DeleteInput deleteInput = new DeleteInput();
+         deleteInput.setTableName(failedEventTable);
+         deleteInput.setPrimaryKeys(finished.stream().map(row -> row.getValue("id")).toList());
+         DeleteOutput deleteOutput = new DeleteAction().execute(deleteInput);
+         if(CollectionUtils.nullSafeHasContents(deleteOutput.getRecordsWithErrors()))
+         {
+            LOG.warn("Could not remove applied captured-delete rows; they stay AWAITING_REINDEX and are applied again by the next full reindex",
+               logPair("count", deleteOutput.getRecordsWithErrors().size()), logPair("firstError", deleteOutput.getRecordsWithErrors().get(0).getErrors()));
+         }
+      }
+
+      if(error != null)
+      {
+         List<QRecord> updates = new ArrayList<>();
+         for(QRecord row : toApply)
+         {
+            updates.add(new QRecord()
+               .withValue("id", row.getValue("id"))
+               .withValue("errorMessage", truncate(error, 4000))
+               .withValue("status", QuickSearchFailedEvent.STATUS_PENDING));
+         }
+
+         UpdateInput updateInput = new UpdateInput();
+         updateInput.setTableName(failedEventTable);
+         updateInput.setRecords(updates);
+         List<QRecord> notUpdated = CollectionUtils.nonNullList(new UpdateAction().execute(updateInput).getRecords()).stream()
+            .filter(record -> CollectionUtils.nullSafeHasContents(record.getErrors()))
+            .toList();
+         LOG.warn("Could not apply deletes captured during the full reindex; basepull will retry them", logPair("count", toApply.size()), logPair("error", error));
+         if(!notUpdated.isEmpty())
+         {
+            LOG.warn("Could not hand captured deletes to basepull; they stay AWAITING_REINDEX for the next full reindex",
+               logPair("count", notUpdated.size()), logPair("firstError", notUpdated.get(0).getErrors()));
+         }
+         return (0);
+      }
+
+      return (toApply.size());
+   }
+
+
+
+   /*******************************************************************************
+    ** The record IDs, among the rows' recordIds, that exist in the source table.
+    *******************************************************************************/
+   private Set<String> queryExistingRecordIds(String tableName, List<QRecord> rows) throws QException
+   {
+      QuickSearchableTableConfig tableConfig = getTableConfig(tableName);
+      if(tableConfig == null)
+      {
+         return (Set.of());
+      }
+
+      String             primaryKeyField = tableConfig.getPrimaryKeyField() == null ? "id" : tableConfig.getPrimaryKeyField();
+      List<Serializable> recordIds       = new ArrayList<>();
+      rows.forEach(row -> recordIds.add(row.getValueString("recordId")));
+
+      QueryInput queryInput = new QueryInput();
+      queryInput.setTableName(tableName);
+      queryInput.setFilter(new QQueryFilter(new QFilterCriteria(primaryKeyField, QCriteriaOperator.IN, recordIds)));
+
+      Set<String> existingIds = new HashSet<>();
+      for(QRecord record : CollectionUtils.nonNullList(new QueryAction().execute(queryInput).getRecords()))
+      {
+         existingIds.add(record.getValueString(primaryKeyField));
+      }
+      return (existingIds);
    }
 
 

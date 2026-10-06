@@ -19,12 +19,15 @@ package com.kingsrook.qbits.quicksearch.processes;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.concurrent.atomic.AtomicInteger;
+import com.kingsrook.qqq.backend.core.actions.tables.DeleteAction;
 import com.kingsrook.qqq.backend.core.actions.tables.InsertAction;
 import com.kingsrook.qqq.backend.core.actions.tables.QueryAction;
 import com.kingsrook.qqq.backend.core.actions.tables.UpdateAction;
 import com.kingsrook.qqq.backend.core.exceptions.QException;
 import com.kingsrook.qqq.backend.core.model.actions.processes.RunBackendStepInput;
 import com.kingsrook.qqq.backend.core.model.actions.processes.RunBackendStepOutput;
+import com.kingsrook.qqq.backend.core.model.actions.tables.delete.DeleteOutput;
 import com.kingsrook.qqq.backend.core.model.actions.tables.insert.InsertInput;
 import com.kingsrook.qqq.backend.core.model.actions.tables.query.QCriteriaOperator;
 import com.kingsrook.qqq.backend.core.model.actions.tables.query.QFilterCriteria;
@@ -32,6 +35,7 @@ import com.kingsrook.qqq.backend.core.model.actions.tables.query.QQueryFilter;
 import com.kingsrook.qqq.backend.core.model.actions.tables.query.QueryInput;
 import com.kingsrook.qqq.backend.core.model.actions.tables.update.UpdateInput;
 import com.kingsrook.qqq.backend.core.model.data.QRecord;
+import com.kingsrook.qqq.backend.core.model.statusmessages.SystemErrorStatusMessage;
 import com.kingsrook.qbits.quicksearch.BaseQuickSearchTest;
 import com.kingsrook.qbits.quicksearch.QuickSearchQBitContext;
 import com.kingsrook.qbits.quicksearch.QuickSearchableTableConfig;
@@ -45,6 +49,7 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
 import org.mockito.InOrder;
+import org.mockito.MockedConstruction;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
@@ -55,6 +60,7 @@ import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.inOrder;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.mockConstruction;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
@@ -499,7 +505,7 @@ class FullReindexStepTest extends BaseQuickSearchTest
          {
             IndexCounts counts = super.indexAllRecords(client, tableConfig, extraCriteria, targetIndex);
             statusesDuringRebuild.add(FullReindexStepTest.this.queryIndexRow().getValueString("status"));
-            insertCapturedDelete("2");
+            insertCapturedDelete("7");
             return (counts);
          }
       }.run(new RunBackendStepInput(), new RunBackendStepOutput());
@@ -508,7 +514,7 @@ class FullReindexStepTest extends BaseQuickSearchTest
 
       InOrder inOrder = inOrder(mockClient);
       inOrder.verify(mockClient).swapAliasTo(PHYSICAL_INDEX);
-      inOrder.verify(mockClient).deleteDocuments(eq(List.of(TEST_ENTITY_TABLE + ":2")), anyInt());
+      inOrder.verify(mockClient).deleteDocuments(eq(List.of(TEST_ENTITY_TABLE + ":7")), anyInt());
 
       assertThat(queryAll(QuickSearchFailedEvent.TABLE_NAME)).isEmpty();
       assertThat(queryIndexRow().getValueString("status")).isEqualTo(AbstractIndexingStep.STATUS_ACTIVE);
@@ -588,6 +594,69 @@ class FullReindexStepTest extends BaseQuickSearchTest
       updateInput.setTableName(QuickSearchIndex.TABLE_NAME);
       updateInput.setRecords(List.of(new QRecord().withValue("id", queryIndexRow().getValue("id")).withValue("status", status)));
       new UpdateAction().execute(updateInput);
+   }
+
+
+
+   /*******************************************************************************
+    ** Test: a captured delete for a record re-created with the same key since
+    ** is not applied (its document stays), and its row is removed.
+    *******************************************************************************/
+   @Test
+   void testAllTables_capturedDeleteOfRecreatedRecord_isNotApplied() throws QException
+   {
+      insertTestEntities(3);
+      insertCapturedDelete("2");
+      insertCapturedDelete("9");
+      when(mockClient.deleteDocuments(anyList(), anyInt())).thenReturn(new BulkIndexResult().withSuccessCount(1));
+
+      new FullReindexStep().run(new RunBackendStepInput(), new RunBackendStepOutput());
+
+      verify(mockClient, times(1)).deleteDocuments(anyList(), anyInt());
+      verify(mockClient).deleteDocuments(eq(List.of(TEST_ENTITY_TABLE + ":9")), anyInt());
+      assertThat(queryAll(QuickSearchFailedEvent.TABLE_NAME)).isEmpty();
+   }
+
+
+
+   /*******************************************************************************
+    ** Test: rows the delete action reports as not removed (per-row errors, not
+    ** an exception) are not read again; the drain moves on and ends.
+    *******************************************************************************/
+   @Test
+   void testAllTables_capturedRowsNotRemoved_drainStillEnds() throws QException
+   {
+      QuickSearchQBitContext.getConfig().withSourceBatchSize(1);
+      insertTestEntities(1);
+      insertCapturedDelete("8");
+      insertCapturedDelete("9");
+
+      AtomicInteger deleteCalls = new AtomicInteger(0);
+      when(mockClient.deleteDocuments(anyList(), anyInt())).thenAnswer(invocation ->
+      {
+         ///////////////////////////////////////////////////////////////////
+         // fail loudly instead of hanging if the same batch is re-read  //
+         ///////////////////////////////////////////////////////////////////
+         if(deleteCalls.incrementAndGet() > 10)
+         {
+            throw (new IllegalStateException("drain re-read the same rows"));
+         }
+         return (new BulkIndexResult().withSuccessCount(1));
+      });
+
+      try(MockedConstruction<DeleteAction> deleteActions = mockConstruction(DeleteAction.class, (deleteAction, context) ->
+      {
+         DeleteOutput output = new DeleteOutput();
+         output.setRecordsWithErrors(List.of(new QRecord().withValue("id", 1).withError(new SystemErrorStatusMessage("row is locked"))));
+         when(deleteAction.execute(any())).thenReturn(output);
+      }))
+      {
+         new FullReindexStep().run(new RunBackendStepInput(), new RunBackendStepOutput());
+      }
+
+      assertThat(deleteCalls.get()).isEqualTo(2);
+      assertThat(queryAll(QuickSearchFailedEvent.TABLE_NAME)).extracting(row -> row.getValueString("status"))
+         .containsOnly(QuickSearchFailedEvent.STATUS_AWAITING_REINDEX);
    }
 
 }

@@ -137,13 +137,25 @@ public class QuickSearchRecordChangeListener implements RecordChangeListenerInte
 
 
    /*******************************************************************************
-    ** Publish, recording any failure durably, then capture the deletes if a full
+    ** Publish, recording any failure durably, and capture the deletes if a full
     ** reindex is rebuilding the table. Never throws.
+    **
+    ** The status is read before the deletes are published, never after: a
+    ** reindex can swap the alias and clear REBUILDING while the publish is in
+    ** flight, and a read after that would miss a delete that reached only the
+    ** old index. A read before the publish that sees no REBUILDING means either
+    ** the reindex has not started reading the table (the record, deleted and
+    ** committed, cannot be read into the new index) or the alias already points
+    ** at the new index (the publish reaches it).
     *******************************************************************************/
    static void publish(QuickSearchRuntime runtime, List<IndexEvent> indexEvents, List<IndexEvent> deleteEvents)
    {
+      boolean rebuilding = isRebuildingBeforePublish(runtime, deleteEvents);
       publishOrRecordFailures(runtime, indexEvents, deleteEvents);
-      captureDeletesDuringRebuild(runtime, deleteEvents);
+      if(rebuilding)
+      {
+         captureDeletesDuringRebuild(runtime, deleteEvents);
+      }
    }
 
 
@@ -225,32 +237,42 @@ public class QuickSearchRecordChangeListener implements RecordChangeListenerInte
 
 
    /*******************************************************************************
-    ** Record deletes made while a full reindex is rebuilding the table, so the
-    ** reindex can apply them to the new physical index after the alias swap.
-    ** basepull does not replay AWAITING_REINDEX rows, so it cannot consume one
-    ** against the old index before the swap.
-    **
-    ** The table's status is read from the database on every call (not cached)
-    ** so a reindex running on another node is seen. This runs after the delete
-    ** committed; the reindex marks the table REBUILDING before reading it, so a
-    ** delete of a record the reindex may have read always sees that status.
-    ** Never throws.
+    ** Whether a full reindex is rebuilding the deletes' table. The status is
+    ** read from the database (not cached) so a reindex on another node is seen.
+    ** Runs after the delete committed. Never throws.
     *******************************************************************************/
-   static void captureDeletesDuringRebuild(QuickSearchRuntime runtime, List<IndexEvent> deleteEvents)
+   static boolean isRebuildingBeforePublish(QuickSearchRuntime runtime, List<IndexEvent> deleteEvents)
    {
       if(deleteEvents.isEmpty())
       {
-         return;
+         return (false);
       }
 
       String tableName = deleteEvents.get(0).getTableName();
       try
       {
-         if(!hasTable(runtime.getConfig().applyPrefix(QuickSearchFailedEvent.TABLE_NAME)) || !isRebuilding(runtime, tableName))
-         {
-            return;
-         }
+         return (hasTable(runtime.getConfig().applyPrefix(QuickSearchFailedEvent.TABLE_NAME)) && isRebuilding(runtime, tableName));
+      }
+      catch(Exception e)
+      {
+         LOG.error("Could not read whether a full reindex is running; deletes made during one are not captured", e, logPair("tableName", tableName));
+         return (false);
+      }
+   }
 
+
+
+   /*******************************************************************************
+    ** Record deletes made while a full reindex is rebuilding the table, so the
+    ** reindex can apply them to the new physical index after the alias swap.
+    ** basepull does not replay AWAITING_REINDEX rows, so it cannot consume one
+    ** against the old index before the swap. Never throws.
+    *******************************************************************************/
+   static void captureDeletesDuringRebuild(QuickSearchRuntime runtime, List<IndexEvent> deleteEvents)
+   {
+      String tableName = deleteEvents.get(0).getTableName();
+      try
+      {
          List<QRecord> inserted = insertFailedEventRows(runtime, deleteEvents, "deleted during a full reindex", QuickSearchFailedEvent.STATUS_AWAITING_REINDEX);
          handOverIfRebuildFinished(runtime, tableName, inserted);
       }

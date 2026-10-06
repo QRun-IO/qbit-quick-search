@@ -238,6 +238,16 @@ public abstract class AbstractIndexingStep implements BackendStep
          return (recorded != null && !recorded.equals(current));
       }
 
+      ///////////////////////////////////////////////////////////////////////////
+      // the row may be a snapshot taken before a full reindex started; read   //
+      // it again so the REBUILDING status the listener relies on is kept      //
+      ///////////////////////////////////////////////////////////////////////////
+      QRecord latest = queryIndexRow(tableConfig.getTableName());
+      if(latest != null && STATUS_REBUILDING.equals(latest.getValueString("status")))
+      {
+         return (true);
+      }
+
       LOG.warn("Searchable field configuration changed since the index row was created; marking NEEDS_REINDEX", logPair("tableName", tableConfig.getTableName()));
       updateIndexRow(row.getValueInteger("id"), Map.of("status", STATUS_NEEDS_REINDEX));
       return (true);

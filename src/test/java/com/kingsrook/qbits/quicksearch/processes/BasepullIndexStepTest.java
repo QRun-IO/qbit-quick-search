@@ -910,4 +910,32 @@ class BasepullIndexStepTest extends BaseQuickSearchTest
       assertThat(queryAll(QuickSearchIndex.TABLE_NAME).get(0).getValueString("status")).isEqualTo(AbstractIndexingStep.STATUS_REBUILDING);
    }
 
+
+
+   /*******************************************************************************
+    ** Test: drift found on a row snapshot taken before a full reindex started
+    ** does not overwrite the REBUILDING status now in the database.
+    *******************************************************************************/
+   @Test
+   void testDriftDetection_staleSnapshot_keepsRebuilding() throws QException
+   {
+      QRecord row = insertIndexRow(TEST_ENTITY_TABLE, true, Instant.now(), 60);
+      UpdateInput updateInput = new UpdateInput();
+      updateInput.setTableName(QuickSearchIndex.TABLE_NAME);
+      updateInput.setRecords(List.of(new QRecord().withValue("id", row.getValue("id")).withValue("status", AbstractIndexingStep.STATUS_REBUILDING)));
+      new UpdateAction().execute(updateInput);
+
+      QRecord staleSnapshot = new QRecord()
+         .withValue("id", row.getValue("id"))
+         .withValue("tableName", TEST_ENTITY_TABLE)
+         .withValue("status", AbstractIndexingStep.STATUS_ACTIVE)
+         .withValue("searchableFieldsJson", "[{\"fieldName\":\"name\",\"weight\":1,\"includeLabel\":false}]");
+      QuickSearchableTableConfig tableConfig = QuickSearchQBitContext.getDiscoveredTables().stream()
+         .filter(table -> TEST_ENTITY_TABLE.equals(table.getTableName()))
+         .findFirst().orElseThrow();
+
+      assertThat(new BasepullIndexStep().detectDrift(staleSnapshot, tableConfig)).isTrue();
+      assertThat(queryAll(QuickSearchIndex.TABLE_NAME).get(0).getValueString("status")).isEqualTo(AbstractIndexingStep.STATUS_REBUILDING);
+   }
+
 }
