@@ -1,6 +1,6 @@
 # QBit: Quick Search
 
-[![Version](https://img.shields.io/badge/version-1.0.0--SNAPSHOT-blue.svg)](https://github.com/QRun-IO/qbit-quick-search)
+[![Version](https://img.shields.io/badge/version-1.0.0--RC.1-blue.svg)](https://github.com/QRun-IO/qbit-quick-search)
 [![License](https://img.shields.io/badge/license-Apache%202.0-green.svg)](https://www.apache.org/licenses/LICENSE-2.0)
 [![Java](https://img.shields.io/badge/java-21+-blue.svg)](https://adoptium.net/)
 
@@ -48,9 +48,11 @@ For `AWS_SIGV4` add these optional dependencies to your host (the QBit declares 
 <dependency>
     <groupId>com.kingsrook.qbits</groupId>
     <artifactId>qbit-quick-search</artifactId>
-    <version>1.0.0</version>
+    <version>1.0.0-RC.1</version>
 </dependency>
 ```
+
+`1.0.0-RC.1` is the current release candidate; `1.0.0` follows once host applications have adopted it (#12).
 
 Annotate entity classes:
 

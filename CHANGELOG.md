@@ -2,6 +2,10 @@
 
 All notable changes to this project are documented here. The format follows Keep a Changelog; versions follow semantic versioning.
 
+## [1.0.0-RC.1] - 2026-10-05
+
+First release candidate of 1.0, published to Maven Central from `release/1.0`. It contains every change listed under 1.0.0 below. Requires QQQ 4.1 (built against 4.1.0-RC.1). Known gaps before GA are tracked in #12.
+
 ## [1.0.0] - Unreleased
 
 Requires QQQ 4.1. Closes every blocker of the 2026-10-04 production-readiness audit (`docs/audits/2026-10-04/README.md`).

@@ -4,22 +4,16 @@ Updated: 2026-10-05
 
 ## Context
 
-Repo `QRun-IO/qbit-quick-search`, branch `feature/GH-1-0-release-readiness`, pushed; PR #10 to `develop` is open, reviewed and CI-green at `49f20c0`. Goal in flight: ship `1.0.0-RC.1`.
+`1.0.0-RC.1` is released (2026-10-05). PR #10 merged as `0cd892d` and PR #8 as `36bc0fb`, both on `develop`. `release/1.0` was cut from `36bc0fb`; the orb's `publish_release_candidate` workflow succeeded, pushed `0b7bc98` ("Bump version to 1.0.0-RC.1 [skip ci]") to `release/1.0`, and published to Maven Central (jar, pom, sources, javadoc, signatures). A clean consumer resolves it with qqq-backend-core 4.1.0-RC.1 and opensearch-java 3.10.0.
 
-## This session
+## Release mechanics (qqq-orb 0.6.8, confirmed in its source)
 
-- Recovered after a crash; the prior session had ended cleanly (all 1.0 work committed, verify green).
-- Rebased the branch onto `origin/develop` (`000e5bb`, squash of PR #7); the tree was unchanged. Committed `AGENTS.md`. GitHub SSH times out from this machine, so pushes use HTTPS with `git -c credential.helper='!gh auth git-credential' push https://github.com/QRun-IO/qbit-quick-search.git ...`.
-- Deep review of PR #10 (search permissions and alias swap, silent failures in the listener and basepull, security of transport and config). Two merge blockers in the full-reindex path and two search paging defects fixed in `45bd1fc`; lower-severity items are in `docs/TODO.md` under "Before 1.0.0 GA". Verify after the fixes: 307 unit, 18 integration, coverage gate passed. Review posted on PR #10; PR #8 reviewed and approved in a comment. Dependabot PR #1 closed as superseded.
-- Merging was refused by the Claude Code auto-mode permission classifier ("Merge Without Review") for both #8 and #10, so the merges are left to James.
+- RCs publish artifacts only: no git tag and no GitHub release. The GitHub release comes when the release branch merges to `main` and a `vX.Y.Z` tag is pushed.
+- Never push a `vX.Y.Z-RC.n` tag: it matches the GA job's `v*` filter, maps back to `release/X.Y.Z`, and would publish a stray `RC.n+1`.
+- The next push to `release/1.0` publishes `1.0.0-RC.2`.
+- The agent cannot run `gh pr merge` (auto-mode classifier); James merges. GitHub SSH times out from this machine; push over HTTPS with `git -c credential.helper='!gh auth git-credential' push https://github.com/QRun-IO/qbit-quick-search.git <ref>`.
 
-## Release mechanics (qqq-orb 0.5.2, confirmed in the orb source)
+## Next
 
-Pushing `release/1.0` runs `publish_release_candidate`; the orb derives `1.0.0-RC.1` from the `1.0.0-SNAPSHOT` revision, publishes the artifact, tags and creates a GitHub pre-release. Do not create the tag by hand. The next push to `release/1.0` publishes RC.2.
-
-## Next (in order)
-
-1. `gh pr merge 10 --squash --admin` (reviewed; CI green).
-2. Rebase `feature/GH-10-public-stack-prep` on `develop` (pom.xml conflict: take assertj 3.27.7), push, `gh pr merge 8 --squash --admin`.
-3. `git fetch origin && git checkout -b release/1.0 origin/develop && git push origin release/1.0`; watch the `publish_release_candidate` workflow; confirm the `v1.0.0-RC.1` pre-release.
-4. Pin `1.0.0-RC.1` in qqq-all and Voyage (see TODO); their feedback decides RC.2 or GA.
+1. Pin `1.0.0-RC.1` in qqq-all and Voyage (see `docs/TODO.md`); their feedback decides RC.2 or GA.
+2. Work the "Before 1.0.0 GA" list in `docs/TODO.md` on feature branches into `develop`, then merge `develop` into `release/1.0` for RC.2.
