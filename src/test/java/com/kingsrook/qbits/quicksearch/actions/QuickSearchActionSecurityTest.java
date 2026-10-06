@@ -558,7 +558,8 @@ class QuickSearchActionSecurityTest extends BaseQuickSearchTest
    /*******************************************************************************
     ** Test: with both tables fully locked, each table stops at its equal share
     ** and the raw hits fetched across tables stay within
-    ** max(10,000, T x 2 x limitPerTable), reported as a lower bound.
+    ** max(10,000, T x 2 x limitPerTable); the share ends paging like the
+    ** window, so hasMore is false and the total is a lower bound.
     *******************************************************************************/
    @Test
    void testLimitPerTable_withLocks_totalWorkWithinBound() throws QException
@@ -581,7 +582,7 @@ class QuickSearchActionSecurityTest extends BaseQuickSearchTest
       }
       assertThat(total).isLessThanOrEqualTo(Math.max(QuickSearchOpenSearchClient.MAX_RESULT_WINDOW, 2 * 2 * 5));
       assertThat(output.getResults()).isEmpty();
-      assertThat(output.getHasMore()).isTrue();
+      assertThat(output.getHasMore()).isFalse();
       assertThat(output.getTotalHitsIsLowerBound()).isTrue();
    }
 
@@ -628,17 +629,50 @@ class QuickSearchActionSecurityTest extends BaseQuickSearchTest
 
 
    /*******************************************************************************
-    ** Test: a hit returned by two batches appears once on the page.
+    ** Test: a hit returned again by a later batch is counted once, so the
+    ** offset skips it once and the page holds the next accessible hits.
     *******************************************************************************/
    @Test
    void testRecordLock_duplicateAcrossBatches_returnedOnce() throws QException
    {
-      insertEntities(1, 2);
-      stubPagedSearch(List.of("9", "1", "1", "2"));
+      insertEntities(1, 2, 3);
+      stubPagedSearch(List.of("9", "8", "7", "6", "5", "1", "1", "2", "3"));
 
-      QuickSearchOutput output = page(0, 2);
+      QuickSearchOutput output = page(1, 2);
 
-      assertThat(output.getResults()).extracting(QuickSearchResult::getRecordId).containsExactly("1", "2");
+      verify(mockClient, times(2)).search(anyString(), any(), anyInt(), anyInt(), anyList(), any());
+      assertThat(output.getResults()).extracting(QuickSearchResult::getRecordId).containsExactly("2", "3");
+   }
+
+
+
+   /*******************************************************************************
+    ** Test: paging a table with offset += results until hasMore is false
+    ** terminates at the table's share, with every result returned once.
+    *******************************************************************************/
+   @Test
+   void testLimitPerTable_withLocks_pagingUntilNoMoreTerminates() throws QException
+   {
+      addOtherTable();
+      QuickSearchQBitContext.getConfig().withMaxSearchLimit(1_000);
+      insertEntities(IntStream.rangeClosed(1, 6_000).boxed().toArray(Integer[]::new));
+      stubPagedSearch(Map.of(TEST_ENTITY_TABLE, IntStream.rangeClosed(1, 12_000).mapToObj(String::valueOf).toList()), false);
+
+      List<String>      seen   = new ArrayList<>();
+      int               pages  = 0;
+      QuickSearchOutput output;
+      do
+      {
+         output = action.execute(new QuickSearchInput().withSearchTerm("entity").withTableNames(List.of(TEST_ENTITY_TABLE, OTHER_TABLE)).withOffset(seen.size()).withLimitPerTable(1_000));
+         output.getResults().forEach(result -> seen.add(result.getRecordId()));
+         pages++;
+      }
+      while(output.getHasMore() && pages < 20);
+
+      assertThat(output.getHasMore()).isFalse();
+      assertThat(output.getTotalHitsIsLowerBound()).isTrue();
+      assertThat(pages).isEqualTo(5);
+      assertThat(seen).doesNotHaveDuplicates().hasSize(QuickSearchOpenSearchClient.MAX_RESULT_WINDOW / 2);
    }
 
 }

@@ -86,11 +86,12 @@ import static com.kingsrook.qqq.backend.core.logging.LogUtils.logPair;
  ** cannot starve another and one call reads at most
  ** max(MAX_RESULT_WINDOW, T x 2 x limitPerTable) raw hits over at most
  ** max(MAX_LOCKED_ROUND_TRIPS, 2 x T) requests; offset never raises it.
- ** When a budget runs out the scan stops and reports hasMore and a
- ** lower-bound total, so deep pages of a heavily locked table may be
- ** unreachable in per-table mode. Hits are deduplicated by table and record id within a
- ** call; batches are separate from/size requests without a tiebreak sort, so
- ** a hit that moves between batches during a refresh can still be missed.
+ ** A budget ends a scan like the result window does: hasMore is false and
+ ** the total is a lower bound, so in per-table mode paging within a table
+ ** stops past max(MAX_RESULT_WINDOW / T, 2 x limitPerTable) raw hits. Hits
+ ** are deduplicated by table and record id within a call; batches are
+ ** separate from/size requests without a tiebreak sort, so a hit that moves
+ ** between batches during a refresh can still be missed.
  *******************************************************************************/
 public class QuickSearchAction
 {
@@ -230,7 +231,7 @@ public class QuickSearchAction
       // results are known, the hits run out, the result window is reached, or  //
       // the scan budget is spent. each batch over-reads 2x what is still       //
       // needed and at least doubles the last one, up to MAX_LOCKED_BATCH_SIZE, //
-      // and the last round trip the budget allows takes all it has left.       //
+      // and the last round trip takes up to MAX_LOCKED_BATCH_SIZE of the rest. //
       ////////////////////////////////////////////////////////////////////////////
       int                     target     = offset + pageSize;
       List<QuickSearchResult> accessible = new ArrayList<>();
@@ -271,7 +272,7 @@ public class QuickSearchAction
       // more candidates exist, so a caller can page on to accessible rows.     //
       ////////////////////////////////////////////////////////////////////////////
       boolean truncated = accessible.size() > target;
-      boolean hasMore   = truncated || (!exhausted && position < window);
+      boolean hasMore   = truncated || (!exhausted && position < window && budget.hasRemaining());
 
       List<QuickSearchResult> results = accessible.size() > offset
          ? new ArrayList<>(accessible.subList(offset, Math.min(target, accessible.size())))

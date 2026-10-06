@@ -127,8 +127,9 @@ public class QuickSearchInput extends AbstractActionInput
     ** by a lock are not counted). With limitPerTable it applies within each
     ** table. Results are reachable only within the first 10,000 raw hits; in
     ** per-table mode with locks each table gets an equal share of that scan
-    ** budget, so deep pages of a heavily locked table may be unreachable
-    ** (hasMore and totalHitsIsLowerBound stay true).
+    ** budget, so paging within a table stops past
+    ** max(10,000 / T, 2 x limitPerTable) raw hits (hasMore turns false and
+    ** totalHitsIsLowerBound stays true).
     *******************************************************************************/
    public Integer getOffset()
    {
