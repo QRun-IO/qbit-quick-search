@@ -28,11 +28,15 @@ import com.kingsrook.qqq.backend.core.context.QContext;
 import com.kingsrook.qqq.backend.core.exceptions.QException;
 import com.kingsrook.qqq.backend.core.model.actions.tables.insert.InsertInput;
 import com.kingsrook.qqq.backend.core.model.data.QRecord;
+import com.kingsrook.qqq.backend.core.model.metadata.fields.QFieldMetaData;
+import com.kingsrook.qqq.backend.core.model.metadata.fields.QFieldType;
 import com.kingsrook.qqq.backend.core.model.metadata.permissions.PermissionLevel;
 import com.kingsrook.qqq.backend.core.model.metadata.permissions.QPermissionRules;
+import com.kingsrook.qqq.backend.core.model.metadata.tables.QTableMetaData;
 import com.kingsrook.qbits.quicksearch.BaseQuickSearchTest;
 import com.kingsrook.qbits.quicksearch.QuickSearchQBitConfig;
 import com.kingsrook.qbits.quicksearch.QuickSearchQBitContext;
+import com.kingsrook.qbits.quicksearch.QuickSearchableTableConfig;
 import com.kingsrook.qbits.quicksearch.opensearch.OpenSearchDocument;
 import com.kingsrook.qbits.quicksearch.opensearch.QuickSearchOpenSearchClient;
 import org.junit.jupiter.api.BeforeEach;
@@ -48,6 +52,8 @@ import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.anyList;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.atLeastOnce;
+import static org.mockito.Mockito.clearInvocations;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
@@ -67,6 +73,7 @@ import static org.mockito.Mockito.when;
 class QuickSearchActionSecurityTest extends BaseQuickSearchTest
 {
    private static final String TABLE_LABEL = "Test Entity";
+   private static final String OTHER_TABLE = "otherEntity";
 
    private QuickSearchOpenSearchClient mockClient;
    private QuickSearchAction           action;
@@ -417,6 +424,81 @@ class QuickSearchActionSecurityTest extends BaseQuickSearchTest
       verify(mockClient, times(3)).search(anyString(), any(), sizes.capture(), offsets.capture(), anyList());
       assertThat(sizes.getAllValues()).containsExactly(QuickSearchOpenSearchClient.MAX_RESULT_WINDOW, QuickSearchOpenSearchClient.MAX_RESULT_WINDOW, 5_000);
       assertThat(offsets.getAllValues()).containsExactly(0, 0, 5_000);
+   }
+
+
+
+   /*******************************************************************************
+    ** Assert the searches since the last clear stayed within one request's
+    ** budget and read up to, but not past, the result window.
+    *******************************************************************************/
+   private void assertScanWithinBudget() throws QException
+   {
+      ArgumentCaptor<Integer> sizes   = ArgumentCaptor.forClass(Integer.class);
+      ArgumentCaptor<Integer> offsets = ArgumentCaptor.forClass(Integer.class);
+      verify(mockClient, atLeastOnce()).search(anyString(), any(), sizes.capture(), offsets.capture(), anyList());
+
+      List<Integer> sizeValues   = sizes.getAllValues();
+      List<Integer> offsetValues = offsets.getAllValues();
+      assertThat(sizeValues.size()).isLessThanOrEqualTo(QuickSearchAction.MAX_LOCKED_ROUND_TRIPS);
+      assertThat(sizeValues.stream().mapToInt(Integer::intValue).sum()).isEqualTo(QuickSearchOpenSearchClient.MAX_RESULT_WINDOW);
+      assertThat(offsetValues.get(offsetValues.size() - 1) + sizeValues.get(sizeValues.size() - 1)).isEqualTo(QuickSearchOpenSearchClient.MAX_RESULT_WINDOW);
+   }
+
+
+
+   /*******************************************************************************
+    ** Test: when every hit is filtered out by a lock, one search stops at the
+    ** request budget: at most MAX_RESULT_WINDOW raw hits and
+    ** MAX_LOCKED_ROUND_TRIPS requests, in shared and per-table mode, with an
+    ** empty page and an honest hasMore.
+    *******************************************************************************/
+   @Test
+   void testRecordLock_allHitsFiltered_workIsBounded() throws QException
+   {
+      stubPagedSearch(IntStream.rangeClosed(1, 50_000).mapToObj(String::valueOf).toList());
+
+      QuickSearchOutput shared = action.execute(new QuickSearchInput().withSearchTerm("entity").withLimit(1));
+      assertScanWithinBudget();
+      clearInvocations(mockClient);
+
+      QuickSearchOutput perTable = action.execute(new QuickSearchInput().withSearchTerm("entity").withOffset(3).withLimitPerTable(1));
+      assertScanWithinBudget();
+
+      assertThat(shared.getResults()).isEmpty();
+      assertThat(perTable.getResults()).isEmpty();
+      assertThat(shared.getTotalHits()).isEqualTo(0L);
+      assertThat(shared.getHasMore()).isFalse();
+      assertThat(perTable.getHasMore()).isFalse();
+   }
+
+
+
+   /*******************************************************************************
+    ** Test: per-table mode shares one budget across tables, so a second fully
+    ** locked table is not scanned once the first has spent the window, and
+    ** hasMore says results may remain.
+    *******************************************************************************/
+   @Test
+   void testLimitPerTable_withLocks_budgetSharedAcrossTables() throws QException
+   {
+      QContext.getQInstance().addTable(new QTableMetaData()
+         .withName(OTHER_TABLE)
+         .withBackendName(TEST_BACKEND_NAME)
+         .withPrimaryKeyField("id")
+         .withField(new QFieldMetaData("id", QFieldType.INTEGER)));
+      QuickSearchQBitContext.setDiscoveredTables(List.of(
+         new QuickSearchableTableConfig().withTableName(TEST_ENTITY_TABLE).withPrimaryKeyField("id").withEnabledByDefault(true),
+         new QuickSearchableTableConfig().withTableName(OTHER_TABLE).withPrimaryKeyField("id").withEnabledByDefault(true)));
+      stubPagedSearch(IntStream.rangeClosed(1, 50_000).mapToObj(String::valueOf).toList());
+
+      QuickSearchOutput output = action.execute(new QuickSearchInput().withSearchTerm("entity").withTableNames(List.of(TEST_ENTITY_TABLE, OTHER_TABLE)).withLimitPerTable(1));
+
+      assertScanWithinBudget();
+      verify(mockClient, never()).search(anyString(), eq(List.of(OTHER_TABLE)), anyInt(), anyInt(), anyList());
+      assertThat(output.getResults()).isEmpty();
+      assertThat(output.getHasMore()).isTrue();
+      assertThat(output.getTotalHitsIsLowerBound()).isTrue();
    }
 
 }
