@@ -329,6 +329,19 @@ class OpenSearchIntegrationTest
          List<String> page2Ids = page2.getResults().stream().map(r -> r.getRecordId()).toList();
 
          assertThat(page1Ids).doesNotContainAnyElementsOf(page2Ids);
+
+         ////////////////////////////////////////////////////
+         // per-table mode honors offset the same way      //
+         ////////////////////////////////////////////////////
+         QuickSearchOutput perTable1 = new QuickSearchAction().execute(
+            new QuickSearchInput().withSearchTerm("widget").withLimitPerTable(2).withOffset(0));
+         QuickSearchOutput perTable2 = new QuickSearchAction().execute(
+            new QuickSearchInput().withSearchTerm("widget").withLimitPerTable(2).withOffset(2));
+
+         List<String> perTable1Ids = perTable1.getResults().stream().map(r -> r.getTableName() + ":" + r.getRecordId()).toList();
+         List<String> perTable2Ids = perTable2.getResults().stream().map(r -> r.getTableName() + ":" + r.getRecordId()).toList();
+
+         assertThat(perTable1Ids).doesNotContainAnyElementsOf(perTable2Ids);
       }
    }
 

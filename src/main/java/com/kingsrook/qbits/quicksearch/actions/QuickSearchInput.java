@@ -122,7 +122,10 @@ public class QuickSearchInput extends AbstractActionInput
 
 
    /*******************************************************************************
-    ** Getter for offset.
+    ** Getter for offset: the number of results to skip, counting only results
+    ** the session can see (with record security locks on, hits filtered out
+    ** by a lock are not counted). With limitPerTable it applies within each
+    ** table. Results are reachable only within the first 10,000 raw hits.
     *******************************************************************************/
    public Integer getOffset()
    {
