@@ -427,6 +427,7 @@ public class BasepullIndexStep extends AbstractIndexingStep
       }
       catch(Exception e)
       {
+         LOG.warn("Could not count indexed documents for table; leaving documentCount empty", e, logPair("tableName", tableName));
          return (null);
       }
    }

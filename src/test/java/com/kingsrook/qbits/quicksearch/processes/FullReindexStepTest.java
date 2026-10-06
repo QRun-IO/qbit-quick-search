@@ -22,6 +22,8 @@ import java.util.List;
 import com.kingsrook.qqq.backend.core.actions.tables.InsertAction;
 import com.kingsrook.qqq.backend.core.actions.tables.QueryAction;
 import com.kingsrook.qqq.backend.core.exceptions.QException;
+import com.kingsrook.qqq.backend.core.logging.QCollectingLogger;
+import com.kingsrook.qqq.backend.core.logging.QLogger;
 import com.kingsrook.qqq.backend.core.model.actions.processes.RunBackendStepInput;
 import com.kingsrook.qqq.backend.core.model.actions.processes.RunBackendStepOutput;
 import com.kingsrook.qqq.backend.core.model.actions.tables.insert.InsertInput;
@@ -37,6 +39,7 @@ import com.kingsrook.qbits.quicksearch.model.QuickSearchIndexRun;
 import com.kingsrook.qbits.quicksearch.opensearch.BulkIndexResult;
 import com.kingsrook.qbits.quicksearch.opensearch.OpenSearchDocument;
 import com.kingsrook.qbits.quicksearch.opensearch.QuickSearchOpenSearchClient;
+import org.apache.logging.log4j.Level;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
@@ -248,6 +251,42 @@ class FullReindexStepTest extends BaseQuickSearchTest
       assertThat(row.getValueString("status")).isEqualTo("ACTIVE");
       assertThat(row.getValueString("lastRunStatus")).isEqualTo("FULL_REINDEX COMPLETED");
       assertThat(row.getValueString("searchableFieldsJson")).isEqualTo(AbstractIndexingStep.buildSearchableFieldsJson(QuickSearchQBitContext.getTableConfig(TEST_ENTITY_TABLE)));
+   }
+
+
+
+   /*******************************************************************************
+    ** Test: a failing document count after the swap is logged at WARN with the
+    ** table name, and the run still completes with no documentCount.
+    *******************************************************************************/
+   @Test
+   void testAllTables_documentCountFails_loggedAsWarning_runCompletes() throws QException
+   {
+      insertTestEntities(1);
+      when(mockClient.countDocumentsForTable(TEST_ENTITY_TABLE)).thenThrow(new QException("count failed"));
+
+      QCollectingLogger collectingLogger = QLogger.activateCollectingLoggerForClass(ReconcileIndexStep.class);
+      try
+      {
+         new FullReindexStep().run(new RunBackendStepInput(), new RunBackendStepOutput());
+      }
+      finally
+      {
+         QLogger.deactivateCollectingLoggerForClass(ReconcileIndexStep.class);
+      }
+
+      assertThat(collectingLogger.getCollectedMessages())
+         .filteredOn(m -> Level.WARN.equals(m.getLevel()) && m.getMessage().contains("Could not count indexed documents"))
+         .singleElement()
+         .satisfies(m ->
+         {
+            assertThat(m.getMessage()).contains("\"tableName\":\"" + TEST_ENTITY_TABLE + "\"");
+            assertThat(m.getMessage()).contains("\"stackTrace\"").contains("count failed");
+         });
+
+      QRecord row = queryIndexRow();
+      assertThat(row.getValueString("lastRunStatus")).isEqualTo("FULL_REINDEX COMPLETED");
+      assertThat(row.getValue("documentCount")).isNull();
    }
 
 
