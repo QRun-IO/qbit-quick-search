@@ -137,13 +137,13 @@ Without `schedulerName` the processes exist but nothing runs them; the QBit logs
 | Field | Default | Description |
 |---|---|---|
 | `backendName` | required | QQQ backend for the operational tables |
-| `opensearchUrl` | | `https://host[:port]`; preferred over `opensearchHost`, `opensearchPort`, `useSsl` |
+| `opensearchUrl` | | `https://host[:port]`; preferred over `opensearchHost`, `opensearchPort`, `useSsl`; credentials in the URL are rejected |
 | `opensearchHost`, `opensearchPort`, `useSsl` | `useSsl=false` | Legacy connection fields |
 | `opensearchIndexName` | required | Alias name owned by this QBit; lowercase, OpenSearch naming rules |
 | `authMode` | inferred | `NONE`, `BASIC` (inferred when credentials are set), `AWS_SIGV4` |
-| `opensearchUsername`, `opensearchPassword` | | BASIC credentials; `${env.X}` references recommended; refused over plain HTTP unless `allowPlaintextCredentials` |
+| `opensearchUsername`, `opensearchPassword` | | BASIC credentials; `${env.X}` references recommended (an empty value counts as missing); refused over plain HTTP unless `allowPlaintextCredentials` |
 | `awsRegion`, `awsServiceName`, `awsAssumeRoleArn` | region from `AWS_REGION`; `es` | AWS_SIGV4 settings |
-| `tls` | JVM defaults | `caCertificatePath` or `trustStorePath`/`trustStorePassword`/`trustStoreType`, `keyStorePath`/`keyStorePassword`/`keyStoreType` (mTLS), `hostnameVerification`, `insecureSkipVerify` (loopback only unless `allowInsecureInProduction`) |
+| `tls` | JVM defaults | `caCertificatePath` or `trustStorePath`/`trustStorePassword`/`trustStoreType`, `keyStorePath`/`keyStorePassword`/`keyStoreType` (mTLS), `hostnameVerification` (`false` logs a warning), `insecureSkipVerify` (loopback only unless `allowInsecureInProduction`) |
 | `connectTimeoutMillis`, `responseTimeoutMillis`, `maxConnections` | 5000, 60000, 30 | Transport settings |
 | `transportCustomizer` | | `QCodeReference` to an `OpenSearchTransportCustomizer` (bearer tokens, API keys, interceptors) |
 | `startupMode` | `FAIL_FAST` | `FAIL_FAST` fails `produce()` when the cluster is unreachable; `DEGRADED` boots and retries on first use |

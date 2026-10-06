@@ -166,6 +166,10 @@ public class QuickSearchQBitConfig implements QBitConfig
             {
                errors.add("opensearchUrl must include a host");
             }
+            if(uri.getRawUserInfo() != null)
+            {
+               errors.add("opensearchUrl must not contain credentials; use opensearchUsername and opensearchPassword");
+            }
          }
          catch(Exception e)
          {
