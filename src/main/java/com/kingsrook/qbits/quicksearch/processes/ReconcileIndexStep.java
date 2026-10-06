@@ -144,7 +144,11 @@ public class ReconcileIndexStep extends AbstractIndexingStep
             values.put("lastReconcileTime", Instant.now());
             values.put("lastBasepullTime", reconcileStart);
             values.put("recordCount", counts.processed());
-            values.put("documentCount", safeCount(client, tableName));
+            Integer documentCount = safeCount(client, tableName);
+            if(documentCount != null)
+            {
+               values.put("documentCount", documentCount);
+            }
             values.put("searchableFieldsJson", buildSearchableFieldsJson(tableConfig));
             values.put("status", STATUS_ACTIVE);
             if(ReconcileIndexStep.RUN_TYPE.equals(runType) == false)
@@ -191,7 +195,8 @@ public class ReconcileIndexStep extends AbstractIndexingStep
 
 
    /*******************************************************************************
-    **
+    ** Number of documents indexed for the table, or null when the count fails
+    ** (logged), so callers keep the previous documentCount.
     *******************************************************************************/
    static Integer safeCount(QuickSearchOpenSearchClient client, String tableName)
    {
@@ -202,7 +207,7 @@ public class ReconcileIndexStep extends AbstractIndexingStep
       }
       catch(Exception e)
       {
-         LOG.warn("Could not count indexed documents for table; leaving documentCount empty", e, logPair("tableName", tableName));
+         LOG.warn("Could not count indexed documents for table; keeping the previous documentCount", e, logPair("tableName", tableName));
          return (null);
       }
    }

@@ -322,23 +322,32 @@ class BasepullIndexStepTest extends BaseQuickSearchTest
 
    /*******************************************************************************
     ** Test: a failing document count is logged at WARN with the table name, and
-    ** the run still completes with no documentCount.
+    ** the run still completes, keeping the previous documentCount.
     *******************************************************************************/
    @Test
-   void testDocumentCountFails_loggedAsWarning_runCompletes() throws QException
+   void testDocumentCountFails_loggedAsWarning_previousCountKept() throws QException
    {
       insertTestEntities(1);
-      insertIndexRow(TEST_ENTITY_TABLE, true, null, 5);
+      QRecord indexRow = insertIndexRow(TEST_ENTITY_TABLE, true, null, 5);
+
+      UpdateInput seedInput = new UpdateInput();
+      seedInput.setTableName(QuickSearchIndex.TABLE_NAME);
+      seedInput.setRecords(List.of(new QRecord().withValue("id", indexRow.getValue("id")).withValue("documentCount", 99)));
+      new UpdateAction().execute(seedInput);
+
       when(mockClient.countDocumentsForTable(TEST_ENTITY_TABLE)).thenThrow(new QException("count failed"));
 
-      QCollectingLogger collectingLogger = QLogger.activateCollectingLoggerForClass(BasepullIndexStep.class);
+      //////////////////////////////////////////////////////////////////
+      // the count, and so its warning, belongs to ReconcileIndexStep //
+      //////////////////////////////////////////////////////////////////
+      QCollectingLogger collectingLogger = QLogger.activateCollectingLoggerForClass(ReconcileIndexStep.class);
       try
       {
          new BasepullIndexStep().run(new RunBackendStepInput(), new RunBackendStepOutput());
       }
       finally
       {
-         QLogger.deactivateCollectingLoggerForClass(BasepullIndexStep.class);
+         QLogger.deactivateCollectingLoggerForClass(ReconcileIndexStep.class);
       }
 
       assertThat(collectingLogger.getCollectedMessages())
@@ -352,7 +361,8 @@ class BasepullIndexStepTest extends BaseQuickSearchTest
 
       QRecord row = queryAll(QuickSearchIndex.TABLE_NAME).get(0);
       assertThat(row.getValueString("lastRunStatus")).isEqualTo("BASEPULL COMPLETED");
-      assertThat(row.getValue("documentCount")).isNull();
+      assertThat(row.getValue("lastBasepullTime")).isNotNull();
+      assertThat(row.getValueInteger("documentCount")).isEqualTo(99);
    }
 
 

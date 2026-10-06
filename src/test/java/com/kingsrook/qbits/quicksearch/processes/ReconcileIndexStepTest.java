@@ -275,12 +275,13 @@ class ReconcileIndexStepTest extends BaseQuickSearchTest
 
    /*******************************************************************************
     ** Test: a failing document count is logged at WARN with the table name, and
-    ** the run still completes with no documentCount.
+    ** the run still completes, keeping the previous documentCount.
     *******************************************************************************/
    @Test
-   void testReconcile_documentCountFails_loggedAsWarning_runCompletes() throws QException
+   void testReconcile_documentCountFails_loggedAsWarning_previousCountKept() throws QException
    {
       insertTestEntities(1);
+      insertIndexRow(true, 99);
       when(mockClient.countDocumentsForTable(TEST_ENTITY_TABLE)).thenThrow(new QException("count failed"));
 
       QCollectingLogger collectingLogger = QLogger.activateCollectingLoggerForClass(ReconcileIndexStep.class);
@@ -304,7 +305,8 @@ class ReconcileIndexStepTest extends BaseQuickSearchTest
 
       QRecord row = queryAll(QuickSearchIndex.TABLE_NAME).get(0);
       assertThat(row.getValueString("lastRunStatus")).isEqualTo("RECONCILE COMPLETED");
-      assertThat(row.getValue("documentCount")).isNull();
+      assertThat(row.getValueInteger("recordCount")).isEqualTo(1);
+      assertThat(row.getValueInteger("documentCount")).isEqualTo(99);
    }
 
 
@@ -333,12 +335,24 @@ class ReconcileIndexStepTest extends BaseQuickSearchTest
     *******************************************************************************/
    private void insertIndexRow(Boolean enabled) throws QException
    {
+      insertIndexRow(enabled, null);
+   }
+
+
+
+   /*******************************************************************************
+    ** Insert a quickSearchIndex row for testEntity with the given enabled flag
+    ** and documentCount.
+    *******************************************************************************/
+   private void insertIndexRow(Boolean enabled, Integer documentCount) throws QException
+   {
       InsertInput insertInput = new InsertInput();
       insertInput.setTableName(QuickSearchIndex.TABLE_NAME);
       insertInput.setRecords(List.of(new QRecord()
          .withValue("tableName", TEST_ENTITY_TABLE)
          .withValue("enabled", enabled)
          .withValue("basepullIntervalMinutes", 5)
+         .withValue("documentCount", documentCount)
          .withValue("status", "ACTIVE")));
       new InsertAction().execute(insertInput);
    }
