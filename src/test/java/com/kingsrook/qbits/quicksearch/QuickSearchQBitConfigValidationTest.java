@@ -109,6 +109,18 @@ class QuickSearchQBitConfigValidationTest
 
 
    @Test
+   void testUrl_withUserInfo_isRejectedWithoutEchoingIt()
+   {
+      List<String> errors = validate(baseConfig().withOpensearchHost(null).withOpensearchPort(null).withOpensearchUrl("https://admin:s3cret@search.example.com"));
+      assertThat(errors).anyMatch(e -> e.contains("opensearchUrl must not contain credentials"));
+      assertThat(errors).noneMatch(e -> e.contains("s3cret") || e.contains("admin"));
+
+      assertThat(validate(baseConfig().withOpensearchUrl("https://admin@search.example.com"))).anyMatch(e -> e.contains("opensearchUrl must not contain credentials"));
+   }
+
+
+
+   @Test
    void testAuthMode_inferredFromCredentials()
    {
       assertThat(baseConfig().getEffectiveAuthMode()).isEqualTo(QuickSearchAuthMode.NONE);
