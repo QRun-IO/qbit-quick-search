@@ -556,11 +556,12 @@ class QuickSearchActionSecurityTest extends BaseQuickSearchTest
 
 
    /*******************************************************************************
-    ** Test: with both tables fully locked, each table's scan stays within its
-    ** own budget, so the request's work is bounded by the number of tables.
+    ** Test: with both tables fully locked, each table stops at its equal share
+    ** and the raw hits fetched across tables stay within
+    ** max(10,000, T x 2 x limitPerTable), reported as a lower bound.
     *******************************************************************************/
    @Test
-   void testLimitPerTable_withLocks_eachTableHasOwnBudget() throws QException
+   void testLimitPerTable_withLocks_totalWorkWithinBound() throws QException
    {
       addOtherTable();
       List<String> ids = IntStream.rangeClosed(1, 50_000).mapToObj(String::valueOf).toList();
@@ -568,16 +569,20 @@ class QuickSearchActionSecurityTest extends BaseQuickSearchTest
 
       QuickSearchOutput output = action.execute(new QuickSearchInput().withSearchTerm("entity").withTableNames(List.of(TEST_ENTITY_TABLE, OTHER_TABLE)).withOffset(5_000).withLimitPerTable(5));
 
+      int total = 0;
       for(String table : List.of(TEST_ENTITY_TABLE, OTHER_TABLE))
       {
          ArgumentCaptor<Integer> sizes = ArgumentCaptor.forClass(Integer.class);
          verify(mockClient, atLeastOnce()).search(anyString(), eq(List.of(table)), sizes.capture(), anyInt(), anyList(), any());
-         assertThat(sizes.getAllValues().size()).isLessThanOrEqualTo(QuickSearchAction.MAX_LOCKED_ROUND_TRIPS);
+         assertThat(sizes.getAllValues().size()).isLessThanOrEqualTo(QuickSearchAction.MAX_LOCKED_ROUND_TRIPS / 2);
          assertThat(sizes.getAllValues()).allMatch(size -> size <= QuickSearchAction.MAX_LOCKED_BATCH_SIZE);
-         assertThat(sizes.getAllValues().stream().mapToInt(Integer::intValue).sum()).isEqualTo(QuickSearchOpenSearchClient.MAX_RESULT_WINDOW);
+         assertThat(sizes.getAllValues().stream().mapToInt(Integer::intValue).sum()).isEqualTo(QuickSearchOpenSearchClient.MAX_RESULT_WINDOW / 2);
+         total += sizes.getAllValues().stream().mapToInt(Integer::intValue).sum();
       }
+      assertThat(total).isLessThanOrEqualTo(Math.max(QuickSearchOpenSearchClient.MAX_RESULT_WINDOW, 2 * 2 * 5));
       assertThat(output.getResults()).isEmpty();
-      assertThat(output.getHasMore()).isFalse();
+      assertThat(output.getHasMore()).isTrue();
+      assertThat(output.getTotalHitsIsLowerBound()).isTrue();
    }
 
 

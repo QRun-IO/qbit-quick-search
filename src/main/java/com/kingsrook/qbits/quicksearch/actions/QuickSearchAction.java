@@ -76,15 +76,19 @@ import static com.kingsrook.qqq.backend.core.logging.LogUtils.logPair;
  ** skip an accessible hit. No request reads past MAX_RESULT_WINDOW (10,000
  ** raw hits), so accessible results beyond it are not reachable.
  **
- ** With locks, each scan (the whole search, or one table in per-table mode)
- ** has a hard budget: at most MAX_RESULT_WINDOW raw hits, in batches of at
- ** most MAX_LOCKED_BATCH_SIZE, over at most MAX_LOCKED_ROUND_TRIPS OpenSearch
- ** requests, each followed by one QueryAction of at most
- ** MAX_LOCKED_BATCH_SIZE ids per table in the batch. One request therefore
- ** reads at most (searched tables) x MAX_RESULT_WINDOW raw hits however
- ** large offset or limit is, and a fully locked table cannot starve another.
+ ** With locks, each scan has a hard budget of raw hits, read in batches of
+ ** at most MAX_LOCKED_BATCH_SIZE, and of OpenSearch requests, each followed
+ ** by one QueryAction per table in the batch. A single-list search gets
+ ** MAX_RESULT_WINDOW hits and MAX_LOCKED_ROUND_TRIPS requests. In per-table
+ ** mode each of the T tables gets its own equal share,
+ ** max(MAX_RESULT_WINDOW / T, min(MAX_RESULT_WINDOW, 2 x limitPerTable)) hits
+ ** and max(2, MAX_LOCKED_ROUND_TRIPS / T) requests, so a fully locked table
+ ** cannot starve another and one call reads at most
+ ** max(MAX_RESULT_WINDOW, T x 2 x limitPerTable) raw hits over at most
+ ** max(MAX_LOCKED_ROUND_TRIPS, 2 x T) requests; offset never raises it.
  ** When a budget runs out the scan stops and reports hasMore and a
- ** lower-bound total. Hits are deduplicated by table and record id within a
+ ** lower-bound total, so deep pages of a heavily locked table may be
+ ** unreachable in per-table mode. Hits are deduplicated by table and record id within a
  ** call; batches are separate from/size requests without a tiebreak sort, so
  ** a hit that moves between batches during a refresh can still be missed.
  *******************************************************************************/
@@ -161,7 +165,7 @@ public class QuickSearchAction
          return (searchPerTable(client, normalizedTerm, allowedTables, offset, Math.min(input.getLimitPerTable(), maxLimit), tableConfigs, applyLocks));
       }
 
-      Page page = searchPage(client, normalizedTerm, allowedTables, offset, limit, tableConfigs, applyLocks);
+      Page page = searchPage(client, normalizedTerm, allowedTables, offset, limit, tableConfigs, applyLocks, new ScanBudget(QuickSearchOpenSearchClient.MAX_RESULT_WINDOW, MAX_LOCKED_ROUND_TRIPS));
       return (page.toOutput());
    }
 
@@ -178,9 +182,13 @@ public class QuickSearchAction
       boolean                 hasMore    = false;
       boolean                 lowerBound = false;
 
+      int window     = QuickSearchOpenSearchClient.MAX_RESULT_WINDOW;
+      int tableHits  = Math.max(window / allowedTables.size(), Math.min(window, 2 * limitPerTable));
+      int tableTrips = Math.max(2, MAX_LOCKED_ROUND_TRIPS / allowedTables.size());
+
       for(String tableName : allowedTables)
       {
-         Page page = searchPage(client, term, List.of(tableName), offset, limitPerTable, tableConfigs, applyLocks);
+         Page page = searchPage(client, term, List.of(tableName), offset, limitPerTable, tableConfigs, applyLocks, new ScanBudget(tableHits, tableTrips));
          results.addAll(page.results());
          totalHits += page.totalHits();
          hasMore |= page.hasMore();
@@ -198,7 +206,7 @@ public class QuickSearchAction
     ** limit count accessible results within one scan budget (see the class
     ** comment). Every request keeps from + size within MAX_RESULT_WINDOW.
     *******************************************************************************/
-   private Page searchPage(QuickSearchOpenSearchClient client, String term, List<String> tables, int offset, int limit, List<QuickSearchableTableConfig> tableConfigs, boolean applyLocks) throws QException
+   private Page searchPage(QuickSearchOpenSearchClient client, String term, List<String> tables, int offset, int limit, List<QuickSearchableTableConfig> tableConfigs, boolean applyLocks, ScanBudget budget) throws QException
    {
       int window   = QuickSearchOpenSearchClient.MAX_RESULT_WINDOW;
       int pageSize = Math.min(limit, window - offset);
@@ -222,7 +230,7 @@ public class QuickSearchAction
       // results are known, the hits run out, the result window is reached, or  //
       // the scan budget is spent. each batch over-reads 2x what is still       //
       // needed and at least doubles the last one, up to MAX_LOCKED_BATCH_SIZE, //
-      // so a fully locked table reaches the window in 19 round trips.          //
+      // and the last round trip the budget allows takes all it has left.       //
       ////////////////////////////////////////////////////////////////////////////
       int                     target     = offset + pageSize;
       List<QuickSearchResult> accessible = new ArrayList<>();
@@ -230,13 +238,13 @@ public class QuickSearchAction
       int                     batchSize  = 0;
       boolean                 exhausted  = false;
       boolean                 rawFloor   = false;
-      ScanBudget              budget     = new ScanBudget();
       Set<String>             seen       = new HashSet<>();
       String                  preference = "quick-search-" + UUID.randomUUID();
 
       while(accessible.size() < target && !exhausted && position < window && budget.hasRemaining())
       {
-         batchSize = Math.min(Math.min(window - position, budget.remainingHits), Math.min(MAX_LOCKED_BATCH_SIZE, Math.max(2 * (target - accessible.size()), 2 * batchSize)));
+         int ceiling = Math.min(MAX_LOCKED_BATCH_SIZE, Math.min(window - position, budget.remainingHits));
+         batchSize = budget.remainingRoundTrips == 1 ? ceiling : Math.min(ceiling, Math.max(2 * (target - accessible.size()), 2 * batchSize));
 
          SearchResponse<OpenSearchDocument> response = runSearch(client, term, tables, batchSize, position, tableConfigs, preference);
          int                                rawHits  = response.hits().hits().size();
@@ -462,8 +470,19 @@ public class QuickSearchAction
     *******************************************************************************/
    private static final class ScanBudget
    {
-      private Integer remainingHits       = QuickSearchOpenSearchClient.MAX_RESULT_WINDOW;
-      private Integer remainingRoundTrips = MAX_LOCKED_ROUND_TRIPS;
+      private Integer remainingHits;
+      private Integer remainingRoundTrips;
+
+
+
+      /*******************************************************************************
+       ** Constructor
+       *******************************************************************************/
+      ScanBudget(Integer hits, Integer roundTrips)
+      {
+         this.remainingHits       = hits;
+         this.remainingRoundTrips = roundTrips;
+      }
 
 
 
