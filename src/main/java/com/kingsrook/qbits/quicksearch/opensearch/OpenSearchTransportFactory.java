@@ -23,6 +23,7 @@ import java.security.KeyStore;
 import java.security.cert.Certificate;
 import java.security.cert.CertificateFactory;
 import java.util.Collection;
+import java.util.regex.Pattern;
 import javax.net.ssl.HostnameVerifier;
 import javax.net.ssl.SSLContext;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -77,6 +78,12 @@ public class OpenSearchTransportFactory
    private static final QLogger LOG = QLogger.getLogger(OpenSearchTransportFactory.class);
 
    private static final String USER_AGENT = "qbit-quick-search/" + QuickSearchQBitProducer.getVersion();
+
+   ///////////////////////////////////////////////////////////////////////////
+   // Only a lone ${env.X} or ${prop.X} is echoed in errors: a ?? chain may //
+   // hold a literal fallback secret between its references.                //
+   ///////////////////////////////////////////////////////////////////////////
+   private static final Pattern SINGLE_REFERENCE = Pattern.compile("^\\$\\{(env|prop)\\.[A-Za-z0-9_.-]+\\}$");
 
 
 
@@ -320,8 +327,9 @@ public class OpenSearchTransportFactory
 
    /*******************************************************************************
     ** Interpret a value that must resolve to content; null, empty and blank all
-    ** count as missing. The error names the field and, for a ${...} reference,
-    ** the reference itself, never a resolved value.
+    ** count as missing. The error names the field and, for a single ${env.X} or
+    ** ${prop.X} reference, the reference itself; never a resolved value and
+    ** never any part of a ?? fallback chain.
     *******************************************************************************/
    static String requireResolved(QMetaDataVariableInterpreter interpreter, String value, String fieldName) throws QException
    {
@@ -332,7 +340,7 @@ public class OpenSearchTransportFactory
       }
 
       String  trimmed     = value == null ? "" : value.trim();
-      boolean isReference = trimmed.startsWith("${") && trimmed.endsWith("}");
+      boolean isReference = SINGLE_REFERENCE.matcher(trimmed).matches();
       throw (new QException(fieldName + " is missing or empty" + (isReference ? " after resolving " + trimmed : "")));
    }
 

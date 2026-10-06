@@ -25,6 +25,7 @@ import com.kingsrook.qbits.quicksearch.QuickSearchQBitConfig;
 import com.kingsrook.qbits.quicksearch.QuickSearchTlsConfig;
 import org.apache.hc.client5.http.ssl.NoopHostnameVerifier;
 import org.apache.logging.log4j.Level;
+import org.opensearch.client.transport.OpenSearchTransport;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 import static org.assertj.core.api.Assertions.assertThat;
@@ -37,9 +38,10 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
  *******************************************************************************/
 class OpenSearchTransportFactoryTest
 {
-   private static final String EMPTY_PROPERTY = "quickSearch.test.emptyValue";
-   private static final String USER_PROPERTY  = "quickSearch.test.userValue";
-   private static final String UNSET_ENV      = "${env.QUICK_SEARCH_TEST_UNSET_VARIABLE_15}";
+   private static final String EMPTY_PROPERTY    = "quickSearch.test.emptyValue";
+   private static final String USER_PROPERTY     = "quickSearch.test.userValue";
+   private static final String PASSWORD_PROPERTY = "quickSearch.test.passwordValue";
+   private static final String UNSET_ENV         = "${env.QUICK_SEARCH_TEST_UNSET_VARIABLE_15}";
 
 
 
@@ -51,6 +53,7 @@ class OpenSearchTransportFactoryTest
    {
       System.clearProperty(EMPTY_PROPERTY);
       System.clearProperty(USER_PROPERTY);
+      System.clearProperty(PASSWORD_PROPERTY);
       QLogger.deactivateCollectingLoggerForClass(OpenSearchTransportFactory.class);
    }
 
@@ -110,6 +113,41 @@ class OpenSearchTransportFactoryTest
          .hasMessageContaining("opensearchUsername")
          .hasMessageContaining(UNSET_ENV)
          .hasMessageNotContaining("not-in-the-message");
+   }
+
+
+
+   @Test
+   void testBasic_unresolvedFallbackChain_neverEchoesTheLiteral()
+   {
+      QuickSearchQBitConfig config = baseConfig()
+         .withAuthMode(QuickSearchAuthMode.BASIC)
+         .withOpensearchUsername("admin")
+         .withOpensearchPassword(UNSET_ENV + "??fallback-secret-literal??${env.QUICK_SEARCH_TEST_UNSET_VARIABLE_15B}");
+
+      assertThatThrownBy(() -> OpenSearchTransportFactory.build(config))
+         .isInstanceOf(QException.class)
+         .hasMessageContaining("opensearchPassword")
+         .hasMessageNotContaining("fallback-secret-literal");
+   }
+
+
+
+   @Test
+   void testBasic_resolvedReferences_buildTransport() throws Exception
+   {
+      System.setProperty(USER_PROPERTY, "admin");
+      System.setProperty(PASSWORD_PROPERTY, "admin-password");
+
+      QuickSearchQBitConfig config = baseConfig()
+         .withAuthMode(QuickSearchAuthMode.BASIC)
+         .withOpensearchUsername("${prop." + USER_PROPERTY + "}")
+         .withOpensearchPassword("${prop." + PASSWORD_PROPERTY + "}");
+
+      try(OpenSearchTransport transport = OpenSearchTransportFactory.build(config))
+      {
+         assertThat(transport).isNotNull();
+      }
    }
 
 
