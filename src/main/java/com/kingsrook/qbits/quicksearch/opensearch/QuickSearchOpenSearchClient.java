@@ -639,6 +639,17 @@ public class QuickSearchOpenSearchClient implements Closeable
     *******************************************************************************/
    public SearchResponse<OpenSearchDocument> search(String searchTerm, Collection<String> allowedTables, int limit, int offset, List<QuickSearchableTableConfig> tableConfigs) throws QException
    {
+      return (search(searchTerm, allowedTables, limit, offset, tableConfigs, null));
+   }
+
+
+
+   /*******************************************************************************
+    ** As search above; a non-null preference routes every request that shares
+    ** it to the same shard copies, so batches of one scan see one ordering.
+    *******************************************************************************/
+   public SearchResponse<OpenSearchDocument> search(String searchTerm, Collection<String> allowedTables, int limit, int offset, List<QuickSearchableTableConfig> tableConfigs, String preference) throws QException
+   {
       try
       {
          List<FieldValue> allowed = allowedTables.stream().map(FieldValue::of).toList();
@@ -657,7 +668,8 @@ public class QuickSearchOpenSearchClient implements Closeable
             .highlight(highlight)
             .trackTotalHits(t -> t.count(MAX_RESULT_WINDOW))
             .from(offset)
-            .size(limit));
+            .size(limit)
+            .preference(preference));
 
          return (client.search(request, OpenSearchDocument.class));
       }

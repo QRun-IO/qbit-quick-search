@@ -341,6 +341,7 @@ class OpenSearchIntegrationTest
          List<String> perTable1Ids = perTable1.getResults().stream().map(r -> r.getTableName() + ":" + r.getRecordId()).toList();
          List<String> perTable2Ids = perTable2.getResults().stream().map(r -> r.getTableName() + ":" + r.getRecordId()).toList();
 
+         assertThat(perTable2Ids).isNotEmpty();
          assertThat(perTable1Ids).doesNotContainAnyElementsOf(perTable2Ids);
       }
    }

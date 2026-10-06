@@ -18,6 +18,7 @@ package com.kingsrook.qbits.quicksearch.actions;
 
 
 import java.util.ArrayList;
+import java.util.Collection;
 import java.util.List;
 import java.util.Map;
 import java.util.stream.IntStream;
@@ -46,6 +47,7 @@ import org.opensearch.client.opensearch.core.SearchResponse;
 import org.opensearch.client.opensearch.core.search.Hit;
 import org.opensearch.client.opensearch.core.search.HitsMetadata;
 import org.opensearch.client.opensearch.core.search.TotalHits;
+import org.opensearch.client.opensearch.core.search.TotalHitsRelation;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyInt;
@@ -119,7 +121,7 @@ class QuickSearchActionSecurityTest extends BaseQuickSearchTest
    private void stubSearch(List<Hit<OpenSearchDocument>> hits, long totalHits) throws QException
    {
       SearchResponse<OpenSearchDocument> response = buildMockResponse(hits, totalHits);
-      when(mockClient.search(anyString(), any(), anyInt(), anyInt(), anyList())).thenReturn(response);
+      when(mockClient.search(anyString(), any(), anyInt(), anyInt(), anyList(), any())).thenReturn(response);
    }
 
 
@@ -129,8 +131,18 @@ class QuickSearchActionSecurityTest extends BaseQuickSearchTest
     *******************************************************************************/
    private Hit<OpenSearchDocument> hitFor(String recordId)
    {
+      return (hitFor(TEST_ENTITY_TABLE, recordId));
+   }
+
+
+
+   /*******************************************************************************
+    ** Build a mocked hit for a record of the given table.
+    *******************************************************************************/
+   private Hit<OpenSearchDocument> hitFor(String tableName, String recordId)
+   {
       Hit<OpenSearchDocument> hit = mock(Hit.class);
-      when(hit.source()).thenReturn(new OpenSearchDocument().withSourceTable(TEST_ENTITY_TABLE).withRecordId(recordId).withRecordLabel("Entity " + recordId));
+      when(hit.source()).thenReturn(new OpenSearchDocument().withSourceTable(tableName).withRecordId(recordId).withRecordLabel("Entity " + recordId));
       when(hit.score()).thenReturn(1.0);
       when(hit.highlight()).thenReturn(Map.of());
       return (hit);
@@ -163,7 +175,7 @@ class QuickSearchActionSecurityTest extends BaseQuickSearchTest
 
       QuickSearchOutput output = action.execute(new QuickSearchInput().withSearchTerm("entity"));
 
-      verify(mockClient).search(anyString(), eq(List.of(TEST_ENTITY_TABLE)), eq(QuickSearchAction.DEFAULT_LIMIT * 2), eq(0), anyList());
+      verify(mockClient).search(anyString(), eq(List.of(TEST_ENTITY_TABLE)), eq(QuickSearchAction.DEFAULT_LIMIT * 2), eq(0), anyList(), any());
       assertThat(output.getResults()).extracting(QuickSearchResult::getRecordId).containsExactly("1");
       assertThat(output.getTotalHits()).isEqualTo(1L);
       assertThat(output.getTotalHitsIsLowerBound()).isFalse();
@@ -173,8 +185,8 @@ class QuickSearchActionSecurityTest extends BaseQuickSearchTest
 
 
    /*******************************************************************************
-    ** Test: accessible hits beyond the limit are truncated and the total is
-    ** reported as a lower bound.
+    ** Test: accessible hits beyond the limit are truncated; every hit was read,
+    ** so the total is exact.
     *******************************************************************************/
    @Test
    void testRecordLock_moreAccessibleHitsThanLimit_truncatedWithLowerBoundTotal() throws QException
@@ -184,10 +196,10 @@ class QuickSearchActionSecurityTest extends BaseQuickSearchTest
 
       QuickSearchOutput output = action.execute(new QuickSearchInput().withSearchTerm("entity").withLimit(2));
 
-      verify(mockClient).search(anyString(), any(), eq(4), eq(0), anyList());
+      verify(mockClient).search(anyString(), any(), eq(4), eq(0), anyList(), any());
       assertThat(output.getResults()).extracting(QuickSearchResult::getRecordId).containsExactly("1", "2");
       assertThat(output.getTotalHits()).isEqualTo(3L);
-      assertThat(output.getTotalHitsIsLowerBound()).isTrue();
+      assertThat(output.getTotalHitsIsLowerBound()).isFalse();
       assertThat(output.getHasMore()).isTrue();
    }
 
@@ -205,7 +217,7 @@ class QuickSearchActionSecurityTest extends BaseQuickSearchTest
 
       QuickSearchOutput output = action.execute(new QuickSearchInput().withSearchTerm("entity").withLimit(10));
 
-      verify(mockClient).search(anyString(), any(), eq(10), eq(0), anyList());
+      verify(mockClient).search(anyString(), any(), eq(10), eq(0), anyList(), any());
       assertThat(output.getResults()).hasSize(2);
       assertThat(output.getTotalHits()).isEqualTo(40L);
       assertThat(output.getHasMore()).isTrue();
@@ -226,7 +238,7 @@ class QuickSearchActionSecurityTest extends BaseQuickSearchTest
 
       assertThat(output.getResults()).isEmpty();
       assertThat(output.getTotalHits()).isEqualTo(0L);
-      verify(mockClient, never()).search(anyString(), any(), anyInt(), anyInt(), anyList());
+      verify(mockClient, never()).search(anyString(), any(), anyInt(), anyInt(), anyList(), any());
    }
 
 
@@ -280,7 +292,7 @@ class QuickSearchActionSecurityTest extends BaseQuickSearchTest
 
       QuickSearchOutput output = action.execute(new QuickSearchInput().withSearchTerm("entity").withLimitPerTable(5));
 
-      verify(mockClient).search(anyString(), eq(List.of(TEST_ENTITY_TABLE)), eq(10), eq(0), anyList());
+      verify(mockClient).search(anyString(), eq(List.of(TEST_ENTITY_TABLE)), eq(10), eq(0), anyList(), any());
       assertThat(output.getResults()).extracting(QuickSearchResult::getRecordId).containsExactly("1");
       assertThat(output.getTotalHits()).isEqualTo(1L);
       assertThat(output.getTotalHitsIsLowerBound()).isFalse();
@@ -296,18 +308,38 @@ class QuickSearchActionSecurityTest extends BaseQuickSearchTest
     *******************************************************************************/
    private void stubPagedSearch(List<String> recordIds) throws QException
    {
-      when(mockClient.search(anyString(), any(), anyInt(), anyInt(), anyList())).thenAnswer(invocation ->
+      stubPagedSearch(Map.of(TEST_ENTITY_TABLE, recordIds), false);
+   }
+
+
+
+   /*******************************************************************************
+    ** Paged stub over per-table id lists (a request naming several tables
+    ** reads the test entity list); totalIsFloor reports the total as Gte.
+    *******************************************************************************/
+   private void stubPagedSearch(Map<String, List<String>> idsByTable, boolean totalIsFloor) throws QException
+   {
+      when(mockClient.search(anyString(), any(), anyInt(), anyInt(), anyList(), any())).thenAnswer(invocation ->
       {
-         int size = invocation.getArgument(2);
-         int from = invocation.getArgument(3);
+         List<String> tables = new ArrayList<>(invocation.<Collection<String>>getArgument(1));
+         String       table  = tables.size() == 1 ? tables.get(0) : TEST_ENTITY_TABLE;
+         List<String> ids    = idsByTable.getOrDefault(table, List.of());
+         int          size   = invocation.getArgument(2);
+         int          from   = invocation.getArgument(3);
          assertThat(from + size).isLessThanOrEqualTo(QuickSearchOpenSearchClient.MAX_RESULT_WINDOW);
 
          List<Hit<OpenSearchDocument>> hits = new ArrayList<>();
-         for(int i = from; i < Math.min(recordIds.size(), from + size); i++)
+         for(int i = from; i < Math.min(ids.size(), from + size); i++)
          {
-            hits.add(hitFor(recordIds.get(i)));
+            hits.add(hitFor(table, ids.get(i)));
          }
-         return (buildMockResponse(hits, recordIds.size()));
+
+         SearchResponse<OpenSearchDocument> response = buildMockResponse(hits, ids.size());
+         if(totalIsFloor)
+         {
+            when(response.hits().total().relation()).thenReturn(TotalHitsRelation.Gte);
+         }
+         return (response);
       });
    }
 
@@ -397,7 +429,7 @@ class QuickSearchActionSecurityTest extends BaseQuickSearchTest
 
       QuickSearchOutput output = action.execute(new QuickSearchInput().withSearchTerm("entity").withOffset(8).withLimitPerTable(5));
 
-      verify(mockClient).search(anyString(), eq(List.of(TEST_ENTITY_TABLE)), eq(5), eq(8), anyList());
+      verify(mockClient).search(anyString(), eq(List.of(TEST_ENTITY_TABLE)), eq(5), eq(8), anyList(), any());
       assertThat(output.getResults()).extracting(QuickSearchResult::getRecordId).containsExactly("9", "10");
       assertThat(output.getHasMore()).isFalse();
    }
@@ -406,7 +438,8 @@ class QuickSearchActionSecurityTest extends BaseQuickSearchTest
 
    /*******************************************************************************
     ** Test: with a maxSearchLimit above half the result window, no request
-    ** asks OpenSearch for more than the window (from + size at most 10,000).
+    ** asks OpenSearch for more than the window (from + size at most 10,000),
+    ** and a locked batch is at most MAX_LOCKED_BATCH_SIZE.
     *******************************************************************************/
    @Test
    void testLargeMaxSearchLimit_requestsCappedAtResultWindow() throws QException
@@ -421,8 +454,8 @@ class QuickSearchActionSecurityTest extends BaseQuickSearchTest
 
       ArgumentCaptor<Integer> sizes   = ArgumentCaptor.forClass(Integer.class);
       ArgumentCaptor<Integer> offsets = ArgumentCaptor.forClass(Integer.class);
-      verify(mockClient, times(3)).search(anyString(), any(), sizes.capture(), offsets.capture(), anyList());
-      assertThat(sizes.getAllValues()).containsExactly(QuickSearchOpenSearchClient.MAX_RESULT_WINDOW, QuickSearchOpenSearchClient.MAX_RESULT_WINDOW, 5_000);
+      verify(mockClient, times(3)).search(anyString(), any(), sizes.capture(), offsets.capture(), anyList(), any());
+      assertThat(sizes.getAllValues()).containsExactly(QuickSearchAction.MAX_LOCKED_BATCH_SIZE, QuickSearchAction.MAX_LOCKED_BATCH_SIZE, 5_000);
       assertThat(offsets.getAllValues()).containsExactly(0, 0, 5_000);
    }
 
@@ -436,11 +469,12 @@ class QuickSearchActionSecurityTest extends BaseQuickSearchTest
    {
       ArgumentCaptor<Integer> sizes   = ArgumentCaptor.forClass(Integer.class);
       ArgumentCaptor<Integer> offsets = ArgumentCaptor.forClass(Integer.class);
-      verify(mockClient, atLeastOnce()).search(anyString(), any(), sizes.capture(), offsets.capture(), anyList());
+      verify(mockClient, atLeastOnce()).search(anyString(), any(), sizes.capture(), offsets.capture(), anyList(), any());
 
       List<Integer> sizeValues   = sizes.getAllValues();
       List<Integer> offsetValues = offsets.getAllValues();
       assertThat(sizeValues.size()).isLessThanOrEqualTo(QuickSearchAction.MAX_LOCKED_ROUND_TRIPS);
+      assertThat(sizeValues).allMatch(size -> size <= QuickSearchAction.MAX_LOCKED_BATCH_SIZE);
       assertThat(sizeValues.stream().mapToInt(Integer::intValue).sum()).isEqualTo(QuickSearchOpenSearchClient.MAX_RESULT_WINDOW);
       assertThat(offsetValues.get(offsetValues.size() - 1) + sizeValues.get(sizeValues.size() - 1)).isEqualTo(QuickSearchOpenSearchClient.MAX_RESULT_WINDOW);
    }
@@ -456,7 +490,7 @@ class QuickSearchActionSecurityTest extends BaseQuickSearchTest
    @Test
    void testRecordLock_allHitsFiltered_workIsBounded() throws QException
    {
-      stubPagedSearch(IntStream.rangeClosed(1, 50_000).mapToObj(String::valueOf).toList());
+      stubPagedSearch(Map.of(TEST_ENTITY_TABLE, IntStream.rangeClosed(1, 50_000).mapToObj(String::valueOf).toList()), true);
 
       QuickSearchOutput shared = action.execute(new QuickSearchInput().withSearchTerm("entity").withLimit(1));
       assertScanWithinBudget();
@@ -469,36 +503,137 @@ class QuickSearchActionSecurityTest extends BaseQuickSearchTest
       assertThat(perTable.getResults()).isEmpty();
       assertThat(shared.getTotalHits()).isEqualTo(0L);
       assertThat(shared.getHasMore()).isFalse();
+      assertThat(shared.getTotalHitsIsLowerBound()).isTrue();
       assertThat(perTable.getHasMore()).isFalse();
    }
 
 
 
    /*******************************************************************************
-    ** Test: per-table mode shares one budget across tables, so a second fully
-    ** locked table is not scanned once the first has spent the window, and
-    ** hasMore says results may remain.
+    ** Add a second memory table and make both quick-searchable.
     *******************************************************************************/
-   @Test
-   void testLimitPerTable_withLocks_budgetSharedAcrossTables() throws QException
+   private void addOtherTable()
    {
       QContext.getQInstance().addTable(new QTableMetaData()
          .withName(OTHER_TABLE)
          .withBackendName(TEST_BACKEND_NAME)
          .withPrimaryKeyField("id")
-         .withField(new QFieldMetaData("id", QFieldType.INTEGER)));
+         .withField(new QFieldMetaData("id", QFieldType.INTEGER))
+         .withField(new QFieldMetaData("name", QFieldType.STRING)));
       QuickSearchQBitContext.setDiscoveredTables(List.of(
          new QuickSearchableTableConfig().withTableName(TEST_ENTITY_TABLE).withPrimaryKeyField("id").withEnabledByDefault(true),
          new QuickSearchableTableConfig().withTableName(OTHER_TABLE).withPrimaryKeyField("id").withEnabledByDefault(true)));
-      stubPagedSearch(IntStream.rangeClosed(1, 50_000).mapToObj(String::valueOf).toList());
+   }
 
-      QuickSearchOutput output = action.execute(new QuickSearchInput().withSearchTerm("entity").withTableNames(List.of(TEST_ENTITY_TABLE, OTHER_TABLE)).withLimitPerTable(1));
 
-      assertScanWithinBudget();
-      verify(mockClient, never()).search(anyString(), eq(List.of(OTHER_TABLE)), anyInt(), anyInt(), anyList());
+
+   /*******************************************************************************
+    ** Test: in per-table mode each table has its own scan budget, so a table
+    ** with many hits all locked out cannot starve the next table, which still
+    ** returns its accessible hits.
+    *******************************************************************************/
+   @Test
+   void testLimitPerTable_withLocks_lockedTableDoesNotStarveOthers() throws QException
+   {
+      addOtherTable();
+      InsertInput insertInput = new InsertInput();
+      insertInput.setTableName(OTHER_TABLE);
+      insertInput.setRecords(List.of(new QRecord().withValue("id", 1).withValue("name", "Other 1"), new QRecord().withValue("id", 2).withValue("name", "Other 2")));
+      new InsertAction().execute(insertInput);
+
+      stubPagedSearch(Map.of(
+         TEST_ENTITY_TABLE, IntStream.rangeClosed(1, 12_000).mapToObj(String::valueOf).toList(),
+         OTHER_TABLE, List.of("1", "2")), false);
+
+      QuickSearchOutput output = action.execute(new QuickSearchInput().withSearchTerm("entity").withTableNames(List.of(TEST_ENTITY_TABLE, OTHER_TABLE)).withLimitPerTable(5));
+
+      verify(mockClient, atLeastOnce()).search(anyString(), eq(List.of(OTHER_TABLE)), anyInt(), anyInt(), anyList(), any());
+      assertThat(output.getResults()).extracting(QuickSearchResult::getTableName).containsOnly(OTHER_TABLE);
+      assertThat(output.getResults()).extracting(QuickSearchResult::getRecordId).containsExactly("1", "2");
+      assertThat(output.getTotalHits()).isEqualTo(2L);
+   }
+
+
+
+   /*******************************************************************************
+    ** Test: with both tables fully locked, each table's scan stays within its
+    ** own budget, so the request's work is bounded by the number of tables.
+    *******************************************************************************/
+   @Test
+   void testLimitPerTable_withLocks_eachTableHasOwnBudget() throws QException
+   {
+      addOtherTable();
+      List<String> ids = IntStream.rangeClosed(1, 50_000).mapToObj(String::valueOf).toList();
+      stubPagedSearch(Map.of(TEST_ENTITY_TABLE, ids, OTHER_TABLE, ids), false);
+
+      QuickSearchOutput output = action.execute(new QuickSearchInput().withSearchTerm("entity").withTableNames(List.of(TEST_ENTITY_TABLE, OTHER_TABLE)).withOffset(5_000).withLimitPerTable(5));
+
+      for(String table : List.of(TEST_ENTITY_TABLE, OTHER_TABLE))
+      {
+         ArgumentCaptor<Integer> sizes = ArgumentCaptor.forClass(Integer.class);
+         verify(mockClient, atLeastOnce()).search(anyString(), eq(List.of(table)), sizes.capture(), anyInt(), anyList(), any());
+         assertThat(sizes.getAllValues().size()).isLessThanOrEqualTo(QuickSearchAction.MAX_LOCKED_ROUND_TRIPS);
+         assertThat(sizes.getAllValues()).allMatch(size -> size <= QuickSearchAction.MAX_LOCKED_BATCH_SIZE);
+         assertThat(sizes.getAllValues().stream().mapToInt(Integer::intValue).sum()).isEqualTo(QuickSearchOpenSearchClient.MAX_RESULT_WINDOW);
+      }
       assertThat(output.getResults()).isEmpty();
+      assertThat(output.getHasMore()).isFalse();
+   }
+
+
+
+   /*******************************************************************************
+    ** Test: a deep offset under locks reads in capped batches rather than one
+    ** request (and one record-lock query) the size of the window.
+    *******************************************************************************/
+   @Test
+   void testRecordLock_deepOffset_batchesCapped() throws QException
+   {
+      stubPagedSearch(IntStream.rangeClosed(1, 20_000).mapToObj(String::valueOf).toList());
+
+      action.execute(new QuickSearchInput().withSearchTerm("entity").withOffset(4_975).withLimit(25));
+
+      ArgumentCaptor<Integer> sizes = ArgumentCaptor.forClass(Integer.class);
+      verify(mockClient, atLeastOnce()).search(anyString(), any(), sizes.capture(), anyInt(), anyList(), any());
+      assertThat(sizes.getAllValues().get(0)).isEqualTo(QuickSearchAction.MAX_LOCKED_BATCH_SIZE);
+      assertThat(sizes.getAllValues()).allMatch(size -> size <= QuickSearchAction.MAX_LOCKED_BATCH_SIZE);
+   }
+
+
+
+   /*******************************************************************************
+    ** Test: accessible hits found only in later batches fill the page, and
+    ** unread candidates keep hasMore true with a lower-bound total.
+    *******************************************************************************/
+   @Test
+   void testRecordLock_accessibleHitsInLaterBatches() throws QException
+   {
+      insertEntities(60, 70, 80);
+      stubPagedSearch(IntStream.rangeClosed(1, 100).mapToObj(String::valueOf).toList());
+
+      QuickSearchOutput output = page(1, 2);
+
+      verify(mockClient, times(4)).search(anyString(), any(), anyInt(), anyInt(), anyList(), any());
+      assertThat(output.getResults()).extracting(QuickSearchResult::getRecordId).containsExactly("70", "80");
       assertThat(output.getHasMore()).isTrue();
+      assertThat(output.getTotalHits()).isEqualTo(3L);
       assertThat(output.getTotalHitsIsLowerBound()).isTrue();
+   }
+
+
+
+   /*******************************************************************************
+    ** Test: a hit returned by two batches appears once on the page.
+    *******************************************************************************/
+   @Test
+   void testRecordLock_duplicateAcrossBatches_returnedOnce() throws QException
+   {
+      insertEntities(1, 2);
+      stubPagedSearch(List.of("9", "1", "1", "2"));
+
+      QuickSearchOutput output = page(0, 2);
+
+      assertThat(output.getResults()).extracting(QuickSearchResult::getRecordId).containsExactly("1", "2");
    }
 
 }
