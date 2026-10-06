@@ -122,11 +122,16 @@ public class QuickSearchRecordChangeListener implements RecordChangeListenerInte
             {
                indexEvents.addAll(toIndexEvents(tableName, primaryKeyField, fetchCurrentRecords(event, primaryKeyField)));
             }
-            catch(Exception e)
+            catch(Exception | LinkageError e)
             {
-               ////////////////////////////////////////////////////////////////////
-               // record the updated keys, so basepull re-reads and indexes them //
-               ////////////////////////////////////////////////////////////////////
+               ///////////////////////////////////////////////////////////////////////
+               // log now: with a transaction, nothing else is logged until commit, //
+               // and a rollback (a transaction the failed re-read aborted, too)    //
+               // would leave no trace. Then record the updated keys after commit,  //
+               // so basepull re-reads and indexes them.                            //
+               ///////////////////////////////////////////////////////////////////////
+               LOG.warn("Could not re-read updated records for indexing; recording them for replay once the write commits", e,
+                  logPair("tableName", tableName), logPair("recordCount", event.getRecords().size()));
                List<IndexEvent> failedEvents = toIndexEvents(tableName, primaryKeyField, event.getRecords());
                runAfterCommit(event, () -> recordFailures(runtime, failedEvents, e));
                return;
@@ -441,7 +446,8 @@ public class QuickSearchRecordChangeListener implements RecordChangeListenerInte
    /*******************************************************************************
     ** Updated records are "as the backend returned them", which for RDBMS is the
     ** sparse input. Re-read the full rows inside the same transaction, with
-    ** display values so possible-value labels are indexed.
+    ** display values so possible-value labels are indexed (which can run host
+    ** possible-value providers).
     *******************************************************************************/
    private static List<QRecord> fetchCurrentRecords(RecordChangeEvent event, String primaryKeyField) throws QException
    {

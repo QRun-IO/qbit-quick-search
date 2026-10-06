@@ -313,7 +313,7 @@ class QuickSearchRecordChangeListenerTest extends BaseQuickSearchTest
    void testUpdate_reReadFails_recordsFailedEventsAfterCommit() throws QException
    {
       QBackendTransaction transaction = new QBackendTransaction();
-      try(MockedConstruction<QueryAction> ignored = failingQueries())
+      try(MockedConstruction<QueryAction> ignored = failingQueries(new QException("possible-value backend unavailable")))
       {
          assertThatCode(() -> new QuickSearchRecordChangeListener().onRecordsChanged(updateEvent(transaction, 7, 8))).doesNotThrowAnyException();
       }
@@ -336,16 +336,42 @@ class QuickSearchRecordChangeListenerTest extends BaseQuickSearchTest
 
 
    @Test
-   void testUpdate_reReadFailsThenRollback_recordsNothing() throws QException
+   void testUpdate_reReadFailsThenRollback_logsCauseAndRecordsNothing() throws QException
    {
-      QBackendTransaction transaction = new QBackendTransaction();
-      try(MockedConstruction<QueryAction> ignored = failingQueries())
+      QCollectingLogger   collectingLogger = QLogger.activateCollectingLoggerForClass(QuickSearchRecordChangeListener.class);
+      QBackendTransaction transaction      = new QBackendTransaction();
+      try(MockedConstruction<QueryAction> ignored = failingQueries(new QException("possible-value backend unavailable")))
       {
-         new QuickSearchRecordChangeListener().onRecordsChanged(updateEvent(transaction, 7));
+         new QuickSearchRecordChangeListener().onRecordsChanged(updateEvent(transaction, 7, 8));
+      }
+      finally
+      {
+         QLogger.deactivateCollectingLoggerForClass(QuickSearchRecordChangeListener.class);
       }
       transaction.rollback();
 
       assertThat(queryFailedEvents()).isEmpty();
+      assertThat(collectingLogger.getCollectedMessages()).anySatisfy(m ->
+      {
+         assertThat(m.getLevel()).isEqualTo(Level.WARN);
+         assertThat(m.getMessage()).contains("Could not re-read updated records").contains(TEST_ENTITY_TABLE).contains("\"recordCount\":2").doesNotContain("changed");
+         assertThat(m.getMessage()).contains("possible-value backend unavailable");
+      });
+   }
+
+
+
+   @Test
+   void testUpdate_reReadFailsLinkage_recordsFailedEvents() throws QException
+   {
+      try(MockedConstruction<QueryAction> ignored = failingQueries(new NoClassDefFoundError("com/example/pvs/Provider")))
+      {
+         assertThatCode(() -> new QuickSearchRecordChangeListener().onRecordsChanged(updateEvent(null, 7))).doesNotThrowAnyException();
+      }
+
+      List<QRecord> failed = queryFailedEvents();
+      assertThat(failed).extracting(r -> r.getValueString("recordId")).containsExactly("7");
+      assertThat(failed.get(0).getValueString("errorMessage")).contains("com/example/pvs/Provider");
    }
 
 
@@ -353,7 +379,7 @@ class QuickSearchRecordChangeListenerTest extends BaseQuickSearchTest
    @Test
    void testUpdate_reReadFailsWithoutTransaction_recordsImmediately() throws QException
    {
-      try(MockedConstruction<QueryAction> ignored = failingQueries())
+      try(MockedConstruction<QueryAction> ignored = failingQueries(new QException("possible-value backend unavailable")))
       {
          new QuickSearchRecordChangeListener().onRecordsChanged(updateEvent(null, 7));
       }
@@ -367,7 +393,7 @@ class QuickSearchRecordChangeListenerTest extends BaseQuickSearchTest
    void testUpdate_reReadAndRecordingBothFail_logsAndDoesNotThrow()
    {
       QCollectingLogger collectingLogger = QLogger.activateCollectingLoggerForClass(QuickSearchRecordChangeListener.class);
-      try(MockedConstruction<QueryAction> ignoredQueries = failingQueries();
+      try(MockedConstruction<QueryAction> ignoredQueries = failingQueries(new QException("possible-value backend unavailable"));
          MockedConstruction<InsertAction> ignoredInserts = mockConstruction(InsertAction.class, (mock, context) ->
             when(mock.execute(any(InsertInput.class))).thenThrow(new QException("failed-event table unavailable"))))
       {
@@ -382,7 +408,7 @@ class QuickSearchRecordChangeListenerTest extends BaseQuickSearchTest
          .anySatisfy(m ->
          {
             assertThat(m.getLevel()).isEqualTo(Level.WARN);
-            assertThat(m.getMessage()).contains("recording failed events for replay").contains(TEST_ENTITY_TABLE).doesNotContain("changed");
+            assertThat(m.getMessage()).contains("Could not re-read updated records").contains(TEST_ENTITY_TABLE).doesNotContain("changed");
          })
          .anySatisfy(m ->
          {
@@ -430,10 +456,15 @@ class QuickSearchRecordChangeListenerTest extends BaseQuickSearchTest
 
 
 
-   private MockedConstruction<QueryAction> failingQueries()
+   private MockedConstruction<QueryAction> failingQueries(Throwable failure)
    {
+      /////////////////////////////////////////////////////////
+      // read the enabled flag first, so only the listener's //
+      // re-read meets the failing QueryAction               //
+      /////////////////////////////////////////////////////////
+      runtime.isTableEnabled(TEST_ENTITY_TABLE);
       return (mockConstruction(QueryAction.class, (mock, context) ->
-         when(mock.execute(any(QueryInput.class))).thenThrow(new QException("possible-value backend unavailable"))));
+         when(mock.execute(any(QueryInput.class))).thenThrow(failure)));
    }
 
 
