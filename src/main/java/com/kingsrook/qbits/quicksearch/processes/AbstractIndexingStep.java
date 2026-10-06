@@ -65,6 +65,7 @@ public abstract class AbstractIndexingStep implements BackendStep
 
    public static final String STATUS_ACTIVE        = "ACTIVE";
    public static final String STATUS_NEEDS_REINDEX = "NEEDS_REINDEX";
+   public static final String STATUS_REBUILDING    = "REBUILDING";
    public static final String RUN_COMPLETED        = "COMPLETED";
    public static final String RUN_FAILED           = "FAILED";
    public static final String RUN_RUNNING          = "RUNNING";
@@ -219,6 +220,8 @@ public abstract class AbstractIndexingStep implements BackendStep
    /*******************************************************************************
     ** Compare the configured fields with what the row was created with; mark
     ** the row NEEDS_REINDEX when they differ. Returns true when drift was found.
+    ** A REBUILDING row is left alone: the full reindex in progress records the
+    ** current fields, and the status tells the listener to capture deletes.
     *******************************************************************************/
    protected boolean detectDrift(QRecord row, QuickSearchableTableConfig tableConfig) throws QException
    {
@@ -229,7 +232,8 @@ public abstract class AbstractIndexingStep implements BackendStep
 
       String current  = buildSearchableFieldsJson(tableConfig);
       String recorded = row.getValueString("searchableFieldsJson");
-      if(recorded == null || recorded.equals(current) || STATUS_NEEDS_REINDEX.equals(row.getValueString("status")))
+      String status   = row.getValueString("status");
+      if(recorded == null || recorded.equals(current) || STATUS_NEEDS_REINDEX.equals(status) || STATUS_REBUILDING.equals(status))
       {
          return (recorded != null && !recorded.equals(current));
       }

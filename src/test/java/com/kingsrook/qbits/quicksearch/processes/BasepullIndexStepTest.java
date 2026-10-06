@@ -864,4 +864,50 @@ class BasepullIndexStepTest extends BaseQuickSearchTest
       assertThat(new BasepullIndexStep().isDueForBasepull(index)).isTrue();
    }
 
+
+
+   /*******************************************************************************
+    ** Test: a delete captured during a full reindex is left for that reindex
+    ** to apply to the new index, not replayed against the old one.
+    *******************************************************************************/
+   @Test
+   void testReplayFailedEvents_awaitingReindexRowsAreNotReplayed() throws QException
+   {
+      insertIndexRow(TEST_ENTITY_TABLE, true, Instant.now(), 60);
+      QRecord captured = insertFailedEvent(TEST_ENTITY_TABLE, "7", "DELETE", 0);
+      UpdateInput updateInput = new UpdateInput();
+      updateInput.setTableName(QuickSearchFailedEvent.TABLE_NAME);
+      updateInput.setRecords(List.of(new QRecord().withValue("id", captured.getValue("id")).withValue("status", QuickSearchFailedEvent.STATUS_AWAITING_REINDEX)));
+      new UpdateAction().execute(updateInput);
+
+      RunBackendStepOutput output = new RunBackendStepOutput();
+      new BasepullIndexStep().run(new RunBackendStepInput(), output);
+
+      verify(mockClient, never()).deleteDocuments(anyList(), anyInt());
+      assertThat(queryAll(QuickSearchFailedEvent.TABLE_NAME)).hasSize(1);
+      assertThat(output.getValueInteger("failedEventsReplayed")).isEqualTo(0);
+   }
+
+
+
+   /*******************************************************************************
+    ** Test: drift found while a full reindex is running does not replace the
+    ** REBUILDING status the listener relies on.
+    *******************************************************************************/
+   @Test
+   void testDriftDetection_duringFullReindex_keepsRebuilding() throws QException
+   {
+      QRecord row = insertIndexRow(TEST_ENTITY_TABLE, true, Instant.now(), 60);
+      UpdateInput updateInput = new UpdateInput();
+      updateInput.setTableName(QuickSearchIndex.TABLE_NAME);
+      updateInput.setRecords(List.of(new QRecord().withValue("id", row.getValue("id"))
+         .withValue("status", AbstractIndexingStep.STATUS_REBUILDING)
+         .withValue("searchableFieldsJson", "[{\"fieldName\":\"name\",\"weight\":1,\"includeLabel\":false}]")));
+      new UpdateAction().execute(updateInput);
+
+      new BasepullIndexStep().run(new RunBackendStepInput(), new RunBackendStepOutput());
+
+      assertThat(queryAll(QuickSearchIndex.TABLE_NAME).get(0).getValueString("status")).isEqualTo(AbstractIndexingStep.STATUS_REBUILDING);
+   }
+
 }

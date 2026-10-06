@@ -34,6 +34,12 @@ public class QuickSearchFailedEvent extends QRecordEntity
    public static final String STATUS_PENDING   = "PENDING";
    public static final String STATUS_EXHAUSTED = "EXHAUSTED";
 
+   ///////////////////////////////////////////////////////////////////////////
+   // a delete made while a full reindex rebuilds into a new physical index; //
+   // the reindex applies it after the swap, and basepull does not replay it //
+   ///////////////////////////////////////////////////////////////////////////
+   public static final String STATUS_AWAITING_REINDEX = "AWAITING_REINDEX";
+
    @QField()
    private Integer id;
 

@@ -21,6 +21,7 @@ import java.util.ArrayList;
 import java.util.List;
 import com.kingsrook.qqq.backend.core.actions.tables.InsertAction;
 import com.kingsrook.qqq.backend.core.actions.tables.QueryAction;
+import com.kingsrook.qqq.backend.core.actions.tables.UpdateAction;
 import com.kingsrook.qqq.backend.core.exceptions.QException;
 import com.kingsrook.qqq.backend.core.model.actions.processes.RunBackendStepInput;
 import com.kingsrook.qqq.backend.core.model.actions.processes.RunBackendStepOutput;
@@ -29,9 +30,12 @@ import com.kingsrook.qqq.backend.core.model.actions.tables.query.QCriteriaOperat
 import com.kingsrook.qqq.backend.core.model.actions.tables.query.QFilterCriteria;
 import com.kingsrook.qqq.backend.core.model.actions.tables.query.QQueryFilter;
 import com.kingsrook.qqq.backend.core.model.actions.tables.query.QueryInput;
+import com.kingsrook.qqq.backend.core.model.actions.tables.update.UpdateInput;
 import com.kingsrook.qqq.backend.core.model.data.QRecord;
 import com.kingsrook.qbits.quicksearch.BaseQuickSearchTest;
 import com.kingsrook.qbits.quicksearch.QuickSearchQBitContext;
+import com.kingsrook.qbits.quicksearch.QuickSearchableTableConfig;
+import com.kingsrook.qbits.quicksearch.model.QuickSearchFailedEvent;
 import com.kingsrook.qbits.quicksearch.model.QuickSearchIndex;
 import com.kingsrook.qbits.quicksearch.model.QuickSearchIndexRun;
 import com.kingsrook.qbits.quicksearch.opensearch.BulkIndexResult;
@@ -472,6 +476,118 @@ class FullReindexStepTest extends BaseQuickSearchTest
       new FullReindexStep().run(new RunBackendStepInput(), new RunBackendStepOutput());
 
       verify(mockClient, times(3)).indexDocuments(eq(PHYSICAL_INDEX), anyList(), anyInt());
+   }
+
+
+
+   /*******************************************************************************
+    ** Test: the index row reads REBUILDING while tables are read, and a delete
+    ** captured during the rebuild is applied through the alias after the swap,
+    ** then its failed-event row is removed.
+    *******************************************************************************/
+   @Test
+   void testAllTables_appliesCapturedDeletesAfterTheSwap() throws QException
+   {
+      insertTestEntities(3);
+      when(mockClient.deleteDocuments(anyList(), anyInt())).thenReturn(new BulkIndexResult().withSuccessCount(1));
+
+      List<String> statusesDuringRebuild = new ArrayList<>();
+      new FullReindexStep()
+      {
+         @Override
+         protected IndexCounts indexAllRecords(QuickSearchOpenSearchClient client, QuickSearchableTableConfig tableConfig, List<QFilterCriteria> extraCriteria, String targetIndex) throws QException
+         {
+            IndexCounts counts = super.indexAllRecords(client, tableConfig, extraCriteria, targetIndex);
+            statusesDuringRebuild.add(FullReindexStepTest.this.queryIndexRow().getValueString("status"));
+            insertCapturedDelete("2");
+            return (counts);
+         }
+      }.run(new RunBackendStepInput(), new RunBackendStepOutput());
+
+      assertThat(statusesDuringRebuild).containsExactly(AbstractIndexingStep.STATUS_REBUILDING);
+
+      InOrder inOrder = inOrder(mockClient);
+      inOrder.verify(mockClient).swapAliasTo(PHYSICAL_INDEX);
+      inOrder.verify(mockClient).deleteDocuments(eq(List.of(TEST_ENTITY_TABLE + ":2")), anyInt());
+
+      assertThat(queryAll(QuickSearchFailedEvent.TABLE_NAME)).isEmpty();
+      assertThat(queryIndexRow().getValueString("status")).isEqualTo(AbstractIndexingStep.STATUS_ACTIVE);
+   }
+
+
+
+   /*******************************************************************************
+    ** Test: a captured delete the cluster rejects is handed to basepull.
+    *******************************************************************************/
+   @Test
+   void testAllTables_capturedDeleteFailure_becomesPendingForBasepull() throws QException
+   {
+      insertTestEntities(1);
+      insertCapturedDelete("9");
+      when(mockClient.deleteDocuments(anyList(), anyInt())).thenThrow(new QException("cluster down"));
+
+      new FullReindexStep().run(new RunBackendStepInput(), new RunBackendStepOutput());
+
+      List<QRecord> rows = queryAll(QuickSearchFailedEvent.TABLE_NAME);
+      assertThat(rows).hasSize(1);
+      assertThat(rows.get(0).getValueString("status")).isEqualTo(QuickSearchFailedEvent.STATUS_PENDING);
+      assertThat(rows.get(0).getValueString("errorMessage")).contains("cluster down");
+   }
+
+
+
+   /*******************************************************************************
+    ** Test: when the rebuild fails before the swap, the previous status comes
+    ** back and the captured deletes still leave the AWAITING_REINDEX state.
+    *******************************************************************************/
+   @Test
+   void testAllTables_failureBeforeSwap_restoresStatusAndDrainsCapturedDeletes() throws QException
+   {
+      insertTestEntities(1);
+      insertIndexRow(true);
+      updateIndexRowStatus(AbstractIndexingStep.STATUS_NEEDS_REINDEX);
+      insertCapturedDelete("4");
+      when(mockClient.deleteDocuments(anyList(), anyInt())).thenReturn(new BulkIndexResult().withSuccessCount(1));
+      doThrow(new QException("swap refused")).when(mockClient).swapAliasTo(PHYSICAL_INDEX);
+
+      assertThatThrownBy(() -> new FullReindexStep().run(new RunBackendStepInput(), new RunBackendStepOutput()))
+         .isInstanceOf(QException.class);
+
+      assertThat(queryIndexRow().getValueString("status")).isEqualTo(AbstractIndexingStep.STATUS_NEEDS_REINDEX);
+      assertThat(queryAll(QuickSearchFailedEvent.TABLE_NAME)).isEmpty();
+      verify(mockClient).deleteDocuments(eq(List.of(TEST_ENTITY_TABLE + ":4")), anyInt());
+   }
+
+
+
+   /*******************************************************************************
+    ** Insert an AWAITING_REINDEX delete for testEntity, as the listener does
+    ** during a full reindex.
+    *******************************************************************************/
+   private void insertCapturedDelete(String recordId) throws QException
+   {
+      InsertInput insertInput = new InsertInput();
+      insertInput.setTableName(QuickSearchFailedEvent.TABLE_NAME);
+      insertInput.setRecords(List.of(new QRecord()
+         .withValue("tableName", TEST_ENTITY_TABLE)
+         .withValue("recordId", recordId)
+         .withValue("action", "DELETE")
+         .withValue("attempts", 0)
+         .withValue("status", QuickSearchFailedEvent.STATUS_AWAITING_REINDEX)));
+      new InsertAction().execute(insertInput);
+   }
+
+
+
+   /*******************************************************************************
+    ** Set the status on the testEntity quickSearchIndex row.
+    *******************************************************************************/
+   private void updateIndexRowStatus(String status) throws QException
+   {
+      UpdateInput updateInput = new UpdateInput();
+      updateInput.setTableName(QuickSearchIndex.TABLE_NAME);
+      updateInput.setRecords(List.of(new QRecord().withValue("id", queryIndexRow().getValue("id")).withValue("status", status)));
+      new UpdateAction().execute(updateInput);
    }
 
 }
