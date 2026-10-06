@@ -17,15 +17,19 @@
 package com.kingsrook.qbits.quicksearch.listeners;
 
 
+import java.util.ArrayList;
 import java.util.List;
 import com.kingsrook.qqq.backend.core.actions.QBackendTransaction;
 import com.kingsrook.qqq.backend.core.actions.tables.DeleteAction;
 import com.kingsrook.qqq.backend.core.actions.tables.InsertAction;
 import com.kingsrook.qqq.backend.core.actions.tables.QueryAction;
 import com.kingsrook.qqq.backend.core.actions.tables.UpdateAction;
+import com.kingsrook.qqq.backend.core.actions.tables.listeners.RecordChangeEvent;
 import com.kingsrook.qqq.backend.core.actions.tables.listeners.RecordChangeType;
 import com.kingsrook.qqq.backend.core.context.QContext;
 import com.kingsrook.qqq.backend.core.exceptions.QException;
+import com.kingsrook.qqq.backend.core.logging.QCollectingLogger;
+import com.kingsrook.qqq.backend.core.logging.QLogger;
 import com.kingsrook.qqq.backend.core.model.actions.tables.delete.DeleteInput;
 import com.kingsrook.qqq.backend.core.model.actions.tables.insert.InsertInput;
 import com.kingsrook.qqq.backend.core.model.actions.tables.query.QueryInput;
@@ -35,6 +39,7 @@ import com.kingsrook.qqq.backend.core.model.metadata.QInstance;
 import com.kingsrook.qqq.backend.core.model.metadata.code.QCodeReference;
 import com.kingsrook.qqq.backend.core.model.metadata.qbits.QBitMetaData;
 import com.kingsrook.qbits.quicksearch.BaseQuickSearchTest;
+import com.kingsrook.qbits.quicksearch.MissingLibraryTransportCustomizer;
 import com.kingsrook.qbits.quicksearch.QuickSearchQBitConfig;
 import com.kingsrook.qbits.quicksearch.QuickSearchQBitContext;
 import com.kingsrook.qbits.quicksearch.QuickSearchRuntime;
@@ -45,17 +50,23 @@ import com.kingsrook.qbits.quicksearch.processes.AbstractIndexingStep;
 import com.kingsrook.qbits.quicksearch.publisher.IndexEvent;
 import com.kingsrook.qbits.quicksearch.publisher.IndexEventAction;
 import com.kingsrook.qbits.quicksearch.publisher.IndexEventPublisher;
+import org.apache.logging.log4j.Level;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
+import org.mockito.MockedConstruction;
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatCode;
+import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyList;
 import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.mockConstruction;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.when;
 
 
 /*******************************************************************************
@@ -294,6 +305,147 @@ class QuickSearchRecordChangeListenerTest extends BaseQuickSearchTest
       List<QRecord> rows = queryFailedEvents();
       assertThat(rows).hasSize(1);
       assertThat(rows.get(0).getValueString("status")).isEqualTo(QuickSearchFailedEvent.STATUS_PENDING);
+   }
+
+
+
+   @Test
+   void testUpdate_reReadFails_recordsFailedEventsAfterCommit() throws QException
+   {
+      QBackendTransaction transaction = new QBackendTransaction();
+      try(MockedConstruction<QueryAction> ignored = failingQueries())
+      {
+         assertThatCode(() -> new QuickSearchRecordChangeListener().onRecordsChanged(updateEvent(transaction, 7, 8))).doesNotThrowAnyException();
+      }
+
+      assertThat(queryFailedEvents()).isEmpty();
+      transaction.commit();
+
+      List<QRecord> failed = queryFailedEvents();
+      assertThat(failed).extracting(r -> r.getValueString("recordId")).containsExactlyInAnyOrder("7", "8");
+      assertThat(failed).allSatisfy(r ->
+      {
+         assertThat(r.getValueString("tableName")).isEqualTo(TEST_ENTITY_TABLE);
+         assertThat(r.getValueString("action")).isEqualTo("INDEX");
+         assertThat(r.getValueString("status")).isEqualTo(QuickSearchFailedEvent.STATUS_PENDING);
+         assertThat(r.getValueString("errorMessage")).contains("possible-value backend unavailable");
+      });
+      verify(publisher, never()).publishIndexEvents(anyList());
+   }
+
+
+
+   @Test
+   void testUpdate_reReadFailsThenRollback_recordsNothing() throws QException
+   {
+      QBackendTransaction transaction = new QBackendTransaction();
+      try(MockedConstruction<QueryAction> ignored = failingQueries())
+      {
+         new QuickSearchRecordChangeListener().onRecordsChanged(updateEvent(transaction, 7));
+      }
+      transaction.rollback();
+
+      assertThat(queryFailedEvents()).isEmpty();
+   }
+
+
+
+   @Test
+   void testUpdate_reReadFailsWithoutTransaction_recordsImmediately() throws QException
+   {
+      try(MockedConstruction<QueryAction> ignored = failingQueries())
+      {
+         new QuickSearchRecordChangeListener().onRecordsChanged(updateEvent(null, 7));
+      }
+
+      assertThat(queryFailedEvents()).extracting(r -> r.getValueString("recordId")).containsExactly("7");
+   }
+
+
+
+   @Test
+   void testUpdate_reReadAndRecordingBothFail_logsAndDoesNotThrow()
+   {
+      QCollectingLogger collectingLogger = QLogger.activateCollectingLoggerForClass(QuickSearchRecordChangeListener.class);
+      try(MockedConstruction<QueryAction> ignoredQueries = failingQueries();
+         MockedConstruction<InsertAction> ignoredInserts = mockConstruction(InsertAction.class, (mock, context) ->
+            when(mock.execute(any(InsertInput.class))).thenThrow(new QException("failed-event table unavailable"))))
+      {
+         assertThatCode(() -> new QuickSearchRecordChangeListener().onRecordsChanged(updateEvent(null, 7))).doesNotThrowAnyException();
+      }
+      finally
+      {
+         QLogger.deactivateCollectingLoggerForClass(QuickSearchRecordChangeListener.class);
+      }
+
+      assertThat(collectingLogger.getCollectedMessages())
+         .anySatisfy(m ->
+         {
+            assertThat(m.getLevel()).isEqualTo(Level.WARN);
+            assertThat(m.getMessage()).contains("recording failed events for replay").contains(TEST_ENTITY_TABLE).doesNotContain("changed");
+         })
+         .anySatisfy(m ->
+         {
+            assertThat(m.getLevel()).isEqualTo(Level.ERROR);
+            assertThat(m.getMessage()).contains("Could not record failed index events");
+         });
+   }
+
+
+
+   @Test
+   void testClientBuildFailsLinkage_recordsFailedEvents() throws QException
+   {
+      //////////////////////////////////////////////////////////////////
+      // no host publisher: the first write builds the client lazily, //
+      // and a missing optional library fails linkage there           //
+      //////////////////////////////////////////////////////////////////
+      runtime.getConfig().setIndexEventPublisher(null);
+      runtime.getConfig().setTransportCustomizer(new QCodeReference(MissingLibraryTransportCustomizer.class));
+
+      Integer id = insert("widget", null);
+
+      List<QRecord> failed = queryFailedEvents();
+      assertThat(failed).hasSize(1);
+      assertThat(failed.get(0).getValueString("recordId")).isEqualTo(String.valueOf(id));
+      assertThat(failed.get(0).getValueString("action")).isEqualTo("INDEX");
+      assertThat(failed.get(0).getValueString("errorMessage")).contains(MissingLibraryTransportCustomizer.MISSING_CLASS);
+   }
+
+
+
+   @Test
+   void testPublishFailsLinkage_recordsFailedEvents() throws QException
+   {
+      doThrow(new NoClassDefFoundError("com/example/broker/Client")).when(publisher).publishDeleteEvents(anyList());
+      Integer id = insert("widget", null);
+      delete(id);
+
+      List<QRecord> failed = queryFailedEvents();
+      assertThat(failed).hasSize(1);
+      assertThat(failed.get(0).getValueString("recordId")).isEqualTo(String.valueOf(id));
+      assertThat(failed.get(0).getValueString("action")).isEqualTo("DELETE");
+      assertThat(failed.get(0).getValueString("errorMessage")).contains("com/example/broker/Client");
+   }
+
+
+
+   private MockedConstruction<QueryAction> failingQueries()
+   {
+      return (mockConstruction(QueryAction.class, (mock, context) ->
+         when(mock.execute(any(QueryInput.class))).thenThrow(new QException("possible-value backend unavailable"))));
+   }
+
+
+
+   private RecordChangeEvent updateEvent(QBackendTransaction transaction, Integer... ids)
+   {
+      List<QRecord> records = new ArrayList<>();
+      for(Integer id : ids)
+      {
+         records.add(new QRecord().withValue("id", id).withValue("description", "changed"));
+      }
+      return (new RecordChangeEvent().withTableName(TEST_ENTITY_TABLE).withType(RecordChangeType.UPDATE).withRecords(records).withTransaction(transaction));
    }
 
 

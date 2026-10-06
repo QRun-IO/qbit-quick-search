@@ -26,6 +26,7 @@ import com.kingsrook.qqq.backend.core.model.actions.tables.insert.InsertInput;
 import com.kingsrook.qqq.backend.core.model.actions.tables.update.UpdateInput;
 import com.kingsrook.qqq.backend.core.model.data.QRecord;
 import com.kingsrook.qqq.backend.core.model.metadata.QInstance;
+import com.kingsrook.qqq.backend.core.model.metadata.code.QCodeReference;
 import com.kingsrook.qqq.backend.core.model.metadata.qbits.QBitMetaData;
 import com.kingsrook.qbits.quicksearch.model.QuickSearchIndex;
 import com.kingsrook.qbits.quicksearch.publisher.IndexEventPublisher;
@@ -150,6 +151,23 @@ class QuickSearchRuntimeTest extends BaseQuickSearchTest
 
       QuickSearchRuntime failFast = new QuickSearchRuntime(new QuickSearchQBitConfig().withBackendName(TEST_BACKEND_NAME).withOpensearchHost("127.0.0.1").withOpensearchPort(1).withOpensearchIndexName("t").withConnectTimeoutMillis(200).withResponseTimeoutMillis(500));
       assertThatThrownBy(failFast::start).isInstanceOf(QException.class).hasMessageContaining("startupMode=DEGRADED");
+      failFast.close();
+   }
+
+
+
+   @Test
+   void testStart_missingOptionalLibrary_degradedBoots_failFastThrows()
+   {
+      QCodeReference customizer = new QCodeReference(MissingLibraryTransportCustomizer.class);
+
+      QuickSearchRuntime degraded = new QuickSearchRuntime(new QuickSearchQBitConfig().withBackendName(TEST_BACKEND_NAME).withOpensearchHost("localhost").withOpensearchPort(9200).withOpensearchIndexName("t").withStartupMode(QuickSearchStartupMode.DEGRADED).withTransportCustomizer(customizer));
+      assertThatCode(degraded::start).doesNotThrowAnyException();
+      assertThat(degraded.isIndexReady()).isFalse();
+      degraded.close();
+
+      QuickSearchRuntime failFast = new QuickSearchRuntime(new QuickSearchQBitConfig().withBackendName(TEST_BACKEND_NAME).withOpensearchHost("localhost").withOpensearchPort(9200).withOpensearchIndexName("t").withTransportCustomizer(customizer));
+      assertThatThrownBy(failFast::start).isInstanceOf(QException.class).hasMessageContaining("startupMode=DEGRADED").hasCauseInstanceOf(NoClassDefFoundError.class);
       failFast.close();
    }
 

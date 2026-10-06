@@ -57,9 +57,12 @@ import static com.kingsrook.qqq.backend.core.logging.LogUtils.logPair;
  ** is already committed, so it publishes immediately. A rolled-back write never
  ** reaches the index.
  **
- ** This listener never fails the host's write. When publishing fails, each
- ** affected (table, record, action) is written to quickSearchFailedEvent for
- ** the scheduled basepull to replay.
+ ** This listener never fails the host's write. When the re-read of updated
+ ** records or publishing fails (including a LinkageError from a missing
+ ** optional library while the client is built), each affected (table, record,
+ ** action) is written to quickSearchFailedEvent for the scheduled basepull to
+ ** replay. A failed re-read is recorded after the commit too, so a rolled-back
+ ** write leaves no row.
  **
  ** While a full reindex rebuilds into a new physical index, the alias still
  ** points at the old one, so a published delete never reaches the new index.
@@ -113,7 +116,22 @@ public class QuickSearchRecordChangeListener implements RecordChangeListenerInte
       switch(event.getType())
       {
          case INSERT -> indexEvents.addAll(toIndexEvents(tableName, primaryKeyField, event.getRecords()));
-         case UPDATE -> indexEvents.addAll(toIndexEvents(tableName, primaryKeyField, fetchCurrentRecords(event, primaryKeyField)));
+         case UPDATE ->
+         {
+            try
+            {
+               indexEvents.addAll(toIndexEvents(tableName, primaryKeyField, fetchCurrentRecords(event, primaryKeyField)));
+            }
+            catch(Exception e)
+            {
+               ////////////////////////////////////////////////////////////////////
+               // record the updated keys, so basepull re-reads and indexes them //
+               ////////////////////////////////////////////////////////////////////
+               List<IndexEvent> failedEvents = toIndexEvents(tableName, primaryKeyField, event.getRecords());
+               runAfterCommit(event, () -> recordFailures(runtime, failedEvents, e));
+               return;
+            }
+         }
          case DELETE -> deleteEvents.addAll(toDeleteEvents(tableName, primaryKeyField, event.getRecords()));
       }
 
@@ -122,15 +140,24 @@ public class QuickSearchRecordChangeListener implements RecordChangeListenerInte
          return;
       }
 
-      Runnable publish = () -> publish(runtime, indexEvents, deleteEvents);
+      runAfterCommit(event, () -> publish(runtime, indexEvents, deleteEvents));
+   }
 
+
+
+   /*******************************************************************************
+    ** Run work once the event's transaction commits, or now when the write had
+    ** no transaction (it is already committed).
+    *******************************************************************************/
+   private static void runAfterCommit(RecordChangeEvent event, Runnable work)
+   {
       if(event.getTransaction() != null)
       {
-         event.getTransaction().addAfterCommitCallback(publish);
+         event.getTransaction().addAfterCommitCallback(work);
       }
       else
       {
-         publish.run();
+         work.run();
       }
    }
 
@@ -161,7 +188,10 @@ public class QuickSearchRecordChangeListener implements RecordChangeListenerInte
 
 
    /*******************************************************************************
-    **
+    ** A LinkageError is caught along with Exception: building the lazy client,
+    ** or a host publisher, can hit an optional library that is not on the
+    ** classpath (the AWS SDK for AWS_SIGV4), which a DEGRADED start leaves for
+    ** the first write to find.
     *******************************************************************************/
    private static void publishOrRecordFailures(QuickSearchRuntime runtime, List<IndexEvent> indexEvents, List<IndexEvent> deleteEvents)
    {
@@ -170,7 +200,7 @@ public class QuickSearchRecordChangeListener implements RecordChangeListenerInte
       {
          publisher = runtime.getPublisher();
       }
-      catch(Exception e)
+      catch(Exception | LinkageError e)
       {
          recordFailures(runtime, indexEvents, e);
          recordFailures(runtime, deleteEvents, e);
@@ -183,7 +213,7 @@ public class QuickSearchRecordChangeListener implements RecordChangeListenerInte
          {
             publisher.publishIndexEvents(indexEvents);
          }
-         catch(Exception e)
+         catch(Exception | LinkageError e)
          {
             recordFailures(runtime, indexEvents, e);
          }
@@ -195,7 +225,7 @@ public class QuickSearchRecordChangeListener implements RecordChangeListenerInte
          {
             publisher.publishDeleteEvents(deleteEvents);
          }
-         catch(Exception e)
+         catch(Exception | LinkageError e)
          {
             recordFailures(runtime, deleteEvents, e);
          }
@@ -205,9 +235,9 @@ public class QuickSearchRecordChangeListener implements RecordChangeListenerInte
 
 
    /*******************************************************************************
-    ** Write one quickSearchFailedEvent row per event.
+    ** Write one quickSearchFailedEvent row per event. Never throws.
     *******************************************************************************/
-   static void recordFailures(QuickSearchRuntime runtime, List<IndexEvent> events, Exception cause)
+   static void recordFailures(QuickSearchRuntime runtime, List<IndexEvent> events, Throwable cause)
    {
       if(events.isEmpty())
       {
@@ -215,7 +245,7 @@ public class QuickSearchRecordChangeListener implements RecordChangeListenerInte
       }
 
       String message = cause.getMessage() == null ? cause.getClass().getSimpleName() : cause.getMessage();
-      LOG.warn("Real-time index publish failed; recording failed events for replay", cause,
+      LOG.warn("Real-time indexing failed; recording failed events for replay", cause,
          logPair("tableName", events.get(0).getTableName()), logPair("eventCount", events.size()));
 
       try

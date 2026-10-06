@@ -338,7 +338,9 @@ public class QuickSearchRuntime
 
    /*******************************************************************************
     ** Start the runtime per the configured startup mode: FAIL_FAST throws when
-    ** the index cannot be prepared; DEGRADED logs and continues.
+    ** the index cannot be prepared; DEGRADED logs and continues. A LinkageError
+    ** (an optional library such as the AWS SDK missing while the client is
+    ** built) is handled the same way, so a DEGRADED host still boots.
     *******************************************************************************/
    public void start() throws QException
    {
@@ -346,7 +348,7 @@ public class QuickSearchRuntime
       {
          ensureIndexReady();
       }
-      catch(Exception e)
+      catch(Exception | LinkageError e)
       {
          if(config.getStartupMode() == QuickSearchStartupMode.DEGRADED)
          {
