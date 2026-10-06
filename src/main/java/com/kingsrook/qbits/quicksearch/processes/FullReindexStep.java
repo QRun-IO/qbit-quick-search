@@ -322,7 +322,15 @@ public class FullReindexStep extends AbstractIndexingStep
             }
 
             afterId = rows.get(rows.size() - 1).getValue("id");
-            applied = applied + applyCapturedDeleteBatch(client, config, failedEventTable, rows);
+            try
+            {
+               applied = applied + applyCapturedDeleteBatch(client, config, failedEventTable, rows);
+            }
+            catch(Exception e)
+            {
+               LOG.warn("Could not apply a batch of deletes captured during the full reindex; they stay AWAITING_REINDEX for the next full reindex", e,
+                  logPair("tableNames", rows.stream().map(row -> row.getValueString("tableName")).distinct().toList()), logPair("count", rows.size()));
+            }
          }
       }
       catch(Exception e)
@@ -440,7 +448,7 @@ public class FullReindexStep extends AbstractIndexingStep
    /*******************************************************************************
     ** The record IDs, among the rows' recordIds, that exist in the source table.
     *******************************************************************************/
-   private Set<String> queryExistingRecordIds(String tableName, List<QRecord> rows) throws QException
+   Set<String> queryExistingRecordIds(String tableName, List<QRecord> rows) throws QException
    {
       QuickSearchableTableConfig tableConfig = getTableConfig(tableName);
       if(tableConfig == null)

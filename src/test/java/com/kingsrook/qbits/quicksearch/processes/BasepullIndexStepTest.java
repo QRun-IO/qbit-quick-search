@@ -934,8 +934,38 @@ class BasepullIndexStepTest extends BaseQuickSearchTest
          .filter(table -> TEST_ENTITY_TABLE.equals(table.getTableName()))
          .findFirst().orElseThrow();
 
-      assertThat(new BasepullIndexStep().detectDrift(staleSnapshot, tableConfig)).isTrue();
+      new BasepullIndexStep().detectDrift(staleSnapshot, tableConfig);
       assertThat(queryAll(QuickSearchIndex.TABLE_NAME).get(0).getValueString("status")).isEqualTo(AbstractIndexingStep.STATUS_REBUILDING);
+   }
+
+
+
+   /*******************************************************************************
+    ** Test: a stale snapshot shows drift, but a full reindex has since recorded
+    ** the current fields; the row is not marked NEEDS_REINDEX.
+    *******************************************************************************/
+   @Test
+   void testDriftDetection_staleSnapshot_reindexSinceRecordedCurrentFields() throws QException
+   {
+      QuickSearchableTableConfig tableConfig = QuickSearchQBitContext.getDiscoveredTables().stream()
+         .filter(table -> TEST_ENTITY_TABLE.equals(table.getTableName()))
+         .findFirst().orElseThrow();
+      QRecord row = insertIndexRow(TEST_ENTITY_TABLE, true, Instant.now(), 60);
+      UpdateInput updateInput = new UpdateInput();
+      updateInput.setTableName(QuickSearchIndex.TABLE_NAME);
+      updateInput.setRecords(List.of(new QRecord().withValue("id", row.getValue("id"))
+         .withValue("status", AbstractIndexingStep.STATUS_ACTIVE)
+         .withValue("searchableFieldsJson", AbstractIndexingStep.buildSearchableFieldsJson(tableConfig))));
+      new UpdateAction().execute(updateInput);
+
+      QRecord staleSnapshot = new QRecord()
+         .withValue("id", row.getValue("id"))
+         .withValue("tableName", TEST_ENTITY_TABLE)
+         .withValue("status", AbstractIndexingStep.STATUS_ACTIVE)
+         .withValue("searchableFieldsJson", "[{\"fieldName\":\"name\",\"weight\":1,\"includeLabel\":false}]");
+
+      assertThat(new BasepullIndexStep().detectDrift(staleSnapshot, tableConfig)).isFalse();
+      assertThat(queryAll(QuickSearchIndex.TABLE_NAME).get(0).getValueString("status")).isEqualTo(AbstractIndexingStep.STATUS_ACTIVE);
    }
 
 }

@@ -19,6 +19,7 @@ package com.kingsrook.qbits.quicksearch.processes;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Set;
 import java.util.concurrent.atomic.AtomicInteger;
 import com.kingsrook.qqq.backend.core.actions.tables.DeleteAction;
 import com.kingsrook.qqq.backend.core.actions.tables.InsertAction;
@@ -657,6 +658,43 @@ class FullReindexStepTest extends BaseQuickSearchTest
       assertThat(deleteCalls.get()).isEqualTo(2);
       assertThat(queryAll(QuickSearchFailedEvent.TABLE_NAME)).extracting(row -> row.getValueString("status"))
          .containsOnly(QuickSearchFailedEvent.STATUS_AWAITING_REINDEX);
+   }
+
+
+
+   /*******************************************************************************
+    ** Test: a batch that fails before it is applied (here, the source lookup)
+    ** stays AWAITING_REINDEX, and the later batches are still applied.
+    *******************************************************************************/
+   @Test
+   void testAllTables_failedCapturedBatch_laterBatchesStillApplied() throws QException
+   {
+      QuickSearchQBitContext.getConfig().withSourceBatchSize(1);
+      insertTestEntities(1);
+      insertCapturedDelete("8");
+      insertCapturedDelete("9");
+      when(mockClient.deleteDocuments(anyList(), anyInt())).thenReturn(new BulkIndexResult().withSuccessCount(1));
+
+      new FullReindexStep()
+      {
+         @Override
+         Set<String> queryExistingRecordIds(String tableName, List<QRecord> rows) throws QException
+         {
+            if("8".equals(rows.get(0).getValueString("recordId")))
+            {
+               throw (new QException("source table unavailable"));
+            }
+            return (super.queryExistingRecordIds(tableName, rows));
+         }
+      }.run(new RunBackendStepInput(), new RunBackendStepOutput());
+
+      verify(mockClient, times(1)).deleteDocuments(anyList(), anyInt());
+      verify(mockClient).deleteDocuments(eq(List.of(TEST_ENTITY_TABLE + ":9")), anyInt());
+
+      List<QRecord> rows = queryAll(QuickSearchFailedEvent.TABLE_NAME);
+      assertThat(rows).hasSize(1);
+      assertThat(rows.get(0).getValueString("recordId")).isEqualTo("8");
+      assertThat(rows.get(0).getValueString("status")).isEqualTo(QuickSearchFailedEvent.STATUS_AWAITING_REINDEX);
    }
 
 }
