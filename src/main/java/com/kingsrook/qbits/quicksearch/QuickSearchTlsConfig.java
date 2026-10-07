@@ -29,9 +29,12 @@ import com.fasterxml.jackson.annotation.JsonIgnore;
  ** supply keyStorePath for client-certificate (mTLS) authentication.
  ** insecureSkipVerify disables certificate and hostname checks and is refused
  ** for non-loopback hosts unless allowInsecureInProduction is also set.
+ ** hostnameVerification=false keeps certificate checks but skips the host name
+ ** check; it is allowed for any host and logs a warning.
  **
  ** Path and password values may be ${env.X} / ${prop.X} references; they are
- ** interpreted when the transport is built, never stored resolved.
+ ** interpreted when the transport is built, never stored resolved. A path that
+ ** resolves to an empty value is treated as missing.
  *******************************************************************************/
 public class QuickSearchTlsConfig implements Serializable
 {

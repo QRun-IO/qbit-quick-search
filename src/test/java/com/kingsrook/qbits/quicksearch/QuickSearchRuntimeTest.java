@@ -22,14 +22,18 @@ import com.kingsrook.qqq.backend.core.actions.tables.InsertAction;
 import com.kingsrook.qqq.backend.core.actions.tables.UpdateAction;
 import com.kingsrook.qqq.backend.core.context.QContext;
 import com.kingsrook.qqq.backend.core.exceptions.QException;
+import com.kingsrook.qqq.backend.core.logging.QCollectingLogger;
+import com.kingsrook.qqq.backend.core.logging.QLogger;
 import com.kingsrook.qqq.backend.core.model.actions.tables.insert.InsertInput;
 import com.kingsrook.qqq.backend.core.model.actions.tables.update.UpdateInput;
 import com.kingsrook.qqq.backend.core.model.data.QRecord;
 import com.kingsrook.qqq.backend.core.model.metadata.QInstance;
+import com.kingsrook.qqq.backend.core.model.metadata.code.QCodeReference;
 import com.kingsrook.qqq.backend.core.model.metadata.qbits.QBitMetaData;
 import com.kingsrook.qbits.quicksearch.model.QuickSearchIndex;
 import com.kingsrook.qbits.quicksearch.publisher.IndexEventPublisher;
 import com.kingsrook.qbits.quicksearch.publisher.SynchronousIndexEventPublisher;
+import org.apache.logging.log4j.Level;
 import org.junit.jupiter.api.Test;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatCode;
@@ -150,6 +154,40 @@ class QuickSearchRuntimeTest extends BaseQuickSearchTest
 
       QuickSearchRuntime failFast = new QuickSearchRuntime(new QuickSearchQBitConfig().withBackendName(TEST_BACKEND_NAME).withOpensearchHost("127.0.0.1").withOpensearchPort(1).withOpensearchIndexName("t").withConnectTimeoutMillis(200).withResponseTimeoutMillis(500));
       assertThatThrownBy(failFast::start).isInstanceOf(QException.class).hasMessageContaining("startupMode=DEGRADED");
+      failFast.close();
+   }
+
+
+
+   @Test
+   void testStart_missingOptionalLibrary_degradedBoots_failFastThrows()
+   {
+      QCodeReference customizer = new QCodeReference(MissingLibraryTransportCustomizer.class);
+
+      QuickSearchRuntime degraded         = new QuickSearchRuntime(new QuickSearchQBitConfig().withBackendName(TEST_BACKEND_NAME).withOpensearchHost("localhost").withOpensearchPort(9200).withOpensearchIndexName("t").withStartupMode(QuickSearchStartupMode.DEGRADED).withTransportCustomizer(customizer));
+      QCollectingLogger  collectingLogger = QLogger.activateCollectingLoggerForClass(QuickSearchRuntime.class);
+      try
+      {
+         assertThatCode(degraded::start).doesNotThrowAnyException();
+      }
+      finally
+      {
+         QLogger.deactivateCollectingLoggerForClass(QuickSearchRuntime.class);
+      }
+      assertThat(degraded.isIndexReady()).isFalse();
+      assertThat(collectingLogger.getCollectedMessages()).anySatisfy(m ->
+      {
+         assertThat(m.getLevel()).isEqualTo(Level.WARN);
+         assertThat(m.getMessage()).contains(MissingLibraryTransportCustomizer.MISSING_CLASS).contains("AWS SDK v2").contains("apache-client, sts").doesNotContain("not reachable");
+      });
+      degraded.close();
+
+      QuickSearchRuntime failFast = new QuickSearchRuntime(new QuickSearchQBitConfig().withBackendName(TEST_BACKEND_NAME).withOpensearchHost("localhost").withOpensearchPort(9200).withOpensearchIndexName("t").withTransportCustomizer(customizer));
+      assertThatThrownBy(failFast::start).isInstanceOf(QException.class)
+         .hasMessageContaining(MissingLibraryTransportCustomizer.MISSING_CLASS)
+         .hasMessageContaining("AWS SDK v2 dependencies (apache-client, sts)")
+         .hasMessageNotContaining("startupMode=DEGRADED")
+         .hasCauseInstanceOf(NoClassDefFoundError.class);
       failFast.close();
    }
 

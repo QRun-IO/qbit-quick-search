@@ -22,6 +22,7 @@ import java.util.ArrayList;
 import java.util.List;
 import com.kingsrook.qqq.backend.core.actions.tables.InsertAction;
 import com.kingsrook.qqq.backend.core.actions.tables.QueryAction;
+import com.kingsrook.qqq.backend.core.actions.tables.UpdateAction;
 import com.kingsrook.qqq.backend.core.actions.tables.listeners.RecordChangeEvent;
 import com.kingsrook.qqq.backend.core.actions.tables.listeners.RecordChangeListenerInterface;
 import com.kingsrook.qqq.backend.core.actions.tables.listeners.RecordChangeType;
@@ -33,11 +34,13 @@ import com.kingsrook.qqq.backend.core.model.actions.tables.query.QCriteriaOperat
 import com.kingsrook.qqq.backend.core.model.actions.tables.query.QFilterCriteria;
 import com.kingsrook.qqq.backend.core.model.actions.tables.query.QQueryFilter;
 import com.kingsrook.qqq.backend.core.model.actions.tables.query.QueryInput;
+import com.kingsrook.qqq.backend.core.model.actions.tables.update.UpdateInput;
 import com.kingsrook.qqq.backend.core.model.data.QRecord;
 import com.kingsrook.qqq.backend.core.utils.CollectionUtils;
 import com.kingsrook.qbits.quicksearch.QuickSearchRuntime;
 import com.kingsrook.qbits.quicksearch.QuickSearchableTableConfig;
 import com.kingsrook.qbits.quicksearch.model.QuickSearchFailedEvent;
+import com.kingsrook.qbits.quicksearch.processes.AbstractIndexingStep;
 import com.kingsrook.qbits.quicksearch.publisher.IndexEvent;
 import com.kingsrook.qbits.quicksearch.publisher.IndexEventAction;
 import com.kingsrook.qbits.quicksearch.publisher.IndexEventPublisher;
@@ -54,9 +57,17 @@ import static com.kingsrook.qqq.backend.core.logging.LogUtils.logPair;
  ** is already committed, so it publishes immediately. A rolled-back write never
  ** reaches the index.
  **
- ** This listener never fails the host's write. When publishing fails, each
- ** affected (table, record, action) is written to quickSearchFailedEvent for
- ** the scheduled basepull to replay.
+ ** This listener never fails the host's write. When the re-read of updated
+ ** records or publishing fails (including a LinkageError from a missing
+ ** optional library while the client is built), each affected (table, record,
+ ** action) is written to quickSearchFailedEvent for the scheduled basepull to
+ ** replay. A failed re-read is recorded after the commit too, so a rolled-back
+ ** write leaves no row.
+ **
+ ** While a full reindex rebuilds into a new physical index, the alias still
+ ** points at the old one, so a published delete never reaches the new index.
+ ** Such deletes are also written to quickSearchFailedEvent with status
+ ** AWAITING_REINDEX; the reindex applies them after the alias swap.
  *******************************************************************************/
 public class QuickSearchRecordChangeListener implements RecordChangeListenerInterface
 {
@@ -105,7 +116,27 @@ public class QuickSearchRecordChangeListener implements RecordChangeListenerInte
       switch(event.getType())
       {
          case INSERT -> indexEvents.addAll(toIndexEvents(tableName, primaryKeyField, event.getRecords()));
-         case UPDATE -> indexEvents.addAll(toIndexEvents(tableName, primaryKeyField, fetchCurrentRecords(event, primaryKeyField)));
+         case UPDATE ->
+         {
+            try
+            {
+               indexEvents.addAll(toIndexEvents(tableName, primaryKeyField, fetchCurrentRecords(event, primaryKeyField)));
+            }
+            catch(Exception | LinkageError e)
+            {
+               ///////////////////////////////////////////////////////////////////////
+               // log now: with a transaction, nothing else is logged until commit, //
+               // and a rollback (a transaction the failed re-read aborted, too)    //
+               // would leave no trace. Then record the updated keys after commit,  //
+               // so basepull re-reads and indexes them.                            //
+               ///////////////////////////////////////////////////////////////////////
+               LOG.warn("Could not re-read updated records for indexing; recording them for replay once the write commits", e,
+                  logPair("tableName", tableName), logPair("recordCount", event.getRecords().size()));
+               List<IndexEvent> failedEvents = toIndexEvents(tableName, primaryKeyField, event.getRecords());
+               runAfterCommit(event, () -> recordFailures(runtime, failedEvents, e));
+               return;
+            }
+         }
          case DELETE -> deleteEvents.addAll(toDeleteEvents(tableName, primaryKeyField, event.getRecords()));
       }
 
@@ -114,31 +145,67 @@ public class QuickSearchRecordChangeListener implements RecordChangeListenerInte
          return;
       }
 
-      Runnable publish = () -> publish(runtime, indexEvents, deleteEvents);
+      runAfterCommit(event, () -> publish(runtime, indexEvents, deleteEvents));
+   }
 
+
+
+   /*******************************************************************************
+    ** Run work once the event's transaction commits, or now when the write had
+    ** no transaction (it is already committed).
+    *******************************************************************************/
+   private static void runAfterCommit(RecordChangeEvent event, Runnable work)
+   {
       if(event.getTransaction() != null)
       {
-         event.getTransaction().addAfterCommitCallback(publish);
+         event.getTransaction().addAfterCommitCallback(work);
       }
       else
       {
-         publish.run();
+         work.run();
       }
    }
 
 
 
    /*******************************************************************************
-    ** Publish, recording any failure durably. Never throws.
+    ** Publish, recording any failure durably, and capture the deletes if a full
+    ** reindex is rebuilding the table. Never throws.
+    **
+    ** The status is read before the deletes are published, never after: a
+    ** reindex can swap the alias and clear REBUILDING while the publish is in
+    ** flight, and a read after that would miss a delete that reached only the
+    ** old index. A read before the publish that sees no REBUILDING means either
+    ** the reindex has not started reading the table (the record, deleted and
+    ** committed, cannot be read into the new index) or the alias already points
+    ** at the new index (the publish reaches it).
     *******************************************************************************/
    static void publish(QuickSearchRuntime runtime, List<IndexEvent> indexEvents, List<IndexEvent> deleteEvents)
+   {
+      boolean rebuilding = isRebuildingBeforePublish(runtime, deleteEvents);
+      publishOrRecordFailures(runtime, indexEvents, deleteEvents);
+      if(rebuilding)
+      {
+         captureDeletesDuringRebuild(runtime, deleteEvents);
+      }
+   }
+
+
+
+   /*******************************************************************************
+    ** A LinkageError is caught along with Exception: building the lazy client,
+    ** or a host publisher, can hit an optional library that is not on the
+    ** classpath (the AWS SDK for AWS_SIGV4), which a DEGRADED start leaves for
+    ** the first write to find.
+    *******************************************************************************/
+   private static void publishOrRecordFailures(QuickSearchRuntime runtime, List<IndexEvent> indexEvents, List<IndexEvent> deleteEvents)
    {
       IndexEventPublisher publisher;
       try
       {
          publisher = runtime.getPublisher();
       }
-      catch(Exception e)
+      catch(Exception | LinkageError e)
       {
          recordFailures(runtime, indexEvents, e);
          recordFailures(runtime, deleteEvents, e);
@@ -151,7 +218,7 @@ public class QuickSearchRecordChangeListener implements RecordChangeListenerInte
          {
             publisher.publishIndexEvents(indexEvents);
          }
-         catch(Exception e)
+         catch(Exception | LinkageError e)
          {
             recordFailures(runtime, indexEvents, e);
          }
@@ -163,7 +230,7 @@ public class QuickSearchRecordChangeListener implements RecordChangeListenerInte
          {
             publisher.publishDeleteEvents(deleteEvents);
          }
-         catch(Exception e)
+         catch(Exception | LinkageError e)
          {
             recordFailures(runtime, deleteEvents, e);
          }
@@ -173,9 +240,9 @@ public class QuickSearchRecordChangeListener implements RecordChangeListenerInte
 
 
    /*******************************************************************************
-    ** Write one quickSearchFailedEvent row per event.
+    ** Write one quickSearchFailedEvent row per event. Never throws.
     *******************************************************************************/
-   static void recordFailures(QuickSearchRuntime runtime, List<IndexEvent> events, Exception cause)
+   static void recordFailures(QuickSearchRuntime runtime, List<IndexEvent> events, Throwable cause)
    {
       if(events.isEmpty())
       {
@@ -183,39 +250,155 @@ public class QuickSearchRecordChangeListener implements RecordChangeListenerInte
       }
 
       String message = cause.getMessage() == null ? cause.getClass().getSimpleName() : cause.getMessage();
-      LOG.warn("Real-time index publish failed; recording failed events for replay", cause,
+      LOG.warn("Real-time indexing failed; recording failed events for replay", cause,
          logPair("tableName", events.get(0).getTableName()), logPair("eventCount", events.size()));
 
       try
       {
-         String failedEventTable = runtime.getConfig().applyPrefix(QuickSearchFailedEvent.TABLE_NAME);
-         if(QContext.getQInstance() == null || QContext.getQInstance().getTable(failedEventTable) == null)
+         if(!hasTable(runtime.getConfig().applyPrefix(QuickSearchFailedEvent.TABLE_NAME)))
          {
             LOG.error("quickSearchFailedEvent table is not in the QInstance; failed events are lost", logPair("eventCount", events.size()));
             return;
          }
 
-         List<QRecord> rows = new ArrayList<>();
-         for(IndexEvent event : events)
-         {
-            rows.add(new QRecord()
-               .withValue("tableName", event.getTableName())
-               .withValue("recordId", event.getRecordId())
-               .withValue("action", event.getAction() == null ? null : event.getAction().name())
-               .withValue("errorMessage", truncate(message, 4000))
-               .withValue("attempts", 0)
-               .withValue("status", QuickSearchFailedEvent.STATUS_PENDING));
-         }
-
-         InsertInput insertInput = new InsertInput();
-         insertInput.setTableName(failedEventTable);
-         insertInput.setRecords(rows);
-         new InsertAction().execute(insertInput);
+         insertFailedEventRows(runtime, events, message, QuickSearchFailedEvent.STATUS_PENDING);
       }
       catch(Exception e)
       {
          LOG.error("Could not record failed index events", e, logPair("eventCount", events.size()));
       }
+   }
+
+
+
+   /*******************************************************************************
+    ** Whether a full reindex is rebuilding the deletes' table. The status is
+    ** read from the database (not cached) so a reindex on another node is seen.
+    ** Runs after the delete committed. Never throws.
+    *******************************************************************************/
+   static boolean isRebuildingBeforePublish(QuickSearchRuntime runtime, List<IndexEvent> deleteEvents)
+   {
+      if(deleteEvents.isEmpty())
+      {
+         return (false);
+      }
+
+      String tableName = deleteEvents.get(0).getTableName();
+      try
+      {
+         return (hasTable(runtime.getConfig().applyPrefix(QuickSearchFailedEvent.TABLE_NAME)) && isRebuilding(runtime, tableName));
+      }
+      catch(Exception e)
+      {
+         LOG.error("Could not read whether a full reindex is running; deletes made during one are not captured", e, logPair("tableName", tableName));
+         return (false);
+      }
+   }
+
+
+
+   /*******************************************************************************
+    ** Record deletes made while a full reindex is rebuilding the table, so the
+    ** reindex can apply them to the new physical index after the alias swap.
+    ** basepull does not replay AWAITING_REINDEX rows, so it cannot consume one
+    ** against the old index before the swap. Never throws.
+    *******************************************************************************/
+   static void captureDeletesDuringRebuild(QuickSearchRuntime runtime, List<IndexEvent> deleteEvents)
+   {
+      String tableName = deleteEvents.get(0).getTableName();
+      try
+      {
+         List<QRecord> inserted = insertFailedEventRows(runtime, deleteEvents, "deleted during a full reindex", QuickSearchFailedEvent.STATUS_AWAITING_REINDEX);
+         handOverIfRebuildFinished(runtime, tableName, inserted);
+      }
+      catch(Exception e)
+      {
+         LOG.error("Could not capture deletes made during a full reindex; the next full reindex or reconcile removes them", e,
+            logPair("tableName", tableName), logPair("eventCount", deleteEvents.size()));
+      }
+   }
+
+
+
+   /*******************************************************************************
+    ** The reindex may have finished, and drained its captured deletes, between
+    ** the status read and the insert. Read the status again: if the table is no
+    ** longer REBUILDING, make the rows PENDING so basepull replays them against
+    ** the current index (deletes are idempotent). If it still is, the reindex
+    ** has not drained yet and will see these rows.
+    *******************************************************************************/
+   static void handOverIfRebuildFinished(QuickSearchRuntime runtime, String tableName, List<QRecord> inserted) throws QException
+   {
+      if(inserted.isEmpty() || isRebuilding(runtime, tableName))
+      {
+         return;
+      }
+
+      List<QRecord> updates = new ArrayList<>();
+      for(QRecord row : inserted)
+      {
+         updates.add(new QRecord().withValue("id", row.getValue("id")).withValue("status", QuickSearchFailedEvent.STATUS_PENDING));
+      }
+
+      UpdateInput updateInput = new UpdateInput();
+      updateInput.setTableName(runtime.getConfig().applyPrefix(QuickSearchFailedEvent.TABLE_NAME));
+      updateInput.setRecords(updates);
+      new UpdateAction().execute(updateInput);
+   }
+
+
+
+   /*******************************************************************************
+    ** Whether the table's quickSearchIndex row is REBUILDING.
+    *******************************************************************************/
+   private static boolean isRebuilding(QuickSearchRuntime runtime, String tableName) throws QException
+   {
+      String indexTable = runtime.getConfig().getQuickSearchIndexTableName();
+      if(!hasTable(indexTable))
+      {
+         return (false);
+      }
+
+      QueryInput queryInput = new QueryInput();
+      queryInput.setTableName(indexTable);
+      queryInput.setFilter(new QQueryFilter(new QFilterCriteria("tableName", QCriteriaOperator.EQUALS, tableName)).withLimit(1));
+      List<QRecord> rows = new QueryAction().execute(queryInput).getRecords();
+      return (CollectionUtils.nullSafeHasContents(rows) && AbstractIndexingStep.STATUS_REBUILDING.equals(rows.get(0).getValueString("status")));
+   }
+
+
+
+   /*******************************************************************************
+    ** Insert one quickSearchFailedEvent row per event; returns the inserted rows.
+    *******************************************************************************/
+   static List<QRecord> insertFailedEventRows(QuickSearchRuntime runtime, List<IndexEvent> events, String message, String status) throws QException
+   {
+      List<QRecord> rows = new ArrayList<>();
+      for(IndexEvent event : events)
+      {
+         rows.add(new QRecord()
+            .withValue("tableName", event.getTableName())
+            .withValue("recordId", event.getRecordId())
+            .withValue("action", event.getAction() == null ? null : event.getAction().name())
+            .withValue("errorMessage", truncate(message, 4000))
+            .withValue("attempts", 0)
+            .withValue("status", status));
+      }
+
+      InsertInput insertInput = new InsertInput();
+      insertInput.setTableName(runtime.getConfig().applyPrefix(QuickSearchFailedEvent.TABLE_NAME));
+      insertInput.setRecords(rows);
+      return (CollectionUtils.nonNullList(new InsertAction().execute(insertInput).getRecords()));
+   }
+
+
+
+   /*******************************************************************************
+    **
+    *******************************************************************************/
+   private static boolean hasTable(String tableName)
+   {
+      return (QContext.getQInstance() != null && QContext.getQInstance().getTable(tableName) != null);
    }
 
 
@@ -263,7 +446,8 @@ public class QuickSearchRecordChangeListener implements RecordChangeListenerInte
    /*******************************************************************************
     ** Updated records are "as the backend returned them", which for RDBMS is the
     ** sparse input. Re-read the full rows inside the same transaction, with
-    ** display values so possible-value labels are indexed.
+    ** display values so possible-value labels are indexed (which can run host
+    ** possible-value providers).
     *******************************************************************************/
    private static List<QRecord> fetchCurrentRecords(RecordChangeEvent event, String primaryKeyField) throws QException
    {

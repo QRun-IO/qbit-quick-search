@@ -1,6 +1,6 @@
 # QBit: Quick Search
 
-[![Version](https://img.shields.io/badge/version-1.0.0--SNAPSHOT-blue.svg)](https://github.com/QRun-IO/qbit-quick-search)
+[![Version](https://img.shields.io/badge/version-1.0.0--RC.1-blue.svg)](https://github.com/QRun-IO/qbit-quick-search)
 [![License](https://img.shields.io/badge/license-Apache%202.0-green.svg)](https://www.apache.org/licenses/LICENSE-2.0)
 [![Java](https://img.shields.io/badge/java-21+-blue.svg)](https://adoptium.net/)
 
@@ -48,9 +48,11 @@ For `AWS_SIGV4` add these optional dependencies to your host (the QBit declares 
 <dependency>
     <groupId>com.kingsrook.qbits</groupId>
     <artifactId>qbit-quick-search</artifactId>
-    <version>1.0.0</version>
+    <version>1.0.0-RC.1</version>
 </dependency>
 ```
+
+`1.0.0-RC.1` is the current release candidate; `1.0.0` follows once host applications have adopted it (#12).
 
 Annotate entity classes:
 
@@ -118,6 +120,8 @@ output.getTotalHits(); output.getTotalHitsIsLowerBound(); output.getHasMore();
 
 `limitPerTable` returns up to that many hits from each table instead of one ranked list. Terms shorter than 2 characters return nothing; longer than 100 characters are rejected. `limit` is capped at `maxSearchLimit` and `offset + limit` at 10,000.
 
+`offset` skips N accessible results: with record security locks on, hits a lock hides are not counted, so consecutive pages never overlap or skip a visible hit, and with `limitPerTable` the offset applies within each table. With locks on, `totalHits` counts hits confirmed accessible so far; `totalHitsIsLowerBound` is true when the scan stopped before reading every candidate (page full, result window, or scan budget). A single-list search reads at most 10,000 raw hits in batches of at most 1,000. In per-table mode the T tables share that budget, each getting max(10,000 / T, 2 x `limitPerTable`) hits, so one call reads at most max(10,000, T x 2 x `limitPerTable`) raw hits. Paging within a table stops past that share of raw hits, as it does past 10,000 in a single list: `hasMore` turns false and `totalHitsIsLowerBound` stays true to signal unreachable matches.
+
 Search runs as the current `QContext` session: tables the session cannot read are skipped, and with `applyRecordSecurityLocks` (default) hits are re-read through `QueryAction` so record security locks apply.
 
 ### Processes
@@ -135,13 +139,13 @@ Without `schedulerName` the processes exist but nothing runs them; the QBit logs
 | Field | Default | Description |
 |---|---|---|
 | `backendName` | required | QQQ backend for the operational tables |
-| `opensearchUrl` | | `https://host[:port]`; preferred over `opensearchHost`, `opensearchPort`, `useSsl` |
+| `opensearchUrl` | | `https://host[:port]`; preferred over `opensearchHost`, `opensearchPort`, `useSsl`; credentials in the URL are rejected |
 | `opensearchHost`, `opensearchPort`, `useSsl` | `useSsl=false` | Legacy connection fields |
 | `opensearchIndexName` | required | Alias name owned by this QBit; lowercase, OpenSearch naming rules |
 | `authMode` | inferred | `NONE`, `BASIC` (inferred when credentials are set), `AWS_SIGV4` |
-| `opensearchUsername`, `opensearchPassword` | | BASIC credentials; `${env.X}` references recommended; refused over plain HTTP unless `allowPlaintextCredentials` |
+| `opensearchUsername`, `opensearchPassword` | | BASIC credentials; `${env.X}` references recommended (an empty value counts as missing); refused over plain HTTP unless `allowPlaintextCredentials` |
 | `awsRegion`, `awsServiceName`, `awsAssumeRoleArn` | region from `AWS_REGION`; `es` | AWS_SIGV4 settings |
-| `tls` | JVM defaults | `caCertificatePath` or `trustStorePath`/`trustStorePassword`/`trustStoreType`, `keyStorePath`/`keyStorePassword`/`keyStoreType` (mTLS), `hostnameVerification`, `insecureSkipVerify` (loopback only unless `allowInsecureInProduction`) |
+| `tls` | JVM defaults | `caCertificatePath` or `trustStorePath`/`trustStorePassword`/`trustStoreType`, `keyStorePath`/`keyStorePassword`/`keyStoreType` (mTLS), `hostnameVerification` (`false` logs a warning), `insecureSkipVerify` (loopback only unless `allowInsecureInProduction`) |
 | `connectTimeoutMillis`, `responseTimeoutMillis`, `maxConnections` | 5000, 60000, 30 | Transport settings |
 | `transportCustomizer` | | `QCodeReference` to an `OpenSearchTransportCustomizer` (bearer tokens, API keys, interceptors) |
 | `startupMode` | `FAIL_FAST` | `FAIL_FAST` fails `produce()` when the cluster is unreachable; `DEGRADED` boots and retries on first use |
@@ -165,9 +169,9 @@ Without `schedulerName` the processes exist but nothing runs them; the QBit logs
 
 ## Operational tables
 
-- `quickSearchIndex`: one row per table with `enabled` (honoured by indexing and search, cached for one minute), `basepullIntervalMinutes`, `lastBasepullTime`, `lastReconcileTime`, `lastFullReindexTime`, `lastRunStatus`, `lastErrorMessage`, `recordCount`, `documentCount`, `realTimeErrorCount`, `status` (`ACTIVE` or `NEEDS_REINDEX` when the configured fields changed since the row was created). Unique on `tableName`.
+- `quickSearchIndex`: one row per table with `enabled` (honoured by indexing and search, cached for one minute), `basepullIntervalMinutes`, `lastBasepullTime`, `lastReconcileTime`, `lastFullReindexTime`, `lastRunStatus`, `lastErrorMessage`, `recordCount`, `documentCount`, `realTimeErrorCount`, `status` (`ACTIVE`, `NEEDS_REINDEX` when the configured fields changed since the row was created, or `REBUILDING` while a full reindex of all tables runs). Unique on `tableName`.
 - `quickSearchIndexRun`: `runType` (`BASEPULL`, `RECONCILE`, `FULL_REINDEX`), `status`, counts, `errorMessage`.
-- `quickSearchFailedEvent`: real-time events that could not be applied; `status` `PENDING` or `EXHAUSTED` after 10 attempts.
+- `quickSearchFailedEvent`: real-time events that could not be applied; `status` `PENDING` or `EXHAUSTED` after 10 attempts. Deletes made while a full reindex of all tables runs are also recorded here with status `AWAITING_REINDEX`: the reindex applies them to the new index after the alias swap (basepull does not replay them). While a table is `REBUILDING`, drift detection is suspended for it. If a full reindex is killed mid-run, its tables stay `REBUILDING` and deletes keep collecting as `AWAITING_REINDEX`; no data is lost, and the recovery is to run a full reindex of all tables again, which applies the collected deletes and returns the tables to `ACTIVE`.
 
 ## Extending
 

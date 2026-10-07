@@ -30,6 +30,8 @@ import com.kingsrook.qqq.backend.core.actions.tables.QueryAction;
 import com.kingsrook.qqq.backend.core.actions.tables.UpdateAction;
 import com.kingsrook.qqq.backend.core.context.QContext;
 import com.kingsrook.qqq.backend.core.exceptions.QException;
+import com.kingsrook.qqq.backend.core.logging.QCollectingLogger;
+import com.kingsrook.qqq.backend.core.logging.QLogger;
 import com.kingsrook.qqq.backend.core.model.actions.processes.RunBackendStepInput;
 import com.kingsrook.qqq.backend.core.model.actions.processes.RunBackendStepOutput;
 import com.kingsrook.qqq.backend.core.model.actions.tables.delete.DeleteInput;
@@ -50,6 +52,7 @@ import com.kingsrook.qbits.quicksearch.model.QuickSearchIndexRun;
 import com.kingsrook.qbits.quicksearch.opensearch.BulkIndexResult;
 import com.kingsrook.qbits.quicksearch.opensearch.OpenSearchDocument;
 import com.kingsrook.qbits.quicksearch.opensearch.QuickSearchOpenSearchClient;
+import org.apache.logging.log4j.Level;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
@@ -313,6 +316,53 @@ class BasepullIndexStepTest extends BaseQuickSearchTest
 
       assertThat(output.getValueInteger("tablesIndexed")).isEqualTo(1);
       assertThat(output.getValueInteger("failedEventsReplayed")).isEqualTo(0);
+   }
+
+
+
+   /*******************************************************************************
+    ** Test: a failing document count is logged at WARN with the table name, and
+    ** the run still completes, keeping the previous documentCount.
+    *******************************************************************************/
+   @Test
+   void testDocumentCountFails_loggedAsWarning_previousCountKept() throws QException
+   {
+      insertTestEntities(1);
+      QRecord indexRow = insertIndexRow(TEST_ENTITY_TABLE, true, null, 5);
+
+      UpdateInput seedInput = new UpdateInput();
+      seedInput.setTableName(QuickSearchIndex.TABLE_NAME);
+      seedInput.setRecords(List.of(new QRecord().withValue("id", indexRow.getValue("id")).withValue("documentCount", 99)));
+      new UpdateAction().execute(seedInput);
+
+      when(mockClient.countDocumentsForTable(TEST_ENTITY_TABLE)).thenThrow(new QException("count failed"));
+
+      //////////////////////////////////////////////////////////////////
+      // the count, and so its warning, belongs to ReconcileIndexStep //
+      //////////////////////////////////////////////////////////////////
+      QCollectingLogger collectingLogger = QLogger.activateCollectingLoggerForClass(ReconcileIndexStep.class);
+      try
+      {
+         new BasepullIndexStep().run(new RunBackendStepInput(), new RunBackendStepOutput());
+      }
+      finally
+      {
+         QLogger.deactivateCollectingLoggerForClass(ReconcileIndexStep.class);
+      }
+
+      assertThat(collectingLogger.getCollectedMessages())
+         .filteredOn(m -> Level.WARN.equals(m.getLevel()) && m.getMessage().contains("Could not count indexed documents"))
+         .singleElement()
+         .satisfies(m ->
+         {
+            assertThat(m.getMessage()).contains("\"tableName\":\"" + TEST_ENTITY_TABLE + "\"");
+            assertThat(m.getMessage()).contains("\"stackTrace\"").contains("count failed");
+         });
+
+      QRecord row = queryAll(QuickSearchIndex.TABLE_NAME).get(0);
+      assertThat(row.getValueString("lastRunStatus")).isEqualTo("BASEPULL COMPLETED");
+      assertThat(row.getValue("lastBasepullTime")).isNotNull();
+      assertThat(row.getValueInteger("documentCount")).isEqualTo(99);
    }
 
 
@@ -862,6 +912,110 @@ class BasepullIndexStepTest extends BaseQuickSearchTest
    {
       QuickSearchIndex index = new QuickSearchIndex().withLastBasepullTime(Instant.now().minus(90, ChronoUnit.MINUTES)).withBasepullIntervalMinutes(60);
       assertThat(new BasepullIndexStep().isDueForBasepull(index)).isTrue();
+   }
+
+
+
+   /*******************************************************************************
+    ** Test: a delete captured during a full reindex is left for that reindex
+    ** to apply to the new index, not replayed against the old one.
+    *******************************************************************************/
+   @Test
+   void testReplayFailedEvents_awaitingReindexRowsAreNotReplayed() throws QException
+   {
+      insertIndexRow(TEST_ENTITY_TABLE, true, Instant.now(), 60);
+      QRecord captured = insertFailedEvent(TEST_ENTITY_TABLE, "7", "DELETE", 0);
+      UpdateInput updateInput = new UpdateInput();
+      updateInput.setTableName(QuickSearchFailedEvent.TABLE_NAME);
+      updateInput.setRecords(List.of(new QRecord().withValue("id", captured.getValue("id")).withValue("status", QuickSearchFailedEvent.STATUS_AWAITING_REINDEX)));
+      new UpdateAction().execute(updateInput);
+
+      RunBackendStepOutput output = new RunBackendStepOutput();
+      new BasepullIndexStep().run(new RunBackendStepInput(), output);
+
+      verify(mockClient, never()).deleteDocuments(anyList(), anyInt());
+      assertThat(queryAll(QuickSearchFailedEvent.TABLE_NAME)).hasSize(1);
+      assertThat(output.getValueInteger("failedEventsReplayed")).isEqualTo(0);
+   }
+
+
+
+   /*******************************************************************************
+    ** Test: drift found while a full reindex is running does not replace the
+    ** REBUILDING status the listener relies on.
+    *******************************************************************************/
+   @Test
+   void testDriftDetection_duringFullReindex_keepsRebuilding() throws QException
+   {
+      QRecord row = insertIndexRow(TEST_ENTITY_TABLE, true, Instant.now(), 60);
+      UpdateInput updateInput = new UpdateInput();
+      updateInput.setTableName(QuickSearchIndex.TABLE_NAME);
+      updateInput.setRecords(List.of(new QRecord().withValue("id", row.getValue("id"))
+         .withValue("status", AbstractIndexingStep.STATUS_REBUILDING)
+         .withValue("searchableFieldsJson", "[{\"fieldName\":\"name\",\"weight\":1,\"includeLabel\":false}]")));
+      new UpdateAction().execute(updateInput);
+
+      new BasepullIndexStep().run(new RunBackendStepInput(), new RunBackendStepOutput());
+
+      assertThat(queryAll(QuickSearchIndex.TABLE_NAME).get(0).getValueString("status")).isEqualTo(AbstractIndexingStep.STATUS_REBUILDING);
+   }
+
+
+
+   /*******************************************************************************
+    ** Test: drift found on a row snapshot taken before a full reindex started
+    ** does not overwrite the REBUILDING status now in the database.
+    *******************************************************************************/
+   @Test
+   void testDriftDetection_staleSnapshot_keepsRebuilding() throws QException
+   {
+      QRecord row = insertIndexRow(TEST_ENTITY_TABLE, true, Instant.now(), 60);
+      UpdateInput updateInput = new UpdateInput();
+      updateInput.setTableName(QuickSearchIndex.TABLE_NAME);
+      updateInput.setRecords(List.of(new QRecord().withValue("id", row.getValue("id")).withValue("status", AbstractIndexingStep.STATUS_REBUILDING)));
+      new UpdateAction().execute(updateInput);
+
+      QRecord staleSnapshot = new QRecord()
+         .withValue("id", row.getValue("id"))
+         .withValue("tableName", TEST_ENTITY_TABLE)
+         .withValue("status", AbstractIndexingStep.STATUS_ACTIVE)
+         .withValue("searchableFieldsJson", "[{\"fieldName\":\"name\",\"weight\":1,\"includeLabel\":false}]");
+      QuickSearchableTableConfig tableConfig = QuickSearchQBitContext.getDiscoveredTables().stream()
+         .filter(table -> TEST_ENTITY_TABLE.equals(table.getTableName()))
+         .findFirst().orElseThrow();
+
+      new BasepullIndexStep().detectDrift(staleSnapshot, tableConfig);
+      assertThat(queryAll(QuickSearchIndex.TABLE_NAME).get(0).getValueString("status")).isEqualTo(AbstractIndexingStep.STATUS_REBUILDING);
+   }
+
+
+
+   /*******************************************************************************
+    ** Test: a stale snapshot shows drift, but a full reindex has since recorded
+    ** the current fields; the row is not marked NEEDS_REINDEX.
+    *******************************************************************************/
+   @Test
+   void testDriftDetection_staleSnapshot_reindexSinceRecordedCurrentFields() throws QException
+   {
+      QuickSearchableTableConfig tableConfig = QuickSearchQBitContext.getDiscoveredTables().stream()
+         .filter(table -> TEST_ENTITY_TABLE.equals(table.getTableName()))
+         .findFirst().orElseThrow();
+      QRecord row = insertIndexRow(TEST_ENTITY_TABLE, true, Instant.now(), 60);
+      UpdateInput updateInput = new UpdateInput();
+      updateInput.setTableName(QuickSearchIndex.TABLE_NAME);
+      updateInput.setRecords(List.of(new QRecord().withValue("id", row.getValue("id"))
+         .withValue("status", AbstractIndexingStep.STATUS_ACTIVE)
+         .withValue("searchableFieldsJson", AbstractIndexingStep.buildSearchableFieldsJson(tableConfig))));
+      new UpdateAction().execute(updateInput);
+
+      QRecord staleSnapshot = new QRecord()
+         .withValue("id", row.getValue("id"))
+         .withValue("tableName", TEST_ENTITY_TABLE)
+         .withValue("status", AbstractIndexingStep.STATUS_ACTIVE)
+         .withValue("searchableFieldsJson", "[{\"fieldName\":\"name\",\"weight\":1,\"includeLabel\":false}]");
+
+      assertThat(new BasepullIndexStep().detectDrift(staleSnapshot, tableConfig)).isFalse();
+      assertThat(queryAll(QuickSearchIndex.TABLE_NAME).get(0).getValueString("status")).isEqualTo(AbstractIndexingStep.STATUS_ACTIVE);
    }
 
 }

@@ -2,17 +2,20 @@
 
 ## Before tagging 1.0.0
 
+- [ ] qqq-all and Voyage adopt `1.0.0-RC.1` (items below) and report back.
+
 - [x] PR #10 (`feature/GH-1-0-release-readiness`) opened and reviewed 2026-10-05; `AGENTS.md` kept.
 - [ ] Re-pin to `qbit-build-parent` 2.1.0 when qbit-bom publishes it, and remove the `activeByDefault` on the `qqq-snapshot` profile (ADR-0007).
 - [ ] qqq-all follow-up PR: remove the manual `instance.addQBit(...)` for quick-search in `DemoQBits`, pass `withSchedulerName("demoScheduler")`, set `withStartupMode(QuickSearchStartupMode.DEGRADED)` for the full profile test, pin 1.0.0.
 - [ ] Voyage: pin 1.0.0, set `schedulerName`, switch to `opensearchUrl` and `${env.}` credentials.
 - [ ] CI: add a second test job with `-Dopensearch.test.image=opensearchproject/opensearch:3.9.0` (needs a qqq-orb parameter for extra Maven args, or a plain job).
 - [ ] Open the qqq issue proposing `RecordSearchProviderInterface` (D1); quick-search adapter lands in 1.1.
-- [ ] Create the GitHub tracking issue for the 1.0 initiative; write its number into the PRD frontmatter.
-- [ ] Merge PR #8 (reviewed 2026-10-05, approve); Dependabot PR #1 closed as superseded.
+- [x] Tracking issue #12 created and recorded in the PRD (2026-10-06).
+- [x] PR #8 merged 2026-10-05; Dependabot PR #1 closed as superseded.
+- [x] PR #10 merged and `1.0.0-RC.1` published to Maven Central from `release/1.0` (2026-10-05).
 - [ ] Upstream: tell qbit-bom that the published parent POM has `<version>${revision}</version>`, which Maven 3.10 rejects (this repo works around it with the wrapper on 3.9.11).
 
-## Before 1.0.0 GA (from the PR #10 review, 2026-10-05)
+## Before 1.0.0 GA (from the PR #10 review, 2026-10-05; filed as #13 to #17 under #12)
 
 - [ ] Listener: if the in-transaction re-read in `fetchCurrentRecords` throws, record a `quickSearchFailedEvent` row from the event's primary keys instead of dropping the update (`QuickSearchRecordChangeListener`).
 - [ ] Full reindex: deletes that arrive during a rebuild are not replayed into the new index; capture them (failed-event or a delete log) and apply after the swap.

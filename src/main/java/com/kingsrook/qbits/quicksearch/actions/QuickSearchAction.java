@@ -26,6 +26,7 @@ import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.UUID;
 import com.kingsrook.qqq.backend.core.actions.permissions.PermissionsHelper;
 import com.kingsrook.qqq.backend.core.actions.permissions.TablePermissionSubType;
 import com.kingsrook.qqq.backend.core.actions.tables.QueryAction;
@@ -67,6 +68,30 @@ import static com.kingsrook.qqq.backend.core.logging.LogUtils.logPair;
  ** limit is capped at maxSearchLimit and offset + limit at OpenSearch's result
  ** window. tableNames restricts the search; limitPerTable searches each table
  ** separately and returns up to that many hits per table.
+ **
+ ** offset counts results the caller can see. Without locks it is passed
+ ** straight to OpenSearch. With locks, hits are read from position 0 in
+ ** batches that double in size, filtered, the first offset accessible results
+ ** are skipped and limit are kept, so consecutive pages neither overlap nor
+ ** skip an accessible hit. No request reads past MAX_RESULT_WINDOW (10,000
+ ** raw hits), so accessible results beyond it are not reachable.
+ **
+ ** With locks, each scan has a hard budget of raw hits, read in batches of
+ ** at most MAX_LOCKED_BATCH_SIZE, and of OpenSearch requests, each followed
+ ** by one QueryAction per table in the batch. A single-list search gets
+ ** MAX_RESULT_WINDOW hits and MAX_LOCKED_ROUND_TRIPS requests. In per-table
+ ** mode each of the T tables gets its own equal share,
+ ** max(MAX_RESULT_WINDOW / T, min(MAX_RESULT_WINDOW, 2 x limitPerTable)) hits
+ ** and max(2, MAX_LOCKED_ROUND_TRIPS / T) requests, so a fully locked table
+ ** cannot starve another and one call reads at most
+ ** max(MAX_RESULT_WINDOW, T x 2 x limitPerTable) raw hits over at most
+ ** max(MAX_LOCKED_ROUND_TRIPS, 2 x T) requests; offset never raises it.
+ ** A budget ends a scan like the result window does: hasMore is false and
+ ** the total is a lower bound, so in per-table mode paging within a table
+ ** stops past max(MAX_RESULT_WINDOW / T, 2 x limitPerTable) raw hits. Hits
+ ** are deduplicated by table and record id within a call; batches are
+ ** separate from/size requests without a tiebreak sort, so a hit that moves
+ ** between batches during a refresh can still be missed.
  *******************************************************************************/
 public class QuickSearchAction
 {
@@ -76,6 +101,9 @@ public class QuickSearchAction
    public static final int MIN_TERM_LENGTH     = 2;
    public static final int MAX_TERM_LENGTH     = 100;
    public static final int MAX_LIMIT_PER_TABLE = 100;
+
+   public static final int MAX_LOCKED_ROUND_TRIPS = 32;
+   public static final int MAX_LOCKED_BATCH_SIZE  = 1_000;
 
 
 
@@ -118,11 +146,7 @@ public class QuickSearchAction
       int limit    = (input.getLimit() == null || input.getLimit() <= 0) ? DEFAULT_LIMIT : Math.min(input.getLimit(), maxLimit);
       int offset   = (input.getOffset() == null || input.getOffset() < 0) ? 0 : input.getOffset();
 
-      if(offset + limit > QuickSearchOpenSearchClient.MAX_RESULT_WINDOW)
-      {
-         limit = Math.max(0, QuickSearchOpenSearchClient.MAX_RESULT_WINDOW - offset);
-      }
-      if(limit == 0)
+      if(offset >= QuickSearchOpenSearchClient.MAX_RESULT_WINDOW)
       {
          return (emptyOutput());
       }
@@ -139,92 +163,122 @@ public class QuickSearchAction
 
       if(input.getLimitPerTable() != null && input.getLimitPerTable() > 0)
       {
-         return (searchPerTable(client, normalizedTerm, allowedTables, Math.min(input.getLimitPerTable(), maxLimit), tableConfigs, applyLocks));
+         return (searchPerTable(client, normalizedTerm, allowedTables, offset, Math.min(input.getLimitPerTable(), maxLimit), tableConfigs, applyLocks));
       }
 
-      int fetchSize = applyLocks ? Math.min(limit * 2, Math.max(limit, QuickSearchOpenSearchClient.MAX_RESULT_WINDOW - offset)) : limit;
-
-      SearchResponse<OpenSearchDocument> response = runSearch(client, normalizedTerm, allowedTables, fetchSize, offset, tableConfigs);
-      List<QuickSearchResult>            results  = toResults(response);
-      int                                rawHits  = results.size();
-
-      if(applyLocks)
-      {
-         results = filterByRecordAccess(results, tableConfigs);
-      }
-
-      boolean truncated = results.size() > limit;
-      if(truncated)
-      {
-         results = new ArrayList<>(results.subList(0, limit));
-      }
-
-      long    totalHits  = response.hits().total() != null ? response.hits().total().value() : results.size();
-      boolean lowerBound = response.hits().total() != null && response.hits().total().relation() == TotalHitsRelation.Gte;
-      boolean hasMore    = truncated || (offset + rawHits) < totalHits;
-
-      if(applyLocks)
-      {
-         ////////////////////////////////////////////////////////////////////////////
-         // the raw total would reveal how many matching rows the session may not //
-         // see; report only what was verified accessible. hasMore still follows  //
-         // the raw window: it says only that more candidates exist past it, so a //
-         // caller can page on to accessible rows instead of stopping short.      //
-         ////////////////////////////////////////////////////////////////////////////
-         totalHits  = offset + results.size() + (truncated ? 1 : 0);
-         lowerBound = truncated || hasMore;
-         hasMore    = truncated || hasMore;
-      }
-
-      return (new QuickSearchOutput()
-         .withResults(results)
-         .withTotalHits(totalHits)
-         .withTotalHitsIsLowerBound(lowerBound)
-         .withHasMore(hasMore));
+      Page page = searchPage(client, normalizedTerm, allowedTables, offset, limit, tableConfigs, applyLocks, new ScanBudget(QuickSearchOpenSearchClient.MAX_RESULT_WINDOW, MAX_LOCKED_ROUND_TRIPS));
+      return (page.toOutput());
    }
 
 
 
    /*******************************************************************************
-    ** Search each allowed table separately, up to limitPerTable hits each.
+    ** Search each allowed table separately, skipping offset results and
+    ** returning up to limitPerTable hits in each table.
     *******************************************************************************/
-   private QuickSearchOutput searchPerTable(QuickSearchOpenSearchClient client, String term, List<String> allowedTables, int limitPerTable, List<QuickSearchableTableConfig> tableConfigs, boolean applyLocks) throws QException
+   private QuickSearchOutput searchPerTable(QuickSearchOpenSearchClient client, String term, List<String> allowedTables, int offset, int limitPerTable, List<QuickSearchableTableConfig> tableConfigs, boolean applyLocks) throws QException
    {
       List<QuickSearchResult> results    = new ArrayList<>();
       long                    totalHits  = 0;
       boolean                 hasMore    = false;
       boolean                 lowerBound = false;
 
+      int window     = QuickSearchOpenSearchClient.MAX_RESULT_WINDOW;
+      int tableHits  = Math.max(window / allowedTables.size(), Math.min(window, 2 * limitPerTable));
+      int tableTrips = Math.max(2, MAX_LOCKED_ROUND_TRIPS / allowedTables.size());
+
       for(String tableName : allowedTables)
       {
-         int                                fetchSize = applyLocks ? limitPerTable * 2 : limitPerTable;
-         SearchResponse<OpenSearchDocument> response  = runSearch(client, term, List.of(tableName), fetchSize, 0, tableConfigs);
-         List<QuickSearchResult>            tableHits = toResults(response);
-
-         if(applyLocks)
-         {
-            tableHits = filterByRecordAccess(tableHits, tableConfigs);
-            lowerBound = true;
-         }
-         if(tableHits.size() > limitPerTable)
-         {
-            tableHits = new ArrayList<>(tableHits.subList(0, limitPerTable));
-            hasMore   = true;
-         }
-
-         long tableTotal = response.hits().total() != null ? response.hits().total().value() : tableHits.size();
-         if(applyLocks)
-         {
-            tableTotal = tableHits.size();
-         }
-         totalHits += tableTotal;
-         hasMore |= tableHits.size() < tableTotal;
-         lowerBound |= response.hits().total() != null && response.hits().total().relation() == TotalHitsRelation.Gte;
-
-         results.addAll(tableHits);
+         Page page = searchPage(client, term, List.of(tableName), offset, limitPerTable, tableConfigs, applyLocks, new ScanBudget(tableHits, tableTrips));
+         results.addAll(page.results());
+         totalHits += page.totalHits();
+         hasMore |= page.hasMore();
+         lowerBound |= page.lowerBound();
       }
 
       return (new QuickSearchOutput().withResults(results).withTotalHits(totalHits).withTotalHitsIsLowerBound(lowerBound).withHasMore(hasMore));
+   }
+
+
+
+   /*******************************************************************************
+    ** One page over the given tables: skip offset results, keep up to limit.
+    ** Without locks offset goes straight to OpenSearch; with locks offset and
+    ** limit count accessible results within one scan budget (see the class
+    ** comment). Every request keeps from + size within MAX_RESULT_WINDOW.
+    *******************************************************************************/
+   private Page searchPage(QuickSearchOpenSearchClient client, String term, List<String> tables, int offset, int limit, List<QuickSearchableTableConfig> tableConfigs, boolean applyLocks, ScanBudget budget) throws QException
+   {
+      int window   = QuickSearchOpenSearchClient.MAX_RESULT_WINDOW;
+      int pageSize = Math.min(limit, window - offset);
+      if(pageSize <= 0)
+      {
+         return (new Page(Collections.emptyList(), 0L, false, false));
+      }
+
+      if(!applyLocks)
+      {
+         SearchResponse<OpenSearchDocument> response = runSearch(client, term, tables, pageSize, offset, tableConfigs, null);
+         List<QuickSearchResult>            results  = toResults(response);
+
+         long    totalHits  = response.hits().total() != null ? response.hits().total().value() : results.size();
+         boolean lowerBound = response.hits().total() != null && response.hits().total().relation() == TotalHitsRelation.Gte;
+         return (new Page(results, totalHits, lowerBound, (offset + results.size()) < totalHits));
+      }
+
+      ////////////////////////////////////////////////////////////////////////////
+      // read candidates from position 0 until offset + pageSize accessible     //
+      // results are known, the hits run out, the result window is reached, or  //
+      // the scan budget is spent. each batch over-reads 2x what is still       //
+      // needed and at least doubles the last one, up to MAX_LOCKED_BATCH_SIZE, //
+      // and the last round trip takes up to MAX_LOCKED_BATCH_SIZE of the rest. //
+      ////////////////////////////////////////////////////////////////////////////
+      int                     target     = offset + pageSize;
+      List<QuickSearchResult> accessible = new ArrayList<>();
+      int                     position   = 0;
+      int                     batchSize  = 0;
+      boolean                 exhausted  = false;
+      boolean                 rawFloor   = false;
+      Set<String>             seen       = new HashSet<>();
+      String                  preference = "quick-search-" + UUID.randomUUID();
+
+      while(accessible.size() < target && !exhausted && position < window && budget.hasRemaining())
+      {
+         int ceiling = Math.min(MAX_LOCKED_BATCH_SIZE, Math.min(window - position, budget.remainingHits));
+         batchSize = budget.remainingRoundTrips == 1 ? ceiling : Math.min(ceiling, Math.max(2 * (target - accessible.size()), 2 * batchSize));
+
+         SearchResponse<OpenSearchDocument> response = runSearch(client, term, tables, batchSize, position, tableConfigs, preference);
+         int                                rawHits  = response.hits().hits().size();
+         long                               rawTotal = response.hits().total() != null ? response.hits().total().value() : position + rawHits;
+         rawFloor = response.hits().total() != null && response.hits().total().relation() == TotalHitsRelation.Gte;
+
+         List<QuickSearchResult> candidates = new ArrayList<>();
+         for(QuickSearchResult result : toResults(response))
+         {
+            if(seen.add(result.getTableName() + ":" + result.getRecordId()))
+            {
+               candidates.add(result);
+            }
+         }
+         accessible.addAll(filterByRecordAccess(candidates, tableConfigs));
+         position += rawHits;
+         budget.spend(rawHits);
+         exhausted = rawHits < batchSize || position >= rawTotal;
+      }
+
+      ////////////////////////////////////////////////////////////////////////////
+      // the raw total would reveal how many matching rows the session may not  //
+      // see; report only what was verified accessible. hasMore says only that  //
+      // more candidates exist, so a caller can page on to accessible rows.     //
+      ////////////////////////////////////////////////////////////////////////////
+      boolean truncated = accessible.size() > target;
+      boolean hasMore   = truncated || (!exhausted && position < window && budget.hasRemaining());
+
+      List<QuickSearchResult> results = accessible.size() > offset
+         ? new ArrayList<>(accessible.subList(offset, Math.min(target, accessible.size())))
+         : new ArrayList<>();
+
+      return (new Page(results, (long) accessible.size(), !exhausted || rawFloor, hasMore));
    }
 
 
@@ -313,14 +367,17 @@ public class QuickSearchAction
             ids.add(result.getRecordId());
          }
 
-         QueryInput queryInput = new QueryInput();
-         queryInput.setTableName(table.getName());
-         queryInput.setFilter(new QQueryFilter(new QFilterCriteria(table.getPrimaryKeyField(), QCriteriaOperator.IN, ids)));
-
          Set<String> found = new HashSet<>();
-         for(QRecord record : CollectionUtils.nonNullList(new QueryAction().execute(queryInput).getRecords()))
+         for(int start = 0; start < ids.size(); start += MAX_LOCKED_BATCH_SIZE)
          {
-            found.add(record.getValueString(table.getPrimaryKeyField()));
+            QueryInput queryInput = new QueryInput();
+            queryInput.setTableName(table.getName());
+            queryInput.setFilter(new QQueryFilter(new QFilterCriteria(table.getPrimaryKeyField(), QCriteriaOperator.IN, ids.subList(start, Math.min(ids.size(), start + MAX_LOCKED_BATCH_SIZE)))));
+
+            for(QRecord record : CollectionUtils.nonNullList(new QueryAction().execute(queryInput).getRecords()))
+            {
+               found.add(record.getValueString(table.getPrimaryKeyField()));
+            }
          }
 
          for(QuickSearchResult result : entry.getValue())
@@ -394,17 +451,78 @@ public class QuickSearchAction
     ** Run one search, surfacing an OpenSearch client error as a QException so
     ** callers never see an unchecked OpenSearchException.
     *******************************************************************************/
-   private static SearchResponse<OpenSearchDocument> runSearch(QuickSearchOpenSearchClient client, String term, List<String> tables, int fetchSize, int offset, List<QuickSearchableTableConfig> tableConfigs) throws QException
+   private static SearchResponse<OpenSearchDocument> runSearch(QuickSearchOpenSearchClient client, String term, List<String> tables, int fetchSize, int offset, List<QuickSearchableTableConfig> tableConfigs, String preference) throws QException
    {
       try
       {
-         return (client.search(term, tables, fetchSize, offset, tableConfigs));
+         return (client.search(term, tables, fetchSize, offset, tableConfigs, preference));
       }
       catch(OpenSearchException e)
       {
          throw (new QException("Quick search failed: " + (e.error() != null && e.error().reason() != null ? e.error().reason() : e.getMessage()), e));
       }
    }
+
+
+
+   /*******************************************************************************
+    ** Work budget for one locked scan: raw hits fetched and OpenSearch round
+    ** trips.
+    *******************************************************************************/
+   private static final class ScanBudget
+   {
+      private Integer remainingHits;
+      private Integer remainingRoundTrips;
+
+
+
+      /*******************************************************************************
+       ** Constructor
+       *******************************************************************************/
+      ScanBudget(Integer hits, Integer roundTrips)
+      {
+         this.remainingHits       = hits;
+         this.remainingRoundTrips = roundTrips;
+      }
+
+
+
+      /*******************************************************************************
+       **
+       *******************************************************************************/
+      boolean hasRemaining()
+      {
+         return (remainingHits > 0 && remainingRoundTrips > 0);
+      }
+
+
+
+      /*******************************************************************************
+       ** Record one round trip that fetched the given number of raw hits.
+       *******************************************************************************/
+      void spend(int rawHits)
+      {
+         remainingHits -= rawHits;
+         remainingRoundTrips--;
+      }
+   }
+
+
+
+   /*******************************************************************************
+    ** One page of results with its total and paging flags.
+    *******************************************************************************/
+   private record Page(List<QuickSearchResult> results, Long totalHits, Boolean lowerBound, Boolean hasMore)
+   {
+      /*******************************************************************************
+       **
+       *******************************************************************************/
+      QuickSearchOutput toOutput()
+      {
+         return (new QuickSearchOutput().withResults(results).withTotalHits(totalHits).withTotalHitsIsLowerBound(lowerBound).withHasMore(hasMore));
+      }
+   }
+
 
 
    /*******************************************************************************

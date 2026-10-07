@@ -201,7 +201,7 @@ class QuickSearchActionTest
       Hit<OpenSearchDocument> hit = buildMockHit(doc, 1.5, Map.of("searchableText", List.of("Order <em>42</em>")));
 
       SearchResponse<OpenSearchDocument> response = buildMockResponse(List.of(hit), 1L);
-      when(mockClient.search(anyString(), any(), anyInt(), anyInt(), anyList())).thenReturn(response);
+      when(mockClient.search(anyString(), any(), anyInt(), anyInt(), anyList(), any())).thenReturn(response);
 
       QuickSearchInput input = new QuickSearchInput()
          .withSearchTerm("42")
@@ -237,7 +237,7 @@ class QuickSearchActionTest
       Hit<OpenSearchDocument> hit = buildMockHit(doc, 1.0, Map.of("searchableText", List.of("fragment one", "fragment two")));
 
       SearchResponse<OpenSearchDocument> response = buildMockResponse(List.of(hit), 1L);
-      when(mockClient.search(anyString(), any(), anyInt(), anyInt(), anyList())).thenReturn(response);
+      when(mockClient.search(anyString(), any(), anyInt(), anyInt(), anyList(), any())).thenReturn(response);
 
       QuickSearchOutput output = action.execute(new QuickSearchInput().withSearchTerm("one"));
 
@@ -260,7 +260,7 @@ class QuickSearchActionTest
       Hit<OpenSearchDocument> hit = buildMockHit(doc, 0.9, null);
 
       SearchResponse<OpenSearchDocument> response = buildMockResponse(List.of(hit), 1L);
-      when(mockClient.search(anyString(), any(), anyInt(), anyInt(), anyList())).thenReturn(response);
+      when(mockClient.search(anyString(), any(), anyInt(), anyInt(), anyList(), any())).thenReturn(response);
 
       QuickSearchOutput output = action.execute(new QuickSearchInput().withSearchTerm("order"));
 
@@ -276,11 +276,11 @@ class QuickSearchActionTest
    void testNullLimit_defaultsTo25() throws QException
    {
       SearchResponse<OpenSearchDocument> response = buildMockResponse(Collections.emptyList(), 0L);
-      when(mockClient.search(anyString(), any(), anyInt(), anyInt(), anyList())).thenReturn(response);
+      when(mockClient.search(anyString(), any(), anyInt(), anyInt(), anyList(), any())).thenReturn(response);
 
       action.execute(new QuickSearchInput().withSearchTerm("test").withLimit(null));
 
-      verify(mockClient).search(anyString(), any(), eq(25), anyInt(), anyList());
+      verify(mockClient).search(anyString(), any(), eq(25), anyInt(), anyList(), any());
    }
 
 
@@ -292,11 +292,11 @@ class QuickSearchActionTest
    void testZeroLimit_defaultsTo25() throws QException
    {
       SearchResponse<OpenSearchDocument> response = buildMockResponse(Collections.emptyList(), 0L);
-      when(mockClient.search(anyString(), any(), anyInt(), anyInt(), anyList())).thenReturn(response);
+      when(mockClient.search(anyString(), any(), anyInt(), anyInt(), anyList(), any())).thenReturn(response);
 
       action.execute(new QuickSearchInput().withSearchTerm("test").withLimit(0));
 
-      verify(mockClient).search(anyString(), any(), eq(25), anyInt(), anyList());
+      verify(mockClient).search(anyString(), any(), eq(25), anyInt(), anyList(), any());
    }
 
 
@@ -308,11 +308,11 @@ class QuickSearchActionTest
    void testNegativeLimit_defaultsTo25() throws QException
    {
       SearchResponse<OpenSearchDocument> response = buildMockResponse(Collections.emptyList(), 0L);
-      when(mockClient.search(anyString(), any(), anyInt(), anyInt(), anyList())).thenReturn(response);
+      when(mockClient.search(anyString(), any(), anyInt(), anyInt(), anyList(), any())).thenReturn(response);
 
       action.execute(new QuickSearchInput().withSearchTerm("test").withLimit(-5));
 
-      verify(mockClient).search(anyString(), any(), eq(25), anyInt(), anyList());
+      verify(mockClient).search(anyString(), any(), eq(25), anyInt(), anyList(), any());
    }
 
 
@@ -324,11 +324,11 @@ class QuickSearchActionTest
    void testNullOffset_defaultsTo0() throws QException
    {
       SearchResponse<OpenSearchDocument> response = buildMockResponse(Collections.emptyList(), 0L);
-      when(mockClient.search(anyString(), any(), anyInt(), anyInt(), anyList())).thenReturn(response);
+      when(mockClient.search(anyString(), any(), anyInt(), anyInt(), anyList(), any())).thenReturn(response);
 
       action.execute(new QuickSearchInput().withSearchTerm("test").withOffset(null));
 
-      verify(mockClient).search(anyString(), any(), anyInt(), eq(0), anyList());
+      verify(mockClient).search(anyString(), any(), anyInt(), eq(0), anyList(), any());
    }
 
 
@@ -340,11 +340,11 @@ class QuickSearchActionTest
    void testNegativeOffset_defaultsTo0() throws QException
    {
       SearchResponse<OpenSearchDocument> response = buildMockResponse(Collections.emptyList(), 0L);
-      when(mockClient.search(anyString(), any(), anyInt(), anyInt(), anyList())).thenReturn(response);
+      when(mockClient.search(anyString(), any(), anyInt(), anyInt(), anyList(), any())).thenReturn(response);
 
       action.execute(new QuickSearchInput().withSearchTerm("test").withOffset(-1));
 
-      verify(mockClient).search(anyString(), any(), anyInt(), eq(0), anyList());
+      verify(mockClient).search(anyString(), any(), anyInt(), eq(0), anyList(), any());
    }
 
 
@@ -362,7 +362,7 @@ class QuickSearchActionTest
 
       // 1 result, offset=0, totalHits=5 → hasMore = (0+1) < 5 = true
       SearchResponse<OpenSearchDocument> response = buildMockResponse(hits, 5L);
-      when(mockClient.search(anyString(), any(), anyInt(), anyInt(), anyList())).thenReturn(response);
+      when(mockClient.search(anyString(), any(), anyInt(), anyInt(), anyList(), any())).thenReturn(response);
 
       QuickSearchOutput output = action.execute(new QuickSearchInput()
          .withSearchTerm("order")
@@ -392,7 +392,7 @@ class QuickSearchActionTest
 
       // 2 results, offset=3, totalHits=5 → hasMore = (3+2) < 5 = false
       SearchResponse<OpenSearchDocument> response = buildMockResponse(hits, 5L);
-      when(mockClient.search(anyString(), any(), anyInt(), anyInt(), anyList())).thenReturn(response);
+      when(mockClient.search(anyString(), any(), anyInt(), anyInt(), anyList(), any())).thenReturn(response);
 
       QuickSearchOutput output = action.execute(new QuickSearchInput()
          .withSearchTerm("order")
@@ -412,13 +412,13 @@ class QuickSearchActionTest
    void testTableNameFilter_passedToClient() throws QException
    {
       SearchResponse<OpenSearchDocument> response = buildMockResponse(Collections.emptyList(), 0L);
-      when(mockClient.search(anyString(), anyCollection(), anyInt(), anyInt(), anyList())).thenReturn(response);
+      when(mockClient.search(anyString(), anyCollection(), anyInt(), anyInt(), anyList(), any())).thenReturn(response);
 
       action.execute(new QuickSearchInput()
          .withSearchTerm("widget")
          .withTableName("orders"));
 
-      verify(mockClient).search(anyString(), eq(List.of("orders")), anyInt(), anyInt(), anyList());
+      verify(mockClient).search(anyString(), eq(List.of("orders")), anyInt(), anyInt(), anyList(), any());
    }
 
 
@@ -430,13 +430,13 @@ class QuickSearchActionTest
    void testNullTableName_searchesAllConfiguredTables() throws QException
    {
       SearchResponse<OpenSearchDocument> response = buildMockResponse(Collections.emptyList(), 0L);
-      when(mockClient.search(anyString(), anyCollection(), anyInt(), anyInt(), anyList())).thenReturn(response);
+      when(mockClient.search(anyString(), anyCollection(), anyInt(), anyInt(), anyList(), any())).thenReturn(response);
 
       action.execute(new QuickSearchInput()
          .withSearchTerm("widget")
          .withTableName(null));
 
-      verify(mockClient).search(anyString(), anyCollection(), anyInt(), anyInt(), anyList());
+      verify(mockClient).search(anyString(), anyCollection(), anyInt(), anyInt(), anyList(), any());
    }
 
 
@@ -449,12 +449,12 @@ class QuickSearchActionTest
    void testSearchTerm_isNormalizedBeforeClientCall() throws QException
    {
       SearchResponse<OpenSearchDocument> response = buildMockResponse(Collections.emptyList(), 0L);
-      when(mockClient.search(anyString(), any(), anyInt(), anyInt(), anyList())).thenReturn(response);
+      when(mockClient.search(anyString(), any(), anyInt(), anyInt(), anyList(), any())).thenReturn(response);
 
       action.execute(new QuickSearchInput().withSearchTerm("  HELLO  WORLD  "));
 
       ArgumentCaptor<String> termCaptor = ArgumentCaptor.forClass(String.class);
-      verify(mockClient).search(termCaptor.capture(), any(), anyInt(), anyInt(), anyList());
+      verify(mockClient).search(termCaptor.capture(), any(), anyInt(), anyInt(), anyList(), any());
 
       assertThat(termCaptor.getValue()).isEqualTo("HELLO WORLD");
    }
@@ -472,7 +472,7 @@ class QuickSearchActionTest
 
       assertThat(output.getResults()).isEmpty();
       assertThat(output.getTotalHits()).isEqualTo(0L);
-      verify(mockClient, never()).search(anyString(), any(), anyInt(), anyInt(), anyList());
+      verify(mockClient, never()).search(anyString(), any(), anyInt(), anyInt(), anyList(), any());
    }
 
 
@@ -489,7 +489,7 @@ class QuickSearchActionTest
          .isInstanceOf(QException.class)
          .hasMessageContaining("too long");
 
-      verify(mockClient, never()).search(anyString(), any(), anyInt(), anyInt(), anyList());
+      verify(mockClient, never()).search(anyString(), any(), anyInt(), anyInt(), anyList(), any());
    }
 
 
@@ -501,11 +501,11 @@ class QuickSearchActionTest
    void testTermOfExactly100Characters_accepted() throws QException
    {
       SearchResponse<OpenSearchDocument> response = buildMockResponse(Collections.emptyList(), 0L);
-      when(mockClient.search(anyString(), any(), anyInt(), anyInt(), anyList())).thenReturn(response);
+      when(mockClient.search(anyString(), any(), anyInt(), anyInt(), anyList(), any())).thenReturn(response);
 
       action.execute(new QuickSearchInput().withSearchTerm("x".repeat(QuickSearchAction.MAX_TERM_LENGTH)));
 
-      verify(mockClient).search(anyString(), any(), anyInt(), anyInt(), anyList());
+      verify(mockClient).search(anyString(), any(), anyInt(), anyInt(), anyList(), any());
    }
 
 
@@ -518,11 +518,11 @@ class QuickSearchActionTest
    {
       QuickSearchQBitContext.setConfig(new QuickSearchQBitConfig().withApplyRecordSecurityLocks(false).withMaxSearchLimit(40));
       SearchResponse<OpenSearchDocument> response = buildMockResponse(Collections.emptyList(), 0L);
-      when(mockClient.search(anyString(), any(), anyInt(), anyInt(), anyList())).thenReturn(response);
+      when(mockClient.search(anyString(), any(), anyInt(), anyInt(), anyList(), any())).thenReturn(response);
 
       action.execute(new QuickSearchInput().withSearchTerm("test").withLimit(500));
 
-      verify(mockClient).search(anyString(), any(), eq(40), anyInt(), anyList());
+      verify(mockClient).search(anyString(), any(), eq(40), anyInt(), anyList(), any());
    }
 
 
@@ -535,14 +535,14 @@ class QuickSearchActionTest
    {
       QuickSearchQBitContext.setConfig(null);
       SearchResponse<OpenSearchDocument> response = buildMockResponse(Collections.emptyList(), 0L);
-      when(mockClient.search(anyString(), any(), anyInt(), anyInt(), anyList())).thenReturn(response);
+      when(mockClient.search(anyString(), any(), anyInt(), anyInt(), anyList(), any())).thenReturn(response);
 
       action.execute(new QuickSearchInput().withSearchTerm("test").withLimit(500));
 
       ////////////////////////////////////////////////////////////////////////
       // no config means locks default to on, so the fetch size is doubled  //
       ////////////////////////////////////////////////////////////////////////
-      verify(mockClient).search(anyString(), any(), eq(200), anyInt(), anyList());
+      verify(mockClient).search(anyString(), any(), eq(200), anyInt(), anyList(), any());
    }
 
 
@@ -555,11 +555,11 @@ class QuickSearchActionTest
    void testOffsetPlusLimit_beyondResultWindow_limitShrunk() throws QException
    {
       SearchResponse<OpenSearchDocument> response = buildMockResponse(Collections.emptyList(), 0L);
-      when(mockClient.search(anyString(), any(), anyInt(), anyInt(), anyList())).thenReturn(response);
+      when(mockClient.search(anyString(), any(), anyInt(), anyInt(), anyList(), any())).thenReturn(response);
 
       action.execute(new QuickSearchInput().withSearchTerm("test").withLimit(25).withOffset(QuickSearchOpenSearchClient.MAX_RESULT_WINDOW - 10));
 
-      verify(mockClient).search(anyString(), any(), eq(10), eq(QuickSearchOpenSearchClient.MAX_RESULT_WINDOW - 10), anyList());
+      verify(mockClient).search(anyString(), any(), eq(10), eq(QuickSearchOpenSearchClient.MAX_RESULT_WINDOW - 10), anyList(), any());
    }
 
 
@@ -575,7 +575,7 @@ class QuickSearchActionTest
 
       assertThat(output.getResults()).isEmpty();
       assertThat(output.getHasMore()).isFalse();
-      verify(mockClient, never()).search(anyString(), any(), anyInt(), anyInt(), anyList());
+      verify(mockClient, never()).search(anyString(), any(), anyInt(), anyInt(), anyList(), any());
    }
 
 
@@ -587,11 +587,11 @@ class QuickSearchActionTest
    void testTableNames_intersectedWithConfiguredTables() throws QException
    {
       SearchResponse<OpenSearchDocument> response = buildMockResponse(Collections.emptyList(), 0L);
-      when(mockClient.search(anyString(), anyCollection(), anyInt(), anyInt(), anyList())).thenReturn(response);
+      when(mockClient.search(anyString(), anyCollection(), anyInt(), anyInt(), anyList(), any())).thenReturn(response);
 
       action.execute(new QuickSearchInput().withSearchTerm("widget").withTableNames(List.of("orders", "notConfigured")));
 
-      verify(mockClient).search(anyString(), eq(List.of("orders")), anyInt(), anyInt(), anyList());
+      verify(mockClient).search(anyString(), eq(List.of("orders")), anyInt(), anyInt(), anyList(), any());
    }
 
 
@@ -606,11 +606,11 @@ class QuickSearchActionTest
          new QuickSearchableTableConfig().withTableName("orders").withPrimaryKeyField("id").withSearchableFields(List.of("orderNumber")),
          new QuickSearchableTableConfig().withTableName("customers").withPrimaryKeyField("id").withSearchableFields(List.of("name"))));
       SearchResponse<OpenSearchDocument> response = buildMockResponse(Collections.emptyList(), 0L);
-      when(mockClient.search(anyString(), anyCollection(), anyInt(), anyInt(), anyList())).thenReturn(response);
+      when(mockClient.search(anyString(), anyCollection(), anyInt(), anyInt(), anyList(), any())).thenReturn(response);
 
       action.execute(new QuickSearchInput().withSearchTerm("widget").withTableName("orders").withTableNames(List.of("customers")));
 
-      verify(mockClient).search(anyString(), eq(List.of("customers")), anyInt(), anyInt(), anyList());
+      verify(mockClient).search(anyString(), eq(List.of("customers")), anyInt(), anyInt(), anyList(), any());
    }
 
 
@@ -625,7 +625,7 @@ class QuickSearchActionTest
       QuickSearchOutput output = action.execute(new QuickSearchInput().withSearchTerm("widget").withTableNames(List.of("notConfigured")));
 
       assertThat(output.getResults()).isEmpty();
-      verify(mockClient, never()).search(anyString(), any(), anyInt(), anyInt(), anyList());
+      verify(mockClient, never()).search(anyString(), any(), anyInt(), anyInt(), anyList(), any());
    }
 
 
@@ -646,13 +646,13 @@ class QuickSearchActionTest
 
       SearchResponse<OpenSearchDocument> orderResponse    = buildMockResponse(List.of(orderHit), 7L);
       SearchResponse<OpenSearchDocument> customerResponse = buildMockResponse(List.of(customerHit), 1L);
-      when(mockClient.search(anyString(), eq(List.of("orders")), anyInt(), anyInt(), anyList())).thenReturn(orderResponse);
-      when(mockClient.search(anyString(), eq(List.of("customers")), anyInt(), anyInt(), anyList())).thenReturn(customerResponse);
+      when(mockClient.search(anyString(), eq(List.of("orders")), anyInt(), anyInt(), anyList(), any())).thenReturn(orderResponse);
+      when(mockClient.search(anyString(), eq(List.of("customers")), anyInt(), anyInt(), anyList(), any())).thenReturn(customerResponse);
 
       QuickSearchOutput output = action.execute(new QuickSearchInput().withSearchTerm("widget").withLimitPerTable(3));
 
-      verify(mockClient).search(anyString(), eq(List.of("orders")), eq(3), eq(0), anyList());
-      verify(mockClient).search(anyString(), eq(List.of("customers")), eq(3), eq(0), anyList());
+      verify(mockClient).search(anyString(), eq(List.of("orders")), eq(3), eq(0), anyList(), any());
+      verify(mockClient).search(anyString(), eq(List.of("customers")), eq(3), eq(0), anyList(), any());
 
       assertThat(output.getResults()).extracting(QuickSearchResult::getRecordId).containsExactly("1", "9");
       assertThat(output.getTotalHits()).isEqualTo(8L);
@@ -665,20 +665,19 @@ class QuickSearchActionTest
     ** limitPerTable is capped at maxSearchLimit and trims each table's hits.
     *******************************************************************************/
    @Test
-   void testLimitPerTable_aboveMax_clampedAndHitsTrimmed() throws QException
+   void testLimitPerTable_aboveMax_clamped() throws QException
    {
       QuickSearchQBitContext.setConfig(new QuickSearchQBitConfig().withApplyRecordSecurityLocks(false).withMaxSearchLimit(2));
 
       List<Hit<OpenSearchDocument>> hits = List.of(
          buildMockHit(new OpenSearchDocument().withSourceTable("orders").withRecordId("1"), 3.0, null),
-         buildMockHit(new OpenSearchDocument().withSourceTable("orders").withRecordId("2"), 2.0, null),
-         buildMockHit(new OpenSearchDocument().withSourceTable("orders").withRecordId("3"), 1.0, null));
+         buildMockHit(new OpenSearchDocument().withSourceTable("orders").withRecordId("2"), 2.0, null));
       SearchResponse<OpenSearchDocument> response = buildMockResponse(hits, 3L);
-      when(mockClient.search(anyString(), anyCollection(), anyInt(), anyInt(), anyList())).thenReturn(response);
+      when(mockClient.search(anyString(), anyCollection(), anyInt(), anyInt(), anyList(), any())).thenReturn(response);
 
       QuickSearchOutput output = action.execute(new QuickSearchInput().withSearchTerm("widget").withLimitPerTable(50));
 
-      verify(mockClient).search(anyString(), eq(List.of("orders")), eq(2), eq(0), anyList());
+      verify(mockClient).search(anyString(), eq(List.of("orders")), eq(2), eq(0), anyList(), any());
       assertThat(output.getResults()).extracting(QuickSearchResult::getRecordId).containsExactly("1", "2");
       assertThat(output.getHasMore()).isTrue();
    }
@@ -694,7 +693,7 @@ class QuickSearchActionTest
    {
       Hit<OpenSearchDocument> hit = buildMockHit(new OpenSearchDocument().withSourceTable("orders").withRecordId("1"), 1.0, null);
       SearchResponse<OpenSearchDocument> response = buildMockResponse(List.of(hit), 1L);
-      when(mockClient.search(anyString(), any(), anyInt(), anyInt(), anyList())).thenReturn(response);
+      when(mockClient.search(anyString(), any(), anyInt(), anyInt(), anyList(), any())).thenReturn(response);
 
       QuickSearchOutput output = action.execute(new QuickSearchInput().withSearchTerm("widget"));
 
@@ -711,7 +710,7 @@ class QuickSearchActionTest
    {
       SearchResponse<OpenSearchDocument> response = buildMockResponse(Collections.emptyList(), 10000L);
       when(response.hits().total().relation()).thenReturn(TotalHitsRelation.Gte);
-      when(mockClient.search(anyString(), any(), anyInt(), anyInt(), anyList())).thenReturn(response);
+      when(mockClient.search(anyString(), any(), anyInt(), anyInt(), anyList(), any())).thenReturn(response);
 
       QuickSearchOutput output = action.execute(new QuickSearchInput().withSearchTerm("widget"));
 
@@ -728,7 +727,7 @@ class QuickSearchActionTest
    {
       Hit<OpenSearchDocument> hit = buildMockHit(null, 1.0, null);
       SearchResponse<OpenSearchDocument> response = buildMockResponse(List.of(hit), 1L);
-      when(mockClient.search(anyString(), any(), anyInt(), anyInt(), anyList())).thenReturn(response);
+      when(mockClient.search(anyString(), any(), anyInt(), anyInt(), anyList(), any())).thenReturn(response);
 
       QuickSearchOutput output = action.execute(new QuickSearchInput().withSearchTerm("widget"));
 
@@ -761,7 +760,7 @@ class QuickSearchActionTest
       OpenSearchException openSearchException = new OpenSearchException(ErrorResponse.of(e -> e
          .status(500)
          .error(c -> c.type("search_phase_execution_exception").reason("all shards failed"))));
-      when(mockClient.search(anyString(), any(), anyInt(), anyInt(), anyList())).thenThrow(openSearchException);
+      when(mockClient.search(anyString(), any(), anyInt(), anyInt(), anyList(), any())).thenThrow(openSearchException);
 
       assertThatThrownBy(() -> action.execute(new QuickSearchInput().withSearchTerm("widget")))
          .isInstanceOf(QException.class)

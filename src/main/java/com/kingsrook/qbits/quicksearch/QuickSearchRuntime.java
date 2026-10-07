@@ -338,13 +338,28 @@ public class QuickSearchRuntime
 
    /*******************************************************************************
     ** Start the runtime per the configured startup mode: FAIL_FAST throws when
-    ** the index cannot be prepared; DEGRADED logs and continues.
+    ** the index cannot be prepared; DEGRADED logs and continues. A LinkageError
+    ** (an optional library such as the AWS SDK missing while the client is
+    ** built) follows the same modes, with a message naming the missing class,
+    ** so a DEGRADED host still boots.
     *******************************************************************************/
    public void start() throws QException
    {
       try
       {
          ensureIndexReady();
+      }
+      catch(LinkageError e)
+      {
+         String message = "Quick Search could not load a class to build its OpenSearch client [" + e.getMessage()
+            + "]; authMode AWS_SIGV4 needs the optional AWS SDK v2 dependencies (apache-client, sts) on the classpath";
+         if(config.getStartupMode() == QuickSearchStartupMode.DEGRADED)
+         {
+            LOG.warn(message + "; Quick Search is running degraded", e, logPair("indexName", config.getOpensearchIndexName()));
+            return;
+         }
+
+         throw (new QException(message, e));
       }
       catch(Exception e)
       {

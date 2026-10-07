@@ -23,6 +23,7 @@ import java.security.KeyStore;
 import java.security.cert.Certificate;
 import java.security.cert.CertificateFactory;
 import java.util.Collection;
+import java.util.regex.Pattern;
 import javax.net.ssl.HostnameVerifier;
 import javax.net.ssl.SSLContext;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -78,6 +79,12 @@ public class OpenSearchTransportFactory
 
    private static final String USER_AGENT = "qbit-quick-search/" + QuickSearchQBitProducer.getVersion();
 
+   ///////////////////////////////////////////////////////////////////////////
+   // Only a lone ${env.X} or ${prop.X} is echoed in errors: a ?? chain may //
+   // hold a literal fallback secret between its references.                //
+   ///////////////////////////////////////////////////////////////////////////
+   private static final Pattern SINGLE_REFERENCE = Pattern.compile("^\\$\\{(env|prop)\\.[A-Za-z0-9_.-]+\\}$");
+
 
 
    /*******************************************************************************
@@ -132,12 +139,8 @@ public class OpenSearchTransportFactory
       BasicCredentialsProvider credentialsProvider = null;
       if(config.getEffectiveAuthMode() == QuickSearchAuthMode.BASIC)
       {
-         String username = interpreter.interpret(config.getOpensearchUsername());
-         String password = interpreter.interpret(config.getOpensearchPassword());
-         if(username == null || password == null)
-         {
-            throw (new QException("BASIC authentication is configured but the username or password resolved to null"));
-         }
+         String username = requireResolved(interpreter, config.getOpensearchUsername(), "opensearchUsername");
+         String password = requireResolved(interpreter, config.getOpensearchPassword(), "opensearchPassword");
          credentialsProvider = new BasicCredentialsProvider();
          credentialsProvider.setCredentials(new AuthScope(httpHost), new UsernamePasswordCredentials(username, password.toCharArray()));
       }
@@ -262,14 +265,14 @@ public class OpenSearchTransportFactory
       }
       else if(StringUtils.hasContent(tls.getCaCertificatePath()))
       {
-         builder.loadTrustMaterial(loadPemTrustStore(interpreter.interpret(tls.getCaCertificatePath())), null);
+         builder.loadTrustMaterial(loadPemTrustStore(requireResolved(interpreter, tls.getCaCertificatePath(), "tls.caCertificatePath")), null);
          custom = true;
       }
       else if(StringUtils.hasContent(tls.getTrustStorePath()))
       {
          String   password   = interpreter.interpret(tls.getTrustStorePassword());
          KeyStore trustStore = KeyStore.getInstance(StringUtils.hasContent(tls.getTrustStoreType()) ? tls.getTrustStoreType() : KeyStore.getDefaultType());
-         try(InputStream inputStream = new FileInputStream(interpreter.interpret(tls.getTrustStorePath())))
+         try(InputStream inputStream = new FileInputStream(requireResolved(interpreter, tls.getTrustStorePath(), "tls.trustStorePath")))
          {
             trustStore.load(inputStream, password == null ? null : password.toCharArray());
          }
@@ -282,7 +285,7 @@ public class OpenSearchTransportFactory
          String   password = interpreter.interpret(tls.getKeyStorePassword());
          char[]   chars    = password == null ? new char[0] : password.toCharArray();
          KeyStore keyStore = KeyStore.getInstance(StringUtils.hasContent(tls.getKeyStoreType()) ? tls.getKeyStoreType() : KeyStore.getDefaultType());
-         try(InputStream inputStream = new FileInputStream(interpreter.interpret(tls.getKeyStorePath())))
+         try(InputStream inputStream = new FileInputStream(requireResolved(interpreter, tls.getKeyStorePath(), "tls.keyStorePath")))
          {
             keyStore.load(inputStream, chars);
          }
@@ -296,15 +299,49 @@ public class OpenSearchTransportFactory
 
 
    /*******************************************************************************
-    **
+    ** The no-op verifier when insecureSkipVerify (warned in buildSslContext) or
+    ** hostnameVerification=false is set, else null for the default verifier.
     *******************************************************************************/
    static HostnameVerifier buildHostnameVerifier(QuickSearchTlsConfig tls)
    {
-      if(tls != null && (Boolean.TRUE.equals(tls.getInsecureSkipVerify()) || Boolean.FALSE.equals(tls.getHostnameVerification())))
+      if(tls == null)
+      {
+         return (null);
+      }
+
+      if(Boolean.TRUE.equals(tls.getInsecureSkipVerify()))
       {
          return (NoopHostnameVerifier.INSTANCE);
       }
+
+      if(Boolean.FALSE.equals(tls.getHostnameVerification()))
+      {
+         LOG.warn("tls.hostnameVerification is disabled: OpenSearch server certificates are NOT checked against the host name");
+         return (NoopHostnameVerifier.INSTANCE);
+      }
+
       return (null);
+   }
+
+
+
+   /*******************************************************************************
+    ** Interpret a value that must resolve to content; null, empty and blank all
+    ** count as missing. The error names the field and, for a single ${env.X} or
+    ** ${prop.X} reference, the reference itself; never a resolved value and
+    ** never any part of a ?? fallback chain.
+    *******************************************************************************/
+   static String requireResolved(QMetaDataVariableInterpreter interpreter, String value, String fieldName) throws QException
+   {
+      String resolved = interpreter.interpret(value);
+      if(StringUtils.hasContent(resolved))
+      {
+         return (resolved);
+      }
+
+      String  trimmed     = value == null ? "" : value.trim();
+      boolean isReference = SINGLE_REFERENCE.matcher(trimmed).matches();
+      throw (new QException(fieldName + " is missing or empty" + (isReference ? " after resolving " + trimmed : "")));
    }
 
 

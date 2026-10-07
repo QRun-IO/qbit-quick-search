@@ -217,7 +217,11 @@ public class BasepullIndexStep extends AbstractIndexingStep
          {
             Map<String, Serializable> values = new HashMap<>();
             values.put("lastBasepullTime", runStart);
-            values.put("documentCount", safeCount(client, tableName));
+            Integer documentCount = ReconcileIndexStep.safeCount(client, tableName);
+            if(documentCount != null)
+            {
+               values.put("documentCount", documentCount);
+            }
             updateIndexRow(index.getId(), values);
          }
 
@@ -410,24 +414,6 @@ public class BasepullIndexStep extends AbstractIndexingStep
             .withValue("attempts", attempts)
             .withValue("errorMessage", truncate(errors == null || errors.isEmpty() ? "replay failed" : errors.get(0), 4000))
             .withValue("status", attempts >= MAX_REPLAY_ATTEMPTS ? QuickSearchFailedEvent.STATUS_EXHAUSTED : QuickSearchFailedEvent.STATUS_PENDING));
-      }
-   }
-
-
-
-   /*******************************************************************************
-    **
-    *******************************************************************************/
-   private static Integer safeCount(QuickSearchOpenSearchClient client, String tableName)
-   {
-      try
-      {
-         Long count = client.countDocumentsForTable(tableName);
-         return (count == null ? null : count.intValue());
-      }
-      catch(Exception e)
-      {
-         return (null);
       }
    }
 

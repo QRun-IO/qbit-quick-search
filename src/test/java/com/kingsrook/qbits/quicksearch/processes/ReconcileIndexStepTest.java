@@ -24,6 +24,8 @@ import java.util.List;
 import com.kingsrook.qqq.backend.core.actions.tables.InsertAction;
 import com.kingsrook.qqq.backend.core.actions.tables.QueryAction;
 import com.kingsrook.qqq.backend.core.exceptions.QException;
+import com.kingsrook.qqq.backend.core.logging.QCollectingLogger;
+import com.kingsrook.qqq.backend.core.logging.QLogger;
 import com.kingsrook.qqq.backend.core.model.actions.processes.RunBackendStepInput;
 import com.kingsrook.qqq.backend.core.model.actions.processes.RunBackendStepOutput;
 import com.kingsrook.qqq.backend.core.model.actions.tables.insert.InsertInput;
@@ -37,6 +39,7 @@ import com.kingsrook.qbits.quicksearch.model.QuickSearchIndexRun;
 import com.kingsrook.qbits.quicksearch.opensearch.BulkIndexResult;
 import com.kingsrook.qbits.quicksearch.opensearch.OpenSearchDocument;
 import com.kingsrook.qbits.quicksearch.opensearch.QuickSearchOpenSearchClient;
+import org.apache.logging.log4j.Level;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
@@ -271,6 +274,44 @@ class ReconcileIndexStepTest extends BaseQuickSearchTest
 
 
    /*******************************************************************************
+    ** Test: a failing document count is logged at WARN with the table name, and
+    ** the run still completes, keeping the previous documentCount.
+    *******************************************************************************/
+   @Test
+   void testReconcile_documentCountFails_loggedAsWarning_previousCountKept() throws QException
+   {
+      insertTestEntities(1);
+      insertIndexRow(true, 99);
+      when(mockClient.countDocumentsForTable(TEST_ENTITY_TABLE)).thenThrow(new QException("count failed"));
+
+      QCollectingLogger collectingLogger = QLogger.activateCollectingLoggerForClass(ReconcileIndexStep.class);
+      try
+      {
+         new ReconcileIndexStep().run(new RunBackendStepInput(), new RunBackendStepOutput());
+      }
+      finally
+      {
+         QLogger.deactivateCollectingLoggerForClass(ReconcileIndexStep.class);
+      }
+
+      assertThat(collectingLogger.getCollectedMessages())
+         .filteredOn(m -> Level.WARN.equals(m.getLevel()) && m.getMessage().contains("Could not count indexed documents"))
+         .singleElement()
+         .satisfies(m ->
+         {
+            assertThat(m.getMessage()).contains("\"tableName\":\"" + TEST_ENTITY_TABLE + "\"");
+            assertThat(m.getMessage()).contains("\"stackTrace\"").contains("count failed");
+         });
+
+      QRecord row = queryAll(QuickSearchIndex.TABLE_NAME).get(0);
+      assertThat(row.getValueString("lastRunStatus")).isEqualTo("RECONCILE COMPLETED");
+      assertThat(row.getValueInteger("recordCount")).isEqualTo(1);
+      assertThat(row.getValueInteger("documentCount")).isEqualTo(99);
+   }
+
+
+
+   /*******************************************************************************
     ** Test: the tableName input limits the run to that table.
     *******************************************************************************/
    @Test
@@ -294,12 +335,24 @@ class ReconcileIndexStepTest extends BaseQuickSearchTest
     *******************************************************************************/
    private void insertIndexRow(Boolean enabled) throws QException
    {
+      insertIndexRow(enabled, null);
+   }
+
+
+
+   /*******************************************************************************
+    ** Insert a quickSearchIndex row for testEntity with the given enabled flag
+    ** and documentCount.
+    *******************************************************************************/
+   private void insertIndexRow(Boolean enabled, Integer documentCount) throws QException
+   {
       InsertInput insertInput = new InsertInput();
       insertInput.setTableName(QuickSearchIndex.TABLE_NAME);
       insertInput.setRecords(List.of(new QRecord()
          .withValue("tableName", TEST_ENTITY_TABLE)
          .withValue("enabled", enabled)
          .withValue("basepullIntervalMinutes", 5)
+         .withValue("documentCount", documentCount)
          .withValue("status", "ACTIVE")));
       new InsertAction().execute(insertInput);
    }
@@ -384,6 +437,30 @@ class ReconcileIndexStepTest extends BaseQuickSearchTest
       QRecord row = queryAll(QuickSearchIndex.TABLE_NAME).get(0);
       assertThat(row.getValueString("lastRunStatus")).isEqualTo("RECONCILE FAILED");
       assertThat(row.getValueString("lastErrorMessage")).contains("connection refused");
+   }
+
+
+
+   /*******************************************************************************
+    ** Test: a reconcile finishing while a full reindex runs leaves the
+    ** REBUILDING status in place, so deletes are still captured.
+    *******************************************************************************/
+   @Test
+   void testReconcile_duringFullReindex_keepsRebuilding() throws QException
+   {
+      insertTestEntities(1);
+      InsertInput insertInput = new InsertInput();
+      insertInput.setTableName(QuickSearchIndex.TABLE_NAME);
+      insertInput.setRecords(List.of(new QRecord()
+         .withValue("tableName", TEST_ENTITY_TABLE)
+         .withValue("enabled", true)
+         .withValue("status", AbstractIndexingStep.STATUS_REBUILDING)));
+      new InsertAction().execute(insertInput);
+
+      new ReconcileIndexStep().run(new RunBackendStepInput(), new RunBackendStepOutput());
+
+      assertThat(queryAll(QuickSearchIndex.TABLE_NAME).get(0).getValueString("status")).isEqualTo(AbstractIndexingStep.STATUS_REBUILDING);
+      assertThat(indexedRecordIds()).containsExactly("1");
    }
 
 }
