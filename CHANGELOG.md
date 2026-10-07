@@ -2,6 +2,10 @@
 
 All notable changes to this project are documented here. The format follows Keep a Changelog; versions follow semantic versioning.
 
+## [1.0.0-RC.2] - 2026-10-06
+
+Second release candidate, published to Maven Central from `release/1.0`. Fixes the five pre-GA findings from the PR #10 review (#13 to #17); the changes are listed under 1.0.0 below. Requires QQQ 4.1. No schema change, but two new status values: `REBUILDING` on `quickSearchIndex.status` and `AWAITING_REINDEX` on `quickSearchFailedEvent.status`; a host that sized its own `quickSearchFailedEvent.status` column needs at least 16 characters. Known gaps before GA are tracked in #12.
+
 ## [1.0.0-RC.1] - 2026-10-05
 
 First release candidate of 1.0, published to Maven Central from `release/1.0`. It contains every change listed under 1.0.0 below. Requires QQQ 4.1 (built against 4.1.0-RC.1). Known gaps before GA are tracked in #12.
@@ -35,13 +39,22 @@ Requires QQQ 4.1. Closes every blocker of the 2026-10-04 production-readiness au
 - `IndexingUtils.normalizeSearchText` no longer lower-cases (analyzers do).
 - `enableScheduledProcesses` is deprecated in favour of `enableBasepullProcess` and `enableMaintenanceProcesses`.
 - `QuickSearchQBitContext` is deprecated; state lives on `QuickSearchRuntime`, resolved from the `QInstance`.
+- Search `offset` counts results the session can read. With record security locks on, hits are scanned from the start in batches of at most 1,000, filtered for access and deduplicated; one call reads at most 10,000 hits over 32 requests, and in per-table mode each of T tables gets max(10,000 / T, 2 x `limitPerTable`) hits. When that share runs out `hasMore` is false and `totalHitsIsLowerBound` is true. With locks on, `totalHits` counts hits confirmed readable. Per-table mode now honours `offset` (#16).
+- A full reindex of all tables marks each table `REBUILDING` while it runs; drift detection is suspended for those tables. After a killed run, run the full reindex again (#14).
 
 ### Removed
 - The three table customizers (`QuickSearchPostInsertCustomizer`, `QuickSearchPostUpdateCustomizer`, `QuickSearchPostDeleteCustomizer`), replaced by `QuickSearchRecordChangeListener`.
 - Support for QQQ 4.0.
 
+### Security
+- `opensearchUrl` with userinfo (`https://user:pass@host`) fails validation; an `${env.X}` or `${prop.X}` credential or TLS path that resolves to an empty or blank value fails transport creation and names the field, never the value; `tls.hostnameVerification=false` logs a warning (#15).
+
 ### Fixed
 - Rolled-back writes could be indexed; real-time failures were silent; basepull lost rows modified during a run and rows at the boundary second; unordered paging skipped or duplicated rows; full reindex blanked search; search leaked labels and snippets across tables regardless of permissions; mixed field types across tables broke indexing; non-text searchable fields failed every search; record labels were null for annotation tables; duplicate `quickSearchIndex` rows on concurrent first runs; unbounded `limit`/`offset`; unchecked `OpenSearchException`; unreachable cluster at startup left the host healthy with search broken.
+- Deletes made during a full reindex of all tables were lost from the new index; they are now captured and applied after the alias swap (#14).
+- An update was dropped without a `quickSearchFailedEvent` row when the listener's re-read failed or the optional AWS SDK was missing (`LinkageError`); both are now recorded for basepull, and a `DEGRADED` start without the AWS SDK no longer aborts host startup (#13).
+- Search pages overlapped under record locks, per-table mode ignored `offset`, and a large `maxSearchLimit` could exceed the 10,000 result window (#16).
+- A failing document count was swallowed and cleared `documentCount`; it is now logged at warn and the previous count is kept (#17).
 
 ## [0.2.0] - 2026-03-30
 - Config-driven table indexing (`SearchableTableConfig`).
