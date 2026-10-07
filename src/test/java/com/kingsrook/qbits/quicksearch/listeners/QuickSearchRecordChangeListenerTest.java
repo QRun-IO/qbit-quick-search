@@ -41,6 +41,7 @@ import com.kingsrook.qbits.quicksearch.QuickSearchRuntime;
 import com.kingsrook.qbits.quicksearch.QuickSearchableTableConfig;
 import com.kingsrook.qbits.quicksearch.model.QuickSearchFailedEvent;
 import com.kingsrook.qbits.quicksearch.model.QuickSearchIndex;
+import com.kingsrook.qbits.quicksearch.processes.AbstractIndexingStep;
 import com.kingsrook.qbits.quicksearch.publisher.IndexEvent;
 import com.kingsrook.qbits.quicksearch.publisher.IndexEventAction;
 import com.kingsrook.qbits.quicksearch.publisher.IndexEventPublisher;
@@ -49,6 +50,7 @@ import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.anyList;
+import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
@@ -228,6 +230,140 @@ class QuickSearchRecordChangeListenerTest extends BaseQuickSearchTest
 
       insert("widget", null);
       verify(publisher, never()).publishIndexEvents(anyList());
+   }
+
+
+
+   @Test
+   void testDelete_duringFullReindex_isCapturedForTheNewIndex() throws QException
+   {
+      insertIndexRowWithStatus(AbstractIndexingStep.STATUS_REBUILDING);
+      Integer id = insert("widget", null);
+      delete(id);
+
+      verify(publisher, times(1)).publishDeleteEvents(anyList());
+
+      List<QRecord> captured = queryFailedEvents();
+      assertThat(captured).hasSize(1);
+      assertThat(captured.get(0).getValueString("tableName")).isEqualTo(TEST_ENTITY_TABLE);
+      assertThat(captured.get(0).getValueString("recordId")).isEqualTo(String.valueOf(id));
+      assertThat(captured.get(0).getValueString("action")).isEqualTo("DELETE");
+      assertThat(captured.get(0).getValueString("status")).isEqualTo(QuickSearchFailedEvent.STATUS_AWAITING_REINDEX);
+   }
+
+
+
+   @Test
+   void testDelete_publishFailureDuringFullReindex_recordsBothRows() throws QException
+   {
+      doThrow(new QException("cluster down")).when(publisher).publishDeleteEvents(anyList());
+      insertIndexRowWithStatus(AbstractIndexingStep.STATUS_REBUILDING);
+      delete(insert("widget", null));
+
+      assertThat(queryFailedEvents()).extracting(r -> r.getValueString("status"))
+         .containsExactlyInAnyOrder(QuickSearchFailedEvent.STATUS_PENDING, QuickSearchFailedEvent.STATUS_AWAITING_REINDEX);
+   }
+
+
+
+   @Test
+   void testDelete_withoutFullReindex_isNotCaptured() throws QException
+   {
+      insertIndexRowWithStatus(AbstractIndexingStep.STATUS_ACTIVE);
+      delete(insert("widget", null));
+
+      verify(publisher, times(1)).publishDeleteEvents(anyList());
+      assertThat(queryFailedEvents()).isEmpty();
+   }
+
+
+
+   @Test
+   void testCapture_rebuildFinishedBeforeInsert_handsRowsToBasepull() throws QException
+   {
+      ////////////////////////////////////////////////////////////////////////
+      // the second read sees the rebuild finished, as if it ended between //
+      // the first read and the insert                                     //
+      ////////////////////////////////////////////////////////////////////////
+      insertIndexRowWithStatus(AbstractIndexingStep.STATUS_ACTIVE);
+      List<IndexEvent> events = List.of(new IndexEvent().withAction(IndexEventAction.DELETE).withTableName(TEST_ENTITY_TABLE).withRecordId("7"));
+
+      List<QRecord> inserted = QuickSearchRecordChangeListener.insertFailedEventRows(runtime, events, "captured", QuickSearchFailedEvent.STATUS_AWAITING_REINDEX);
+      QuickSearchRecordChangeListener.handOverIfRebuildFinished(runtime, TEST_ENTITY_TABLE, inserted);
+
+      List<QRecord> rows = queryFailedEvents();
+      assertThat(rows).hasSize(1);
+      assertThat(rows.get(0).getValueString("status")).isEqualTo(QuickSearchFailedEvent.STATUS_PENDING);
+   }
+
+
+
+   private void delete(Integer id) throws QException
+   {
+      DeleteInput deleteInput = new DeleteInput();
+      deleteInput.setTableName(TEST_ENTITY_TABLE);
+      deleteInput.setPrimaryKeys(List.of(id));
+      new DeleteAction().execute(deleteInput);
+   }
+
+
+
+   private void insertIndexRowWithStatus(String status) throws QException
+   {
+      InsertInput insertInput = new InsertInput();
+      insertInput.setTableName(QuickSearchIndex.TABLE_NAME);
+      insertInput.setRecords(List.of(new QRecord().withValue("tableName", TEST_ENTITY_TABLE).withValue("enabled", true).withValue("status", status)));
+      new InsertAction().execute(insertInput);
+      runtime.invalidateEnabledCache();
+   }
+
+
+
+   private List<QRecord> queryFailedEvents() throws QException
+   {
+      QueryInput queryInput = new QueryInput();
+      queryInput.setTableName(QuickSearchFailedEvent.TABLE_NAME);
+      return (new QueryAction().execute(queryInput).getRecords());
+   }
+
+
+
+   @Test
+   void testDelete_rebuildEndsDuringPublish_isStillCaptured() throws QException
+   {
+      ////////////////////////////////////////////////////////////////////////////
+      // the reindex swaps the alias and clears REBUILDING while the delete is //
+      // being published to the old index: the status read must come first    //
+      ////////////////////////////////////////////////////////////////////////////
+      insertIndexRowWithStatus(AbstractIndexingStep.STATUS_REBUILDING);
+      Integer id = insert("widget", null);
+      doAnswer(invocation ->
+      {
+         setIndexRowStatus(AbstractIndexingStep.STATUS_ACTIVE);
+         return (null);
+      }).when(publisher).publishDeleteEvents(anyList());
+
+      delete(id);
+
+      List<QRecord> rows = queryFailedEvents();
+      assertThat(rows).hasSize(1);
+      assertThat(rows.get(0).getValueString("recordId")).isEqualTo(String.valueOf(id));
+      assertThat(rows.get(0).getValueString("action")).isEqualTo("DELETE");
+      assertThat(rows.get(0).getValueString("status")).isEqualTo(QuickSearchFailedEvent.STATUS_PENDING);
+   }
+
+
+
+   private void setIndexRowStatus(String status) throws QException
+   {
+      QueryInput queryInput = new QueryInput();
+      queryInput.setTableName(QuickSearchIndex.TABLE_NAME);
+      QRecord row = new QueryAction().execute(queryInput).getRecords().get(0);
+
+      UpdateInput updateInput = new UpdateInput();
+      updateInput.setTableName(QuickSearchIndex.TABLE_NAME);
+      updateInput.setRecords(List.of(new QRecord().withValue("id", row.getValue("id")).withValue("status", status)));
+      new UpdateAction().execute(updateInput);
    }
 
 }

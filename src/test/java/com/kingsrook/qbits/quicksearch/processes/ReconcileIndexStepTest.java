@@ -439,4 +439,28 @@ class ReconcileIndexStepTest extends BaseQuickSearchTest
       assertThat(row.getValueString("lastErrorMessage")).contains("connection refused");
    }
 
+
+
+   /*******************************************************************************
+    ** Test: a reconcile finishing while a full reindex runs leaves the
+    ** REBUILDING status in place, so deletes are still captured.
+    *******************************************************************************/
+   @Test
+   void testReconcile_duringFullReindex_keepsRebuilding() throws QException
+   {
+      insertTestEntities(1);
+      InsertInput insertInput = new InsertInput();
+      insertInput.setTableName(QuickSearchIndex.TABLE_NAME);
+      insertInput.setRecords(List.of(new QRecord()
+         .withValue("tableName", TEST_ENTITY_TABLE)
+         .withValue("enabled", true)
+         .withValue("status", AbstractIndexingStep.STATUS_REBUILDING)));
+      new InsertAction().execute(insertInput);
+
+      new ReconcileIndexStep().run(new RunBackendStepInput(), new RunBackendStepOutput());
+
+      assertThat(queryAll(QuickSearchIndex.TABLE_NAME).get(0).getValueString("status")).isEqualTo(AbstractIndexingStep.STATUS_REBUILDING);
+      assertThat(indexedRecordIds()).containsExactly("1");
+   }
+
 }

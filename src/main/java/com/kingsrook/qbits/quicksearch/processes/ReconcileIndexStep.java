@@ -150,7 +150,13 @@ public class ReconcileIndexStep extends AbstractIndexingStep
                values.put("documentCount", documentCount);
             }
             values.put("searchableFieldsJson", buildSearchableFieldsJson(tableConfig));
-            values.put("status", STATUS_ACTIVE);
+            ////////////////////////////////////////////////////////////////////
+            // a full reindex running alongside owns the status until it ends //
+            ////////////////////////////////////////////////////////////////////
+            if(!STATUS_REBUILDING.equals(queryIndexRow(tableName).getValueString("status")))
+            {
+               values.put("status", STATUS_ACTIVE);
+            }
             if(ReconcileIndexStep.RUN_TYPE.equals(runType) == false)
             {
                values.put("lastFullReindexTime", Instant.now());

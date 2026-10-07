@@ -65,6 +65,7 @@ public abstract class AbstractIndexingStep implements BackendStep
 
    public static final String STATUS_ACTIVE        = "ACTIVE";
    public static final String STATUS_NEEDS_REINDEX = "NEEDS_REINDEX";
+   public static final String STATUS_REBUILDING    = "REBUILDING";
    public static final String RUN_COMPLETED        = "COMPLETED";
    public static final String RUN_FAILED           = "FAILED";
    public static final String RUN_RUNNING          = "RUNNING";
@@ -219,6 +220,8 @@ public abstract class AbstractIndexingStep implements BackendStep
    /*******************************************************************************
     ** Compare the configured fields with what the row was created with; mark
     ** the row NEEDS_REINDEX when they differ. Returns true when drift was found.
+    ** A REBUILDING row is left alone: the full reindex in progress records the
+    ** current fields, and the status tells the listener to capture deletes.
     *******************************************************************************/
    protected boolean detectDrift(QRecord row, QuickSearchableTableConfig tableConfig) throws QException
    {
@@ -227,16 +230,49 @@ public abstract class AbstractIndexingStep implements BackendStep
          return (false);
       }
 
-      String current  = buildSearchableFieldsJson(tableConfig);
-      String recorded = row.getValueString("searchableFieldsJson");
-      if(recorded == null || recorded.equals(current) || STATUS_NEEDS_REINDEX.equals(row.getValueString("status")))
+      String current = buildSearchableFieldsJson(tableConfig);
+      if(!isUnmarkedDrift(row, current))
       {
-         return (recorded != null && !recorded.equals(current));
+         return (hasDrift(row, current));
       }
 
+      ///////////////////////////////////////////////////////////////////////////
+      // the row may be a snapshot taken before a full reindex started or     //
+      // finished; decide on a fresh read, so REBUILDING is kept and fields a //
+      // reindex has since recorded are not flagged                           //
+      ///////////////////////////////////////////////////////////////////////////
+      QRecord latest = queryIndexRow(tableConfig.getTableName());
+      if(latest == null || !isUnmarkedDrift(latest, current))
+      {
+         return (latest != null && hasDrift(latest, current));
+      }
+
+      // a status change in the moment between this read and the update below is not guarded
       LOG.warn("Searchable field configuration changed since the index row was created; marking NEEDS_REINDEX", logPair("tableName", tableConfig.getTableName()));
-      updateIndexRow(row.getValueInteger("id"), Map.of("status", STATUS_NEEDS_REINDEX));
+      updateIndexRow(latest.getValueInteger("id"), Map.of("status", STATUS_NEEDS_REINDEX));
       return (true);
+   }
+
+
+
+   /*******************************************************************************
+    ** Whether the row records fields that differ from the configured ones.
+    *******************************************************************************/
+   private static boolean hasDrift(QRecord row, String current)
+   {
+      String recorded = row.getValueString("searchableFieldsJson");
+      return (recorded != null && !recorded.equals(current));
+   }
+
+
+
+   /*******************************************************************************
+    ** Whether the row has drifted and is not yet NEEDS_REINDEX or REBUILDING.
+    *******************************************************************************/
+   private static boolean isUnmarkedDrift(QRecord row, String current)
+   {
+      String status = row.getValueString("status");
+      return (hasDrift(row, current) && !STATUS_NEEDS_REINDEX.equals(status) && !STATUS_REBUILDING.equals(status));
    }
 
 
