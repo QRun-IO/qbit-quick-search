@@ -2,7 +2,7 @@
 
 ## Before tagging 1.0.0
 
-- [ ] qqq-all and Voyage adopt `1.0.0-RC.1` (items below) and report back.
+- [ ] qqq-all and Voyage adopt `1.0.0-RC.2` (items below) and report back.
 
 - [x] PR #10 (`feature/GH-1-0-release-readiness`) opened and reviewed 2026-10-05; `AGENTS.md` kept.
 - [ ] Re-pin to `qbit-build-parent` 2.1.0 when qbit-bom publishes it, and remove the `activeByDefault` on the `qqq-snapshot` profile (ADR-0007).
@@ -17,11 +17,14 @@
 
 ## Before 1.0.0 GA (from the PR #10 review, 2026-10-05; filed as #13 to #17 under #12)
 
-- [ ] Listener: if the in-transaction re-read in `fetchCurrentRecords` throws, record a `quickSearchFailedEvent` row from the event's primary keys instead of dropping the update (`QuickSearchRecordChangeListener`).
-- [ ] Full reindex: deletes that arrive during a rebuild are not replayed into the new index; capture them (failed-event or a delete log) and apply after the swap.
-- [ ] Transport: warn when `tls.hostnameVerification=false`; treat an empty `${env.X}` value as missing and name the field; reject userinfo in `opensearchUrl`.
-- [ ] Search: with record locks on, `offset` counts raw hits, so pages can overlap; per-table mode ignores `offset`; cap `fetchSize` at the 10,000 window.
-- [ ] `safeCount` in `BasepullIndexStep` swallows exceptions silently; log at warn.
+- [x] #13 Listener: a failed in-transaction re-read or a missing AWS SDK (`LinkageError`) records `quickSearchFailedEvent` rows (PR #22).
+- [x] #14 Full reindex: deletes made during a rebuild are captured (`REBUILDING`, `AWAITING_REINDEX`) and applied after the alias swap (PR #20).
+- [x] #15 Transport: warn on `tls.hostnameVerification=false`, empty `${env.X}` treated as missing, userinfo in `opensearchUrl` rejected (PR #18).
+- [x] #16 Search: `offset` counts readable results under record locks, per-table `offset`, bounded scan and 10,000 window cap (PR #19).
+- [x] #17 `safeCount` logs at warn and keeps the previous `documentCount` (PR #21).
+- [x] `1.0.0-RC.2` published to Maven Central from `release/1.0` (2026-10-06).
+- [ ] Stuck `REBUILDING` after a killed or overlapping full reindex (from the PR #20 review): only another all-tables reindex clears it, `AWAITING_REINDEX` rows accumulate and drift detection stays off for those tables. No data is lost. Fix needs a liveness check on the `FULL_REINDEX` run record before reconcile may reset the status, plus refusing a second concurrent full reindex.
+- [ ] Drift detection still writes `NEEDS_REINDEX` into `status`, so a few-millisecond window can overwrite `REBUILDING`; the durable fix is a separate drift field (schema change, so 1.1 at the earliest).
 
 ## Later (1.x)
 
