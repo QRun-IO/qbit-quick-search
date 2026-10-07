@@ -120,6 +120,8 @@ output.getTotalHits(); output.getTotalHitsIsLowerBound(); output.getHasMore();
 
 `limitPerTable` returns up to that many hits from each table instead of one ranked list. Terms shorter than 2 characters return nothing; longer than 100 characters are rejected. `limit` is capped at `maxSearchLimit` and `offset + limit` at 10,000.
 
+`offset` skips N accessible results: with record security locks on, hits a lock hides are not counted, so consecutive pages never overlap or skip a visible hit, and with `limitPerTable` the offset applies within each table. With locks on, `totalHits` counts hits confirmed accessible so far; `totalHitsIsLowerBound` is true when the scan stopped before reading every candidate (page full, result window, or scan budget). A single-list search reads at most 10,000 raw hits in batches of at most 1,000. In per-table mode the T tables share that budget, each getting max(10,000 / T, 2 x `limitPerTable`) hits, so one call reads at most max(10,000, T x 2 x `limitPerTable`) raw hits. Paging within a table stops past that share of raw hits, as it does past 10,000 in a single list: `hasMore` turns false and `totalHitsIsLowerBound` stays true to signal unreachable matches.
+
 Search runs as the current `QContext` session: tables the session cannot read are skipped, and with `applyRecordSecurityLocks` (default) hits are re-read through `QueryAction` so record security locks apply.
 
 ### Processes
