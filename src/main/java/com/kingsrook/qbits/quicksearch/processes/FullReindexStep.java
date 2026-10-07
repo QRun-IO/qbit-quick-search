@@ -150,7 +150,11 @@ public class FullReindexStep extends AbstractIndexingStep
             values.put("lastFullReindexTime", Instant.now());
             values.put("lastBasepullTime", startTimes.get(tableName));
             values.put("recordCount", tableCounts.processed());
-            values.put("documentCount", ReconcileIndexStep.safeCount(client, tableName));
+            Integer documentCount = ReconcileIndexStep.safeCount(client, tableName);
+            if(documentCount != null)
+            {
+               values.put("documentCount", documentCount);
+            }
             values.put("searchableFieldsJson", buildSearchableFieldsJson(tableConfig));
             values.put("status", STATUS_ACTIVE);
             updateIndexRow(runs.get(tableConfig).getQuickSearchIndexId(), values);

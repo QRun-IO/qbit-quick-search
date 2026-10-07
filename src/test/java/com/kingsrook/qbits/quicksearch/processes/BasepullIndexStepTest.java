@@ -30,6 +30,8 @@ import com.kingsrook.qqq.backend.core.actions.tables.QueryAction;
 import com.kingsrook.qqq.backend.core.actions.tables.UpdateAction;
 import com.kingsrook.qqq.backend.core.context.QContext;
 import com.kingsrook.qqq.backend.core.exceptions.QException;
+import com.kingsrook.qqq.backend.core.logging.QCollectingLogger;
+import com.kingsrook.qqq.backend.core.logging.QLogger;
 import com.kingsrook.qqq.backend.core.model.actions.processes.RunBackendStepInput;
 import com.kingsrook.qqq.backend.core.model.actions.processes.RunBackendStepOutput;
 import com.kingsrook.qqq.backend.core.model.actions.tables.delete.DeleteInput;
@@ -50,6 +52,7 @@ import com.kingsrook.qbits.quicksearch.model.QuickSearchIndexRun;
 import com.kingsrook.qbits.quicksearch.opensearch.BulkIndexResult;
 import com.kingsrook.qbits.quicksearch.opensearch.OpenSearchDocument;
 import com.kingsrook.qbits.quicksearch.opensearch.QuickSearchOpenSearchClient;
+import org.apache.logging.log4j.Level;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
@@ -313,6 +316,53 @@ class BasepullIndexStepTest extends BaseQuickSearchTest
 
       assertThat(output.getValueInteger("tablesIndexed")).isEqualTo(1);
       assertThat(output.getValueInteger("failedEventsReplayed")).isEqualTo(0);
+   }
+
+
+
+   /*******************************************************************************
+    ** Test: a failing document count is logged at WARN with the table name, and
+    ** the run still completes, keeping the previous documentCount.
+    *******************************************************************************/
+   @Test
+   void testDocumentCountFails_loggedAsWarning_previousCountKept() throws QException
+   {
+      insertTestEntities(1);
+      QRecord indexRow = insertIndexRow(TEST_ENTITY_TABLE, true, null, 5);
+
+      UpdateInput seedInput = new UpdateInput();
+      seedInput.setTableName(QuickSearchIndex.TABLE_NAME);
+      seedInput.setRecords(List.of(new QRecord().withValue("id", indexRow.getValue("id")).withValue("documentCount", 99)));
+      new UpdateAction().execute(seedInput);
+
+      when(mockClient.countDocumentsForTable(TEST_ENTITY_TABLE)).thenThrow(new QException("count failed"));
+
+      //////////////////////////////////////////////////////////////////
+      // the count, and so its warning, belongs to ReconcileIndexStep //
+      //////////////////////////////////////////////////////////////////
+      QCollectingLogger collectingLogger = QLogger.activateCollectingLoggerForClass(ReconcileIndexStep.class);
+      try
+      {
+         new BasepullIndexStep().run(new RunBackendStepInput(), new RunBackendStepOutput());
+      }
+      finally
+      {
+         QLogger.deactivateCollectingLoggerForClass(ReconcileIndexStep.class);
+      }
+
+      assertThat(collectingLogger.getCollectedMessages())
+         .filteredOn(m -> Level.WARN.equals(m.getLevel()) && m.getMessage().contains("Could not count indexed documents"))
+         .singleElement()
+         .satisfies(m ->
+         {
+            assertThat(m.getMessage()).contains("\"tableName\":\"" + TEST_ENTITY_TABLE + "\"");
+            assertThat(m.getMessage()).contains("\"stackTrace\"").contains("count failed");
+         });
+
+      QRecord row = queryAll(QuickSearchIndex.TABLE_NAME).get(0);
+      assertThat(row.getValueString("lastRunStatus")).isEqualTo("BASEPULL COMPLETED");
+      assertThat(row.getValue("lastBasepullTime")).isNotNull();
+      assertThat(row.getValueInteger("documentCount")).isEqualTo(99);
    }
 
 
