@@ -61,6 +61,15 @@ public class QuickSearchQBitConfig implements QBitConfig
    public static final String DEFAULT_ADMIN_PERMISSION_BASE_NAME = "quickSearchAdmin";
    public static final String DEFAULT_BASEPULL_TIMESTAMP_FIELD   = "modifyDate";
 
+   ///////////////////////////////////////////////////////////////////////////////
+   // a live full reindex refreshes its run record after every page; a page is  //
+   // one source query plus sourceBatchSize / bulkBatchSize bulk requests, each //
+   // bounded by the transport timeouts (a few minutes at most by default),     //
+   // so 30 minutes leaves a wide margin before a slow run is judged dead, and  //
+   // basepull (every 5 minutes by default) recovers a dead one soon after      //
+   ///////////////////////////////////////////////////////////////////////////////
+   public static final Integer DEFAULT_FULL_REINDEX_STALE_MINUTES = 30;
+
    private static final Pattern INDEX_NAME_PATTERN = Pattern.compile("^[a-z0-9][a-z0-9_+.-]*$");
    private static final Set<String> AWS_SERVICE_NAMES = Set.of("es", "aoss");
 
@@ -95,6 +104,7 @@ public class QuickSearchQBitConfig implements QBitConfig
    private Integer basepullOverlapSeconds = 300;
    private Integer defaultBasepullIntervalMinutes = 5;
    private Integer runHistoryRetentionDays = 30;
+   private Integer fullReindexStaleMinutes = DEFAULT_FULL_REINDEX_STALE_MINUTES;
    private Integer bulkBatchSize = 500;
    private Integer sourceBatchSize = 1000;
    private Integer maxFieldLength = 10000;
@@ -389,6 +399,7 @@ public class QuickSearchQBitConfig implements QBitConfig
       requirePositive(maxSearchLimit, "maxSearchLimit", errors);
       requirePositive(maxFieldLength, "maxFieldLength", errors);
       requirePositive(runHistoryRetentionDays, "runHistoryRetentionDays", errors);
+      requirePositive(fullReindexStaleMinutes, "fullReindexStaleMinutes", errors);
 
       if(basepullOverlapSeconds != null && basepullOverlapSeconds < 0)
       {
@@ -554,6 +565,17 @@ public class QuickSearchQBitConfig implements QBitConfig
    public String getEffectiveAwsServiceName()
    {
       return (StringUtils.hasContent(awsServiceName) ? awsServiceName.toLowerCase() : "es");
+   }
+
+
+
+   /*******************************************************************************
+    ** fullReindexStaleMinutes, defaulting to DEFAULT_FULL_REINDEX_STALE_MINUTES.
+    *******************************************************************************/
+   @JsonIgnore
+   public Integer getEffectiveFullReindexStaleMinutes()
+   {
+      return (fullReindexStaleMinutes == null ? DEFAULT_FULL_REINDEX_STALE_MINUTES : fullReindexStaleMinutes);
    }
 
 
@@ -1732,6 +1754,38 @@ public class QuickSearchQBitConfig implements QBitConfig
    public QuickSearchQBitConfig withRunHistoryRetentionDays(Integer runHistoryRetentionDays)
    {
       this.runHistoryRetentionDays = runHistoryRetentionDays;
+      return (this);
+   }
+
+
+
+
+   /*******************************************************************************
+    ** Getter for fullReindexStaleMinutes: a RUNNING full reindex whose run record shows no sign of life (start or heartbeat) for this many minutes is treated as stopped; null means the default
+    *******************************************************************************/
+   public Integer getFullReindexStaleMinutes()
+   {
+      return (this.fullReindexStaleMinutes);
+   }
+
+
+
+   /*******************************************************************************
+    ** Setter for fullReindexStaleMinutes
+    *******************************************************************************/
+   public void setFullReindexStaleMinutes(Integer fullReindexStaleMinutes)
+   {
+      this.fullReindexStaleMinutes = fullReindexStaleMinutes;
+   }
+
+
+
+   /*******************************************************************************
+    ** Fluent setter for fullReindexStaleMinutes
+    *******************************************************************************/
+   public QuickSearchQBitConfig withFullReindexStaleMinutes(Integer fullReindexStaleMinutes)
+   {
+      this.fullReindexStaleMinutes = fullReindexStaleMinutes;
       return (this);
    }
 

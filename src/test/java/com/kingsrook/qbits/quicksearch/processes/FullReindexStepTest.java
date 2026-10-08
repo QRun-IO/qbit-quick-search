@@ -17,9 +17,12 @@
 package com.kingsrook.qbits.quicksearch.processes;
 
 
+import java.time.Instant;
+import java.time.temporal.ChronoUnit;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Set;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import com.kingsrook.qqq.backend.core.actions.tables.DeleteAction;
 import com.kingsrook.qqq.backend.core.actions.tables.InsertAction;
@@ -556,9 +559,9 @@ class FullReindexStepTest extends BaseQuickSearchTest
       new FullReindexStep()
       {
          @Override
-         protected IndexCounts indexAllRecords(QuickSearchOpenSearchClient client, QuickSearchableTableConfig tableConfig, List<QFilterCriteria> extraCriteria, String targetIndex) throws QException
+         protected IndexCounts indexAllRecords(QuickSearchOpenSearchClient client, QuickSearchableTableConfig tableConfig, List<QFilterCriteria> extraCriteria, String targetIndex, QuickSearchIndexRun run) throws QException
          {
-            IndexCounts counts = super.indexAllRecords(client, tableConfig, extraCriteria, targetIndex);
+            IndexCounts counts = super.indexAllRecords(client, tableConfig, extraCriteria, targetIndex, run);
             statusesDuringRebuild.add(FullReindexStepTest.this.queryIndexRow().getValueString("status"));
             insertCapturedDelete("7");
             return (counts);
@@ -749,6 +752,411 @@ class FullReindexStepTest extends BaseQuickSearchTest
       assertThat(rows).hasSize(1);
       assertThat(rows.get(0).getValueString("recordId")).isEqualTo("8");
       assertThat(rows.get(0).getValueString("status")).isEqualTo(QuickSearchFailedEvent.STATUS_AWAITING_REINDEX);
+   }
+
+
+
+   /*******************************************************************************
+    ** Insert a RUNNING FULL_REINDEX run record for the given index row, started
+    ** startedMinutesAgo and last refreshed (heartbeat) heartbeatMinutesAgo.
+    *******************************************************************************/
+   private QRecord insertRunningRun(Integer quickSearchIndexId, long startedMinutesAgo, long heartbeatMinutesAgo) throws QException
+   {
+      InsertInput insertInput = new InsertInput();
+      insertInput.setTableName(QuickSearchIndexRun.TABLE_NAME);
+      insertInput.setRecords(List.of(new QRecord()
+         .withValue("quickSearchIndexId", quickSearchIndexId)
+         .withValue("runType", FullReindexStep.RUN_TYPE)
+         .withValue("status", AbstractIndexingStep.RUN_RUNNING)));
+      QRecord run = new InsertAction().execute(insertInput).getRecords().get(0);
+      setRunTimes(run.getValueInteger("id"), Instant.now().minus(startedMinutesAgo, ChronoUnit.MINUTES), Instant.now().minus(heartbeatMinutesAgo, ChronoUnit.MINUTES));
+      return (queryRun(run.getValueInteger("id")));
+   }
+
+
+
+   /*******************************************************************************
+    ** Move a run record's start and heartbeat two hours into the past, as if
+    ** its run had stopped refreshing it.
+    *******************************************************************************/
+   private void backdateRun(Integer runId) throws QException
+   {
+      Instant twoHoursAgo = Instant.now().minus(2, ChronoUnit.HOURS);
+      setRunTimes(runId, twoHoursAgo, twoHoursAgo);
+   }
+
+
+
+   /*******************************************************************************
+    ** Set a run record's startTime and modifyDate, without QQQ stamping the
+    ** modifyDate with the current time.
+    *******************************************************************************/
+   private void setRunTimes(Integer runId, Instant startTime, Instant modifyDate) throws QException
+   {
+      UpdateInput updateInput = new UpdateInput();
+      updateInput.setTableName(QuickSearchIndexRun.TABLE_NAME);
+      updateInput.setOmitModifyDateUpdate(true);
+      updateInput.setRecords(List.of(new QRecord().withValue("id", runId).withValue("startTime", startTime).withValue("modifyDate", modifyDate)));
+      new UpdateAction().execute(updateInput);
+   }
+
+
+
+   /*******************************************************************************
+    ** The run record with the given id.
+    *******************************************************************************/
+   private QRecord queryRun(Integer runId) throws QException
+   {
+      return (queryAll(QuickSearchIndexRun.TABLE_NAME).stream()
+         .filter(run -> runId.equals(run.getValueInteger("id")))
+         .findFirst().orElseThrow());
+   }
+
+
+
+   /*******************************************************************************
+    ** Set the status and lastBasepullTime on the testEntity quickSearchIndex row.
+    *******************************************************************************/
+   private void updateIndexRow(String status, Instant lastBasepullTime) throws QException
+   {
+      UpdateInput updateInput = new UpdateInput();
+      updateInput.setTableName(QuickSearchIndex.TABLE_NAME);
+      updateInput.setRecords(List.of(new QRecord().withValue("id", queryIndexRow().getValue("id"))
+         .withValue("status", status)
+         .withValue("lastBasepullTime", lastBasepullTime)));
+      new UpdateAction().execute(updateInput);
+   }
+
+
+
+   /*******************************************************************************
+    ** Test: a full reindex whose run record is fresh blocks a second one, which
+    ** fails before it creates anything.
+    *******************************************************************************/
+   @Test
+   void testLiveRun_blocksASecondRun() throws QException
+   {
+      insertTestEntities(1);
+      insertIndexRow(true);
+      insertRunningRun(queryIndexRow().getValueInteger("id"), 1, 1);
+
+      assertThatThrownBy(() -> new FullReindexStep().run(new RunBackendStepInput(), new RunBackendStepOutput()))
+         .isInstanceOf(QException.class)
+         .hasMessageContaining("already running");
+
+      verify(mockClient, never()).createPhysicalIndex(anyString());
+      verify(mockClient, never()).indexDocuments(anyString(), anyList(), anyInt());
+      assertThat(queryAll(QuickSearchIndexRun.TABLE_NAME)).singleElement()
+         .satisfies(run -> assertThat(run.getValueString("status")).isEqualTo(AbstractIndexingStep.RUN_RUNNING));
+   }
+
+
+
+   /*******************************************************************************
+    ** Test: a live full reindex also blocks a single-table full reindex.
+    *******************************************************************************/
+   @Test
+   void testLiveRun_blocksASingleTableRun() throws QException
+   {
+      insertTestEntities(1);
+      insertIndexRow(true);
+      insertRunningRun(queryIndexRow().getValueInteger("id"), 1, 1);
+
+      assertThatThrownBy(() -> new FullReindexStep().run(inputForTable(TEST_ENTITY_TABLE), new RunBackendStepOutput()))
+         .isInstanceOf(QException.class)
+         .hasMessageContaining("already running");
+
+      verify(mockClient, never()).indexDocuments(anyList(), anyInt());
+      assertThat(queryAll(QuickSearchIndexRun.TABLE_NAME)).hasSize(1);
+   }
+
+
+
+   /*******************************************************************************
+    ** Test: a dead run (no heartbeat past the threshold) does not block a new
+    ** one; it is recovered first, and the deletes it captured wait for the new
+    ** run, which applies them after its swap.
+    *******************************************************************************/
+   @Test
+   void testStaleRun_doesNotBlock_andIsRecovered() throws QException
+   {
+      insertTestEntities(2);
+      insertIndexRow(true);
+      updateIndexRowStatus(AbstractIndexingStep.STATUS_REBUILDING);
+      Integer staleRunId = insertRunningRun(queryIndexRow().getValueInteger("id"), 120, 120).getValueInteger("id");
+      insertCapturedDelete("9");
+      when(mockClient.deleteDocuments(anyList(), anyInt())).thenReturn(new BulkIndexResult().withSuccessCount(1));
+
+      RunBackendStepOutput output = new RunBackendStepOutput();
+      new FullReindexStep().run(new RunBackendStepInput(), output);
+
+      assertThat(output.getValueBoolean("aliasSwapped")).isTrue();
+      assertThat(queryRun(staleRunId).getValueString("status")).isEqualTo(AbstractIndexingStep.RUN_FAILED);
+      assertThat(queryRun(staleRunId).getValueString("errorMessage")).contains("stopped without finishing");
+      assertThat(queryIndexRow().getValueString("status")).isEqualTo(AbstractIndexingStep.STATUS_ACTIVE);
+
+      InOrder inOrder = inOrder(mockClient);
+      inOrder.verify(mockClient).swapAliasTo(PHYSICAL_INDEX);
+      inOrder.verify(mockClient).deleteDocuments(eq(List.of(TEST_ENTITY_TABLE + ":9")), anyInt());
+      assertThat(queryAll(QuickSearchFailedEvent.TABLE_NAME)).isEmpty();
+   }
+
+
+
+   /*******************************************************************************
+    ** Test: the run records stay RUNNING while the captured deletes are applied
+    ** after the swap, so a basepull meanwhile leaves those rows to this run.
+    *******************************************************************************/
+   @Test
+   void testAllTables_runStaysRunningUntilCapturedDeletesAreApplied() throws QException
+   {
+      insertTestEntities(1);
+      insertCapturedDelete("9");
+
+      List<String> runStatusesWhileApplying = new ArrayList<>();
+      when(mockClient.deleteDocuments(anyList(), anyInt())).thenAnswer(invocation ->
+      {
+         queryAll(QuickSearchIndexRun.TABLE_NAME).forEach(run -> runStatusesWhileApplying.add(run.getValueString("status")));
+         return (new BulkIndexResult().withSuccessCount(1));
+      });
+
+      new FullReindexStep().run(new RunBackendStepInput(), new RunBackendStepOutput());
+
+      assertThat(runStatusesWhileApplying).containsExactly(AbstractIndexingStep.RUN_RUNNING);
+      assertThat(queryAll(QuickSearchIndexRun.TABLE_NAME)).singleElement()
+         .satisfies(run -> assertThat(run.getValueString("status")).isEqualTo(AbstractIndexingStep.RUN_COMPLETED));
+   }
+
+
+
+   /*******************************************************************************
+    ** Test: the run record's modifyDate is refreshed after every page, so a
+    ** long rebuild keeps showing it is alive.
+    *******************************************************************************/
+   @Test
+   void testHeartbeat_refreshesTheRunRecordAfterEachPage() throws QException
+   {
+      QuickSearchQBitContext.getConfig().withSourceBatchSize(2);
+      insertTestEntities(5);
+      insertIndexRow(true);
+      Integer runId = insertRunningRun(queryIndexRow().getValueInteger("id"), 120, 120).getValueInteger("id");
+
+      List<Instant> heartbeatsSeenByEachBulk = new ArrayList<>();
+      when(mockClient.indexDocuments(anyString(), anyList(), anyInt())).thenAnswer(invocation ->
+      {
+         heartbeatsSeenByEachBulk.add(queryRun(runId).getValueInstant("modifyDate"));
+         return (new BulkIndexResult().withSuccessCount(((List<?>) invocation.getArgument(1)).size()));
+      });
+
+      Instant before = Instant.now();
+      new FullReindexStep().indexAllRecords(mockClient, QuickSearchQBitContext.getTableConfig(TEST_ENTITY_TABLE), List.of(), PHYSICAL_INDEX, new QuickSearchIndexRun().withId(runId));
+
+      assertThat(heartbeatsSeenByEachBulk).hasSize(3);
+      assertThat(heartbeatsSeenByEachBulk.get(0)).isBefore(before);
+      assertThat(heartbeatsSeenByEachBulk.get(1)).isAfterOrEqualTo(before);
+      assertThat(queryRun(runId).getValueInstant("modifyDate")).isAfterOrEqualTo(heartbeatsSeenByEachBulk.get(2));
+   }
+
+
+
+   /*******************************************************************************
+    ** Test: a run that stalls past the threshold is recovered by another node
+    ** while still going. It notices before its swap and stops without swapping
+    ** and without touching the tables or the captured deletes, which the
+    ** recovery already handed to basepull.
+    *******************************************************************************/
+   @Test
+   void testRunJudgedDead_recoveredWhileGoing_doesNotSwap() throws QException
+   {
+      insertTestEntities(1);
+
+      assertThatThrownBy(() -> new FullReindexStep()
+      {
+         @Override
+         protected IndexCounts indexAllRecords(QuickSearchOpenSearchClient client, QuickSearchableTableConfig tableConfig, List<QFilterCriteria> extraCriteria, String targetIndex, QuickSearchIndexRun run) throws QException
+         {
+            IndexCounts counts = super.indexAllRecords(client, tableConfig, extraCriteria, targetIndex, run);
+            insertCapturedDelete("7");
+            backdateRun(run.getId());
+            assertThat(new FullReindexStep().recoverDeadRun(true)).isEmpty();
+            return (counts);
+         }
+      }.run(new RunBackendStepInput(), new RunBackendStepOutput()))
+         .isInstanceOf(QException.class)
+         .hasMessageContaining("recovered");
+
+      verify(mockClient, never()).swapAliasTo(anyString());
+      verify(mockClient).deletePhysicalIndex(PHYSICAL_INDEX);
+      verify(mockClient, never()).deleteDocuments(anyList(), anyInt());
+      assertThat(queryIndexRow().getValueString("status")).isEqualTo(AbstractIndexingStep.STATUS_ACTIVE);
+      assertThat(queryAll(QuickSearchFailedEvent.TABLE_NAME)).singleElement()
+         .satisfies(row -> assertThat(row.getValueString("status")).isEqualTo(QuickSearchFailedEvent.STATUS_PENDING));
+   }
+
+
+
+   /*******************************************************************************
+    ** Test: a table that is no longer REBUILDING before the swap (a recovery
+    ** that read the run records just before this run created its own put it
+    ** back to ACTIVE) means a delete since may have reached only the old index,
+    ** so the run fails without swapping and applies its captured deletes to the
+    ** old index.
+    *******************************************************************************/
+   @Test
+   void testTableNoLongerRebuildingBeforeTheSwap_doesNotSwap() throws QException
+   {
+      insertTestEntities(1);
+      when(mockClient.deleteDocuments(anyList(), anyInt())).thenReturn(new BulkIndexResult().withSuccessCount(1));
+
+      assertThatThrownBy(() -> new FullReindexStep()
+      {
+         @Override
+         protected IndexCounts indexAllRecords(QuickSearchOpenSearchClient client, QuickSearchableTableConfig tableConfig, List<QFilterCriteria> extraCriteria, String targetIndex, QuickSearchIndexRun run) throws QException
+         {
+            IndexCounts counts = super.indexAllRecords(client, tableConfig, extraCriteria, targetIndex, run);
+            insertCapturedDelete("7");
+            updateIndexRowStatus(AbstractIndexingStep.STATUS_ACTIVE);
+            return (counts);
+         }
+      }.run(new RunBackendStepInput(), new RunBackendStepOutput()))
+         .isInstanceOf(QException.class)
+         .hasMessageContaining("no longer REBUILDING");
+
+      verify(mockClient, never()).swapAliasTo(anyString());
+      verify(mockClient).deleteDocuments(eq(List.of(TEST_ENTITY_TABLE + ":7")), anyInt());
+      assertThat(queryAll(QuickSearchFailedEvent.TABLE_NAME)).isEmpty();
+      assertThat(queryAll(QuickSearchIndexRun.TABLE_NAME)).singleElement()
+         .satisfies(run -> assertThat(run.getValueString("status")).isEqualTo(AbstractIndexingStep.RUN_FAILED));
+   }
+
+
+
+   /*******************************************************************************
+    ** Test: when another node starts a full reindex at the same moment (after
+    ** this one checked, before it created its run records), this one sees the
+    ** other's fresh run record and stops before it touches anything.
+    *******************************************************************************/
+   @Test
+   void testSimultaneousStart_secondRunStopsBeforeMarking() throws QException
+   {
+      insertTestEntities(1);
+      AtomicBoolean otherStarted = new AtomicBoolean(false);
+
+      assertThatThrownBy(() -> new FullReindexStep()
+      {
+         @Override
+         protected QuickSearchIndexRun createRunRecord(Integer indexId, String runType) throws QException
+         {
+            if(otherStarted.compareAndSet(false, true))
+            {
+               insertRunningRun(indexId, 0, 0);
+            }
+            return (super.createRunRecord(indexId, runType));
+         }
+      }.run(new RunBackendStepInput(), new RunBackendStepOutput()))
+         .isInstanceOf(QException.class)
+         .hasMessageContaining("already running");
+
+      verify(mockClient, never()).createPhysicalIndex(anyString());
+      verify(mockClient, never()).swapAliasTo(anyString());
+      assertThat(queryIndexRow().getValueString("status")).isEqualTo(AbstractIndexingStep.STATUS_ACTIVE);
+      assertThat(queryAll(QuickSearchIndexRun.TABLE_NAME)).extracting(run -> run.getValueString("status"))
+         .containsExactlyInAnyOrder(AbstractIndexingStep.RUN_RUNNING, AbstractIndexingStep.RUN_FAILED);
+   }
+
+
+
+   /*******************************************************************************
+    ** Test: recovering a dead run marks its record FAILED, puts the table back
+    ** to ACTIVE with the basepull watermark rewound to the run's start, and
+    ** hands the captured deletes to basepull.
+    *******************************************************************************/
+   @Test
+   void testRecovery_deadRun_restoresTableAndHandsCapturedDeletesToBasepull() throws QException
+   {
+      insertIndexRow(true);
+      updateIndexRow(AbstractIndexingStep.STATUS_REBUILDING, Instant.now().minus(5, ChronoUnit.MINUTES));
+      QRecord deadRun = insertRunningRun(queryIndexRow().getValueInteger("id"), 120, 90);
+      insertCapturedDelete("4");
+      insertCapturedDelete("5");
+
+      assertThat(new FullReindexStep().recoverDeadRun(true)).isEmpty();
+
+      QRecord row = queryIndexRow();
+      assertThat(row.getValueString("status")).isEqualTo(AbstractIndexingStep.STATUS_ACTIVE);
+      assertThat(row.getValueInstant("lastBasepullTime")).isEqualTo(deadRun.getValueInstant("startTime"));
+      assertThat(row.getValueString("lastRunStatus")).isEqualTo("FULL_REINDEX FAILED");
+      assertThat(row.getValueString("lastErrorMessage")).contains("stopped without finishing");
+
+      QRecord run = queryRun(deadRun.getValueInteger("id"));
+      assertThat(run.getValueString("status")).isEqualTo(AbstractIndexingStep.RUN_FAILED);
+      assertThat(run.getValue("endTime")).isNotNull();
+
+      assertThat(queryAll(QuickSearchFailedEvent.TABLE_NAME)).extracting(event -> event.getValueString("status"))
+         .containsExactly(QuickSearchFailedEvent.STATUS_PENDING, QuickSearchFailedEvent.STATUS_PENDING);
+   }
+
+
+
+   /*******************************************************************************
+    ** Test: a run started long ago but with a recent heartbeat is alive;
+    ** recovery returns it and leaves its table, run record and captured
+    ** deletes alone.
+    *******************************************************************************/
+   @Test
+   void testRecovery_liveRun_leavesItsTableAndRowsAlone() throws QException
+   {
+      insertIndexRow(true);
+      updateIndexRowStatus(AbstractIndexingStep.STATUS_REBUILDING);
+      QRecord liveRun = insertRunningRun(queryIndexRow().getValueInteger("id"), 180, 1);
+      insertCapturedDelete("4");
+
+      assertThat(new FullReindexStep().recoverDeadRun(true)).extracting(run -> run.getValueInteger("id"))
+         .containsExactly(liveRun.getValueInteger("id"));
+
+      assertThat(queryIndexRow().getValueString("status")).isEqualTo(AbstractIndexingStep.STATUS_REBUILDING);
+      assertThat(queryRun(liveRun.getValueInteger("id")).getValueString("status")).isEqualTo(AbstractIndexingStep.RUN_RUNNING);
+      assertThat(queryAll(QuickSearchFailedEvent.TABLE_NAME)).singleElement()
+         .satisfies(event -> assertThat(event.getValueString("status")).isEqualTo(QuickSearchFailedEvent.STATUS_AWAITING_REINDEX));
+   }
+
+
+
+   /*******************************************************************************
+    ** Test: a REBUILDING table whose run record is gone (purged) is recovered
+    ** too, without moving its basepull watermark.
+    *******************************************************************************/
+   @Test
+   void testRecovery_withoutRunRecord_restoresTheTable() throws QException
+   {
+      Instant lastBasepullTime = Instant.now().minus(5, ChronoUnit.MINUTES);
+      insertIndexRow(true);
+      updateIndexRow(AbstractIndexingStep.STATUS_REBUILDING, lastBasepullTime);
+      insertCapturedDelete("4");
+
+      assertThat(new FullReindexStep().recoverDeadRun(true)).isEmpty();
+
+      assertThat(queryIndexRow().getValueString("status")).isEqualTo(AbstractIndexingStep.STATUS_ACTIVE);
+      assertThat(queryIndexRow().getValueInstant("lastBasepullTime")).isEqualTo(lastBasepullTime);
+      assertThat(queryAll(QuickSearchFailedEvent.TABLE_NAME)).singleElement()
+         .satisfies(event -> assertThat(event.getValueString("status")).isEqualTo(QuickSearchFailedEvent.STATUS_PENDING));
+   }
+
+
+
+   /*******************************************************************************
+    ** Test: with nothing left behind, recovery changes nothing.
+    *******************************************************************************/
+   @Test
+   void testRecovery_nothingLeftBehind_changesNothing() throws QException
+   {
+      insertIndexRow(true);
+
+      assertThat(new FullReindexStep().recoverDeadRun(true)).isEmpty();
+
+      assertThat(queryIndexRow().getValueString("status")).isEqualTo(AbstractIndexingStep.STATUS_ACTIVE);
+      assertThat(queryIndexRow().getValueString("lastRunStatus")).isNull();
+      assertThat(queryAll(QuickSearchIndexRun.TABLE_NAME)).isEmpty();
    }
 
 }

@@ -377,6 +377,26 @@ public abstract class AbstractIndexingStep implements BackendStep
 
 
    /*******************************************************************************
+    ** Refresh the run record's modifyDate: the heartbeat by which other nodes
+    ** tell a RUNNING full reindex that is still going from one that stopped
+    ** (see FullReindexStep.recoverDeadRun). Does nothing without a run.
+    *******************************************************************************/
+   protected void heartbeat(QuickSearchIndexRun run) throws QException
+   {
+      if(run == null || run.getId() == null)
+      {
+         return;
+      }
+
+      UpdateInput updateInput = new UpdateInput();
+      updateInput.setTableName(getConfig().getQuickSearchIndexRunTableName());
+      updateInput.setRecords(List.of(new QRecord().withValue("id", run.getId()).withValue("modifyDate", Instant.now())));
+      new UpdateAction().execute(updateInput);
+   }
+
+
+
+   /*******************************************************************************
     ** Update fields on a quickSearchIndex row.
     *******************************************************************************/
    protected void updateIndexRow(Integer indexId, Map<String, ? extends Serializable> values) throws QException
@@ -429,9 +449,10 @@ public abstract class AbstractIndexingStep implements BackendStep
    /*******************************************************************************
     ** Index every source record matching the criteria into targetIndex (null
     ** for the alias), paging by primary key so each record is read once even
-    ** while rows are inserted or deleted.
+    ** while rows are inserted or deleted. The run's heartbeat is refreshed
+    ** after every page.
     *******************************************************************************/
-   protected IndexCounts indexAllRecords(QuickSearchOpenSearchClient client, QuickSearchableTableConfig tableConfig, List<QFilterCriteria> extraCriteria, String targetIndex) throws QException
+   protected IndexCounts indexAllRecords(QuickSearchOpenSearchClient client, QuickSearchableTableConfig tableConfig, List<QFilterCriteria> extraCriteria, String targetIndex, QuickSearchIndexRun run) throws QException
    {
       QuickSearchQBitConfig config          = getConfig();
       String                tableName       = tableConfig.getTableName();
@@ -491,6 +512,8 @@ public abstract class AbstractIndexingStep implements BackendStep
          {
             throw new QException("Source record has no value in primary key field [" + primaryKeyField + "]");
          }
+
+         heartbeat(run);
       }
 
       return (new IndexCounts(processed, indexed, errors, skipped, firstError));

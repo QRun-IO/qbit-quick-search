@@ -55,8 +55,10 @@ import static com.kingsrook.qqq.backend.core.logging.LogUtils.logPair;
 /*******************************************************************************
  ** Scheduled catch-up. For each enabled table that is due, re-indexes records
  ** whose basepull timestamp is at or after the previous run's start minus the
- ** configured overlap, paging by primary key. First replays failed real-time
- ** events, and afterwards purges old run history.
+ ** configured overlap, paging by primary key. First recovers what a full
+ ** reindex that stopped without finishing left behind (so its captured deletes
+ ** are replayed in the same run) and replays failed real-time events, and
+ ** afterwards purges old run history.
  **
  ** The watermark stored on the quickSearchIndex row is the run's start time,
  ** captured before the first query, so rows modified during the run are read
@@ -82,6 +84,16 @@ public class BasepullIndexStep extends AbstractIndexingStep
    public void run(RunBackendStepInput input, RunBackendStepOutput output) throws QException
    {
       List<String> failures = new ArrayList<>();
+
+      try
+      {
+         new FullReindexStep().recoverDeadRun(true);
+      }
+      catch(Exception e)
+      {
+         LOG.warn("Recovering from a stopped full reindex did not complete", e);
+         failures.add("full reindex recovery: " + e.getMessage());
+      }
 
       try
       {
@@ -211,7 +223,7 @@ public class BasepullIndexStep extends AbstractIndexingStep
             criteria.add(new QFilterCriteria(timestampField, QCriteriaOperator.GREATER_THAN_OR_EQUALS, since));
          }
 
-         IndexCounts counts = indexAllRecords(client, tableConfig, criteria, null);
+         IndexCounts counts = indexAllRecords(client, tableConfig, criteria, null, run);
 
          if(counts.errors() == 0)
          {
