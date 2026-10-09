@@ -1759,7 +1759,6 @@ public class QuickSearchQBitConfig implements QBitConfig
 
 
 
-
    /*******************************************************************************
     ** Getter for fullReindexStaleMinutes: a RUNNING full reindex whose run record shows no sign of life (start or heartbeat) for this many minutes is treated as stopped; null means the default
     *******************************************************************************/
@@ -1788,7 +1787,6 @@ public class QuickSearchQBitConfig implements QBitConfig
       this.fullReindexStaleMinutes = fullReindexStaleMinutes;
       return (this);
    }
-
 
 
 

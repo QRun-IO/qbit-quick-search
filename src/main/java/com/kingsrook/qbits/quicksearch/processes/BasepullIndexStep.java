@@ -25,6 +25,7 @@ import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import com.kingsrook.qqq.backend.core.actions.tables.DeleteAction;
 import com.kingsrook.qqq.backend.core.actions.tables.QueryAction;
 import com.kingsrook.qqq.backend.core.actions.tables.UpdateAction;
@@ -268,8 +269,10 @@ public class BasepullIndexStep extends AbstractIndexingStep
 
    /*******************************************************************************
     ** Replay PENDING failed real-time events: re-read and index records for
-    ** INDEX events, delete documents for DELETE events. Successes are removed;
-    ** failures bump attempts and become EXHAUSTED at the limit.
+    ** INDEX events, delete documents for DELETE events. A DELETE whose record
+    ** exists again (re-created with the same key since) keeps its document and
+    ** counts as replayed. Successes are removed; failures bump attempts and
+    ** become EXHAUSTED at the limit.
     *******************************************************************************/
    void replayFailedEvents(RunBackendStepOutput output) throws QException
    {
@@ -304,19 +307,37 @@ public class BasepullIndexStep extends AbstractIndexingStep
 
       for(Map.Entry<String, List<QRecord>> entry : deleteByTable.entrySet())
       {
-         List<String> documentIds = new ArrayList<>();
-         for(QRecord event : entry.getValue())
-         {
-            documentIds.add(OpenSearchDocument.buildDocumentId(entry.getKey(), event.getValueString("recordId")));
-         }
+         List<QRecord> toDelete = entry.getValue();
          try
          {
-            BulkIndexResult result = client.deleteDocuments(documentIds, config.getBulkBatchSize());
-            markReplayOutcome(entry.getValue(), result.getFailureCount() == 0, result.getErrors(), succeeded, failed);
+            Set<String> existingIds = queryExistingRecordIds(entry.getKey(), entry.getValue());
+            toDelete = new ArrayList<>();
+            for(QRecord event : entry.getValue())
+            {
+               if(existingIds.contains(event.getValueString("recordId")))
+               {
+                  succeeded.add(event.getValue("id"));
+               }
+               else
+               {
+                  toDelete.add(event);
+               }
+            }
+
+            if(!toDelete.isEmpty())
+            {
+               List<String> documentIds = new ArrayList<>();
+               for(QRecord event : toDelete)
+               {
+                  documentIds.add(OpenSearchDocument.buildDocumentId(entry.getKey(), event.getValueString("recordId")));
+               }
+               BulkIndexResult result = client.deleteDocuments(documentIds, config.getBulkBatchSize());
+               markReplayOutcome(toDelete, result.getFailureCount() == 0, result.getErrors(), succeeded, failed);
+            }
          }
          catch(Exception e)
          {
-            markReplayOutcome(entry.getValue(), false, List.of(e.getMessage() == null ? e.toString() : e.getMessage()), succeeded, failed);
+            markReplayOutcome(toDelete, false, List.of(e.getMessage() == null ? e.toString() : e.getMessage()), succeeded, failed);
          }
       }
 

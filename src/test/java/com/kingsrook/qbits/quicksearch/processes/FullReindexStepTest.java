@@ -17,10 +17,12 @@
 package com.kingsrook.qbits.quicksearch.processes;
 
 
+import java.io.Serializable;
 import java.time.Instant;
 import java.time.temporal.ChronoUnit;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -803,6 +805,24 @@ class FullReindexStepTest extends BaseQuickSearchTest
 
 
    /*******************************************************************************
+    ** The run record with the given id, for lambdas and overrides that cannot
+    ** throw a checked exception.
+    *******************************************************************************/
+   private QRecord queryRunQuietly(Integer runId)
+   {
+      try
+      {
+         return (queryRun(runId));
+      }
+      catch(QException e)
+      {
+         throw (new IllegalStateException(e));
+      }
+   }
+
+
+
+   /*******************************************************************************
     ** The run record with the given id.
     *******************************************************************************/
    private QRecord queryRun(Integer runId) throws QException
@@ -941,20 +961,77 @@ class FullReindexStepTest extends BaseQuickSearchTest
       insertIndexRow(true);
       Integer runId = insertRunningRun(queryIndexRow().getValueInteger("id"), 120, 120).getValueInteger("id");
 
-      List<Instant> heartbeatsSeenByEachBulk = new ArrayList<>();
+      AtomicInteger pagesIndexed = new AtomicInteger(0);
       when(mockClient.indexDocuments(anyString(), anyList(), anyInt())).thenAnswer(invocation ->
       {
-         heartbeatsSeenByEachBulk.add(queryRun(runId).getValueInstant("modifyDate"));
+         pagesIndexed.incrementAndGet();
          return (new BulkIndexResult().withSuccessCount(((List<?>) invocation.getArgument(1)).size()));
       });
 
-      Instant before = Instant.now();
-      new FullReindexStep().indexAllRecords(mockClient, QuickSearchQBitContext.getTableConfig(TEST_ENTITY_TABLE), List.of(), PHYSICAL_INDEX, new QuickSearchIndexRun().withId(runId));
+      List<Integer>   pagesIndexedAtEachHeartbeat = new ArrayList<>();
+      List<Instant>   heartbeatsWritten           = new ArrayList<>();
+      FullReindexStep step                        = new FullReindexStep()
+      {
+         @Override
+         protected void heartbeat(QuickSearchIndexRun run)
+         {
+            super.heartbeat(run);
+            pagesIndexedAtEachHeartbeat.add(pagesIndexed.get());
+            heartbeatsWritten.add(queryRunQuietly(runId).getValueInstant("modifyDate"));
+         }
+      };
 
-      assertThat(heartbeatsSeenByEachBulk).hasSize(3);
-      assertThat(heartbeatsSeenByEachBulk.get(0)).isBefore(before);
-      assertThat(heartbeatsSeenByEachBulk.get(1)).isAfterOrEqualTo(before);
-      assertThat(queryRun(runId).getValueInstant("modifyDate")).isAfterOrEqualTo(heartbeatsSeenByEachBulk.get(2));
+      Instant before = Instant.now();
+      step.indexAllRecords(mockClient, QuickSearchQBitContext.getTableConfig(TEST_ENTITY_TABLE), List.of(), PHYSICAL_INDEX,
+         new QuickSearchIndexRun().withId(runId).withRunType(FullReindexStep.RUN_TYPE));
+
+      assertThat(pagesIndexedAtEachHeartbeat).containsExactly(1, 2, 3);
+      assertThat(heartbeatsWritten).hasSize(3).allSatisfy(heartbeat -> assertThat(heartbeat).isAfterOrEqualTo(before));
+      assertThat(heartbeatsWritten).isSorted();
+   }
+
+
+
+   /*******************************************************************************
+    ** Test: only FULL_REINDEX runs have a heartbeat (nothing reads one for the
+    ** other run types).
+    *******************************************************************************/
+   @Test
+   void testHeartbeat_onlyForFullReindexRuns() throws QException
+   {
+      insertIndexRow(true);
+      QRecord run = insertRunningRun(queryIndexRow().getValueInteger("id"), 120, 120);
+
+      new FullReindexStep().heartbeat(new QuickSearchIndexRun().withId(run.getValueInteger("id")).withRunType(BasepullIndexStep.RUN_TYPE));
+      assertThat(queryRun(run.getValueInteger("id")).getValueInstant("modifyDate")).isEqualTo(run.getValueInstant("modifyDate"));
+
+      new FullReindexStep().heartbeat(new QuickSearchIndexRun().withId(run.getValueInteger("id")).withRunType(FullReindexStep.RUN_TYPE));
+      assertThat(queryRun(run.getValueInteger("id")).getValueInstant("modifyDate")).isAfter(run.getValueInstant("modifyDate"));
+   }
+
+
+
+   /*******************************************************************************
+    ** Test: a heartbeat that cannot be written is logged and the pages are
+    ** still indexed.
+    *******************************************************************************/
+   @Test
+   void testHeartbeat_failureDoesNotStopIndexing() throws QException
+   {
+      QuickSearchQBitContext.getConfig().withSourceBatchSize(2);
+      insertTestEntities(3);
+
+      AbstractIndexingStep.IndexCounts counts;
+      try(MockedConstruction<UpdateAction> updateActions = mockConstruction(UpdateAction.class, (updateAction, context) ->
+         when(updateAction.execute(any())).thenThrow(new QException("database unavailable"))))
+      {
+         counts = new FullReindexStep().indexAllRecords(mockClient, QuickSearchQBitContext.getTableConfig(TEST_ENTITY_TABLE), List.of(), PHYSICAL_INDEX,
+            new QuickSearchIndexRun().withId(1).withRunType(FullReindexStep.RUN_TYPE));
+         assertThat(updateActions.constructed()).hasSize(2);
+      }
+
+      assertThat(counts.processed()).isEqualTo(3);
+      assertThat(counts.indexed()).isEqualTo(3);
    }
 
 
@@ -1140,6 +1217,147 @@ class FullReindexStepTest extends BaseQuickSearchTest
       assertThat(queryIndexRow().getValueInstant("lastBasepullTime")).isEqualTo(lastBasepullTime);
       assertThat(queryAll(QuickSearchFailedEvent.TABLE_NAME)).singleElement()
          .satisfies(event -> assertThat(event.getValueString("status")).isEqualTo(QuickSearchFailedEvent.STATUS_PENDING));
+   }
+
+
+
+   /*******************************************************************************
+    ** Test: recovery hands over only the captured rows that existed when it
+    ** read them; a row captured after (by a run that started meanwhile) stays
+    ** AWAITING_REINDEX for that run.
+    *******************************************************************************/
+   @Test
+   void testRecovery_handsOverOnlyRowsCapturedBeforeItRead() throws QException
+   {
+      insertIndexRow(true);
+      updateIndexRowStatus(AbstractIndexingStep.STATUS_REBUILDING);
+      insertRunningRun(queryIndexRow().getValueInteger("id"), 120, 120);
+      insertCapturedDelete("4");
+
+      AtomicBoolean capturedMeanwhile = new AtomicBoolean(false);
+      new FullReindexStep()
+      {
+         @Override
+         protected void updateIndexRow(Integer indexId, Map<String, ? extends Serializable> values) throws QException
+         {
+            super.updateIndexRow(indexId, values);
+            if(capturedMeanwhile.compareAndSet(false, true))
+            {
+               insertCapturedDelete("5");
+            }
+         }
+      }.recoverDeadRun(true);
+
+      assertThat(queryAll(QuickSearchFailedEvent.TABLE_NAME)).extracting(event -> event.getValueString("recordId") + " " + event.getValueString("status"))
+         .containsExactlyInAnyOrder("4 " + QuickSearchFailedEvent.STATUS_PENDING, "5 " + QuickSearchFailedEvent.STATUS_AWAITING_REINDEX);
+   }
+
+
+
+   /*******************************************************************************
+    ** Test: a recovery that fails while putting a table back leaves the dead
+    ** run's record RUNNING, so the next recovery still finds the run's start
+    ** and rewinds the basepull watermark.
+    *******************************************************************************/
+   @Test
+   void testRecovery_failsPartway_nextRecoveryStillRewinds() throws QException
+   {
+      insertIndexRow(true);
+      updateIndexRow(AbstractIndexingStep.STATUS_REBUILDING, Instant.now().minus(5, ChronoUnit.MINUTES));
+      QRecord deadRun = insertRunningRun(queryIndexRow().getValueInteger("id"), 120, 120);
+
+      assertThatThrownBy(() -> new FullReindexStep()
+      {
+         @Override
+         protected void updateIndexRow(Integer indexId, Map<String, ? extends Serializable> values) throws QException
+         {
+            throw (new QException("database unavailable"));
+         }
+      }.recoverDeadRun(true))
+         .isInstanceOf(QException.class)
+         .hasMessageContaining("database unavailable");
+
+      assertThat(queryRun(deadRun.getValueInteger("id")).getValueString("status")).isEqualTo(AbstractIndexingStep.RUN_RUNNING);
+      assertThat(queryIndexRow().getValueString("status")).isEqualTo(AbstractIndexingStep.STATUS_REBUILDING);
+
+      assertThat(new FullReindexStep().recoverDeadRun(true)).isEmpty();
+
+      assertThat(queryIndexRow().getValueString("status")).isEqualTo(AbstractIndexingStep.STATUS_ACTIVE);
+      assertThat(queryIndexRow().getValueInstant("lastBasepullTime")).isEqualTo(deadRun.getValueInstant("startTime"));
+      assertThat(queryRun(deadRun.getValueInteger("id")).getValueString("status")).isEqualTo(AbstractIndexingStep.RUN_FAILED);
+   }
+
+
+
+   /*******************************************************************************
+    ** Test: a run whose drain of captured deletes is so slow that it is judged
+    ** stopped, while a new full reindex starts, marks the table and captures a
+    ** delete of its own: the drain stops at its next batch and leaves both its
+    ** remaining row and the new run's row alone.
+    *******************************************************************************/
+   @Test
+   void testDrainTakenOverMidway_leavesTheNewRunsRowsAlone() throws QException
+   {
+      QuickSearchQBitContext.getConfig().withSourceBatchSize(1);
+      insertTestEntities(1);
+      insertCapturedDelete("8");
+      insertCapturedDelete("9");
+
+      AtomicBoolean newRunStarted = new AtomicBoolean(false);
+      when(mockClient.deleteDocuments(anyList(), anyInt())).thenAnswer(invocation ->
+      {
+         if(newRunStarted.compareAndSet(false, true))
+         {
+            for(QRecord run : queryAll(QuickSearchIndexRun.TABLE_NAME))
+            {
+               backdateRun(run.getValueInteger("id"));
+            }
+            assertThat(new FullReindexStep().recoverDeadRun(false)).isEmpty();
+            insertRunningRun(queryIndexRow().getValueInteger("id"), 0, 0);
+            updateIndexRowStatus(AbstractIndexingStep.STATUS_REBUILDING);
+            insertCapturedDelete("7");
+         }
+         return (new BulkIndexResult().withSuccessCount(1));
+      });
+
+      new FullReindexStep().run(new RunBackendStepInput(), new RunBackendStepOutput());
+
+      verify(mockClient, times(1)).deleteDocuments(anyList(), anyInt());
+      verify(mockClient).deleteDocuments(eq(List.of(TEST_ENTITY_TABLE + ":8")), anyInt());
+      assertThat(queryAll(QuickSearchFailedEvent.TABLE_NAME)).extracting(event -> event.getValueString("recordId") + " " + event.getValueString("status"))
+         .containsExactlyInAnyOrder("9 " + QuickSearchFailedEvent.STATUS_AWAITING_REINDEX, "7 " + QuickSearchFailedEvent.STATUS_AWAITING_REINDEX);
+      assertThat(queryIndexRow().getValueString("status")).isEqualTo(AbstractIndexingStep.STATUS_REBUILDING);
+   }
+
+
+
+   /*******************************************************************************
+    ** Test: the drain applies only rows up to the newest one at its start; a
+    ** row captured while it runs is left alone.
+    *******************************************************************************/
+   @Test
+   void testDrain_stopsAtTheNewestRowReadAtItsStart() throws QException
+   {
+      QuickSearchQBitContext.getConfig().withSourceBatchSize(1);
+      insertTestEntities(1);
+      insertCapturedDelete("8");
+      insertCapturedDelete("9");
+
+      AtomicBoolean capturedMeanwhile = new AtomicBoolean(false);
+      when(mockClient.deleteDocuments(anyList(), anyInt())).thenAnswer(invocation ->
+      {
+         if(capturedMeanwhile.compareAndSet(false, true))
+         {
+            insertCapturedDelete("7");
+         }
+         return (new BulkIndexResult().withSuccessCount(1));
+      });
+
+      new FullReindexStep().run(new RunBackendStepInput(), new RunBackendStepOutput());
+
+      verify(mockClient, times(2)).deleteDocuments(anyList(), anyInt());
+      assertThat(queryAll(QuickSearchFailedEvent.TABLE_NAME)).singleElement()
+         .satisfies(event -> assertThat(event.getValueString("recordId")).isEqualTo("7"));
    }
 
 

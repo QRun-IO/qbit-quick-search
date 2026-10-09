@@ -23,8 +23,10 @@ import java.time.temporal.ChronoUnit;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import com.kingsrook.qqq.backend.core.actions.processes.BackendStep;
 import com.kingsrook.qqq.backend.core.actions.tables.DeleteAction;
 import com.kingsrook.qqq.backend.core.actions.tables.InsertAction;
@@ -377,21 +379,59 @@ public abstract class AbstractIndexingStep implements BackendStep
 
 
    /*******************************************************************************
-    ** Refresh the run record's modifyDate: the heartbeat by which other nodes
-    ** tell a RUNNING full reindex that is still going from one that stopped
-    ** (see FullReindexStep.recoverDeadRun). Does nothing without a run.
+    ** Refresh a FULL_REINDEX run record's modifyDate: the heartbeat by which
+    ** other nodes tell a full reindex that is still going from one that
+    ** stopped (see FullReindexStep.recoverDeadRun). Nothing reads it for other
+    ** run types. Best effort: a failure is logged and never stops the run (one
+    ** judged stopped as a result fails safely before its swap).
     *******************************************************************************/
-   protected void heartbeat(QuickSearchIndexRun run) throws QException
+   protected void heartbeat(QuickSearchIndexRun run)
    {
-      if(run == null || run.getId() == null)
+      if(run == null || run.getId() == null || !FullReindexStep.RUN_TYPE.equals(run.getRunType()))
       {
          return;
       }
 
-      UpdateInput updateInput = new UpdateInput();
-      updateInput.setTableName(getConfig().getQuickSearchIndexRunTableName());
-      updateInput.setRecords(List.of(new QRecord().withValue("id", run.getId()).withValue("modifyDate", Instant.now())));
-      new UpdateAction().execute(updateInput);
+      try
+      {
+         UpdateInput updateInput = new UpdateInput();
+         updateInput.setTableName(getConfig().getQuickSearchIndexRunTableName());
+         updateInput.setRecords(List.of(new QRecord().withValue("id", run.getId()).withValue("modifyDate", Instant.now())));
+         new UpdateAction().execute(updateInput);
+      }
+      catch(Exception e)
+      {
+         LOG.warn("Could not refresh the full reindex heartbeat", e, logPair("runId", run.getId()));
+      }
+   }
+
+
+
+   /*******************************************************************************
+    ** The record IDs, among the rows' recordIds, that exist in the source table.
+    *******************************************************************************/
+   Set<String> queryExistingRecordIds(String tableName, List<QRecord> rows) throws QException
+   {
+      QuickSearchableTableConfig tableConfig = getTableConfig(tableName);
+      if(tableConfig == null)
+      {
+         return (Set.of());
+      }
+
+      String             primaryKeyField = tableConfig.getPrimaryKeyField() == null ? "id" : tableConfig.getPrimaryKeyField();
+      List<Serializable> recordIds       = new ArrayList<>();
+      rows.forEach(row -> recordIds.add(row.getValueString("recordId")));
+
+      QueryInput queryInput = new QueryInput();
+      queryInput.setTableName(tableName);
+      queryInput.setFilter(new QQueryFilter(new QFilterCriteria(primaryKeyField, QCriteriaOperator.IN, recordIds)));
+
+      Set<String> existingIds = new HashSet<>();
+      for(QRecord record : CollectionUtils.nonNullList(new QueryAction().execute(queryInput).getRecords()))
+      {
+         existingIds.add(record.getValueString(primaryKeyField));
+      }
+      return (existingIds);
    }
 
 

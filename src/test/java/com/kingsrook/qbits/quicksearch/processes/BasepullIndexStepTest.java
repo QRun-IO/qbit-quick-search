@@ -970,6 +970,29 @@ class BasepullIndexStepTest extends BaseQuickSearchTest
 
 
    /*******************************************************************************
+    ** Test: a DELETE event whose record exists again (re-created with the same
+    ** key since) keeps the record's document; the event is resolved.
+    *******************************************************************************/
+   @Test
+   void testReplayFailedEvents_deleteOfRecreatedRecord_keepsItsDocument() throws QException
+   {
+      insertTestEntities(1);
+      insertIndexRow(TEST_ENTITY_TABLE, true, Instant.now(), 60);
+      insertFailedEvent(TEST_ENTITY_TABLE, "1", "DELETE", 0);
+      insertFailedEvent(TEST_ENTITY_TABLE, "9", "DELETE", 0);
+
+      RunBackendStepOutput output = new RunBackendStepOutput();
+      new BasepullIndexStep().run(new RunBackendStepInput(), output);
+
+      verify(mockClient, times(1)).deleteDocuments(anyList(), anyInt());
+      verify(mockClient).deleteDocuments(List.of(TEST_ENTITY_TABLE + ":9"), QuickSearchQBitContext.getConfig().getBulkBatchSize());
+      assertThat(queryAll(QuickSearchFailedEvent.TABLE_NAME)).isEmpty();
+      assertThat(output.getValueInteger("failedEventsReplayed")).isEqualTo(2);
+   }
+
+
+
+   /*******************************************************************************
     ** Test: a full reindex that stopped without finishing (table left
     ** REBUILDING, run record without a heartbeat for two hours) is recovered
     ** by the scheduled basepull, which replays its captured deletes in the same
