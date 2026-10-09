@@ -2,7 +2,7 @@
 tracker_key: "QRun-IO/qbit-quick-search#12"
 project: qbit-quick-search
 status: released-rc
-updated: 2026-10-06
+updated: 2026-10-09
 ---
 
 # Initiative: QBit Quick Search 1.0 on QQQ 4.1
@@ -11,7 +11,7 @@ updated: 2026-10-06
 
 ## Status
 
-`1.0.0-RC.1` was released to Maven Central on 2026-10-05 from `release/1.0`, after the work merged to `develop` in #10 and #8. All six epics are coded and tested (307 unit, 18 integration, coverage gate met). Decisions D1 to D11 were applied with the recommended answers, with two recorded adjustments: D4 (missing `schedulerName` warns rather than fails) and D5 (single-table full reindex uses the reconcile algorithm). Tracking issue: #12. Open before GA: host adoption in qqq-all and Voyage, the review follow-ups #13 to #17, the `qbit-build-parent` 2.1.0 re-pin, the CI image matrix, and the qqq core SPI issue (1.1).
+`1.0.0-RC.1` was released to Maven Central on 2026-10-05 from `release/1.0`, after the work merged to `develop` in #10 and #8. All six epics are coded and tested (307 unit, 18 integration, coverage gate met). Decisions D1 to D11 were applied with the recommended answers, with two recorded adjustments: D4 (missing `schedulerName` warns rather than fails) and D5 (single-table full reindex uses the reconcile algorithm). `1.0.0-RC.2` followed on 2026-10-06 with the review follow-ups #13 to #17. Tracking issue: #12. Open before GA: host adoption in qqq-all and Voyage, the `qbit-build-parent` 2.1.0 re-pin, the CI image matrix, and the qqq core SPI issue (1.1).
 
 ## Executive Summary
 
