@@ -15,7 +15,7 @@
 4. **Set `schedulerName`** (and optionally `basepullRepeatSeconds`, `reconcileCronExpression`) so basepull and reconcile actually run. In 0.x they were never scheduled.
 5. **Credentials over HTTP are refused.** Use `opensearchUrl` with `https://`, or set `withAllowPlaintextCredentials(true)` for local development. Prefer `${env.OPENSEARCH_PASSWORD}` references over literal secrets; never name an OpenSearch secret `QQQ_ENV_*` (those are sent to the frontend).
 6. **Grant the permissions.** Processes and the admin app now require `quickSearchAdmin.hasAccess`; the operational tables require read and write permissions. Grant the names listed under [Permissions](#permissions) to operators, or override `adminPermissionRules` and `tablePermissionRules`. Search now honours table read permissions and record security locks, so users see fewer results than in 0.x if they lacked access.
-7. **Update the operational tables before starting 1.0.** `quickSearchIndex` gains five columns, two columns change type, and there is a new `quickSearchFailedEvent` table. A host that checks its columns at startup rejects the 0.x tables. See [Schema changes](#schema-changes).
+7. **Update the operational tables before starting 1.0.** `quickSearchIndex` gains five columns, `searchableFieldsJson` changes from `STRING` to `TEXT`, and `tableName` becomes required with a unique key. `quickSearchIndexRun.errorMessage` changes from `STRING` to `TEXT`. There is a new `quickSearchFailedEvent` table. A host that checks its columns at startup rejects the 0.x tables. See [Schema changes](#schema-changes).
 
 ## Permissions
 
