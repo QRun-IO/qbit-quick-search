@@ -99,7 +99,7 @@ config.withSearchableTable(new SearchableTableConfig("crmContact", List.of(
    .withRecordLabelFormat("%s %s", "firstName", "lastName"));
 ```
 
-Annotation and config-driven tables can be mixed; a table may appear in only one of them. Hidden fields are never indexed. A table without the change-detection field (`modifyDate` by default) is covered by reconcile instead of incremental basepull.
+Annotation and config-driven tables can be mixed; a table may appear in only one of them. Hidden fields are never indexed. A table without the change-detection field (`modifyDate` by default) is covered by reconcile instead of incremental basepull, and the QBit logs a warning for it at startup. Set `basepullTimestampField` to null on a config-driven table to opt out without the warning.
 
 ### Searching
 
@@ -134,6 +134,20 @@ Search runs as the current `QContext` session: tables the session cannot read ar
 
 Without `schedulerName` the processes exist but nothing runs them; the QBit logs a warning at startup.
 
+### Scheduling
+
+The schedules run only when the host starts through QQQ's `QApplicationLauncher` (`com.kingsrook.qqq.middleware.javalin.QApplicationLauncher`, in `qqq-middleware-javalin`). `QApplicationLauncher.run(new MyApplication(), new QApplicationLauncherConfig())` starts the Javalin server, then the `QScheduleManager` (because the QBit's processes are scheduled), then the instance's runtime services. A host that starts only a server, or builds the `QInstance` itself, gets the processes but nothing runs them on a schedule, unless it calls `QScheduleManager.initInstance(qInstance, systemSessionSupplier).start()` itself. `qqq.scheduleManager.enabled=false` (or `QQQ_SCHEDULE_MANAGER_ENABLED=false`) turns schedules off on a node.
+
+Basepull's fixed interval runs on any QQQ scheduler. `reconcileCronExpression` needs a scheduler that supports cron, which in QQQ 4.1 means a `QuartzSchedulerMetaData`; a `SimpleSchedulerMetaData` runs fixed intervals only. The expression uses Quartz syntax, seconds first (`0 0 3 * * ?` is 03:00 every day), and needs `reconcileCronTimeZoneId`, a Java time zone ID such as `UTC` or `America/Chicago`; QQQ has no default zone. `produce()` rejects a cron without a zone, an invalid expression or zone, and a cron on a scheduler in the instance that does not support cron.
+
+```java
+qInstance.addScheduler(new QuartzSchedulerMetaData().withName("quartz").withProperties(quartzProperties));
+
+config.withSchedulerName("quartz")
+   .withReconcileCronExpression("0 0 3 * * ?")
+   .withReconcileCronTimeZoneId("America/Chicago");
+```
+
 ## Configuration reference
 
 | Field | Default | Description |
@@ -151,7 +165,7 @@ Without `schedulerName` the processes exist but nothing runs them; the QBit logs
 | `startupMode` | `FAIL_FAST` | `FAIL_FAST` fails `produce()` when the cluster is unreachable; `DEGRADED` boots and retries on first use |
 | `enableRealTimeIndexing` | `true` | Register the record-change listener |
 | `enableBasepullProcess`, `enableMaintenanceProcesses` | `true` | Register basepull; register full reindex and reconcile. `enableScheduledProcesses` is a deprecated alias for both |
-| `schedulerName`, `basepullRepeatSeconds`, `reconcileCronExpression`, `reconcileCronTimeZoneId` | none, 300, none | Scheduling |
+| `schedulerName`, `basepullRepeatSeconds`, `reconcileCronExpression`, `reconcileCronTimeZoneId` | none, 300, none, none | Scheduling; a cron needs the time zone ID and a Quartz scheduler, and nothing runs without `QApplicationLauncher` (see [Scheduling](#scheduling)) |
 | `basepullOverlapSeconds` | 300 | Re-read window before the previous run start |
 | `defaultBasepullIntervalMinutes` | 5 | Per-table due interval for config-driven tables |
 | `runHistoryRetentionDays` | 30 | Purge run records older than this; null keeps them |

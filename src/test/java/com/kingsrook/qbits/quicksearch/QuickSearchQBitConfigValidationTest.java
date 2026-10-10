@@ -23,6 +23,7 @@ import com.kingsrook.qqq.backend.core.model.metadata.QBackendMetaData;
 import com.kingsrook.qqq.backend.core.model.metadata.QInstance;
 import com.kingsrook.qqq.backend.core.model.metadata.fields.QFieldMetaData;
 import com.kingsrook.qqq.backend.core.model.metadata.fields.QFieldType;
+import com.kingsrook.qqq.backend.core.model.metadata.scheduleing.quartz.QuartzSchedulerMetaData;
 import com.kingsrook.qqq.backend.core.model.metadata.scheduleing.simple.SimpleSchedulerMetaData;
 import com.kingsrook.qqq.backend.core.model.metadata.tables.QTableMetaData;
 import com.kingsrook.qqq.backend.core.modules.backend.implementations.memory.MemoryBackendModule;
@@ -246,24 +247,90 @@ class QuickSearchQBitConfigValidationTest
    void testScheduling_schedulerMustExist_andCronNeedsScheduler()
    {
       QInstance qInstance = instanceWithBackendAndCustomer();
-      qInstance.addScheduler(new SimpleSchedulerMetaData().withName("sched"));
+      qInstance.addScheduler(new QuartzSchedulerMetaData().withName("sched"));
 
       List<String> errors = new ArrayList<>();
       baseConfig().withSchedulerName("missing").validate(qInstance, errors);
       assertThat(errors).anyMatch(e -> e.contains("Scheduler not found: missing"));
 
       errors = new ArrayList<>();
-      baseConfig().withSchedulerName("sched").withReconcileCronExpression("0 0 3 * * ?").validate(qInstance, errors);
+      baseConfig().withSchedulerName("sched").withReconcileCronExpression("0 0 3 * * ?").withReconcileCronTimeZoneId("America/Chicago").validate(qInstance, errors);
       assertThat(errors).isEmpty();
 
       errors = new ArrayList<>();
-      baseConfig().withReconcileCronExpression("0 0 3 * * ?").validate(qInstance, errors);
+      baseConfig().withReconcileCronExpression("0 0 3 * * ?").withReconcileCronTimeZoneId("UTC").validate(qInstance, errors);
       assertThat(errors).anyMatch(e -> e.contains("requires schedulerName"));
 
       ///////////////////////////////////////////////////////////////////////
       // an instance without schedulers cannot be checked; no error raised  //
       ///////////////////////////////////////////////////////////////////////
       assertThat(validate(baseConfig().withSchedulerName("anything"))).isEmpty();
+   }
+
+
+
+   /*******************************************************************************
+    ** QQQ's instance validator rejects a cron schedule without a time zone and
+    ** has no default, so the QBit rejects it at produce time, naming its fields.
+    *******************************************************************************/
+   @Test
+   void testScheduling_cronWithoutTimeZone_addsError()
+   {
+      QInstance qInstance = instanceWithBackendAndCustomer();
+      qInstance.addScheduler(new QuartzSchedulerMetaData().withName("sched"));
+
+      List<String> errors = new ArrayList<>();
+      baseConfig().withSchedulerName("sched").withReconcileCronExpression("0 0 3 * * ?").validate(qInstance, errors);
+      assertThat(errors).containsExactly("reconcileCronExpression requires reconcileCronTimeZoneId (a time zone ID such as UTC or America/Chicago)");
+
+      ///////////////////////////////////////////////////////////////////
+      // without a scheduler in the instance the rule still applies    //
+      ///////////////////////////////////////////////////////////////////
+      assertThat(validate(baseConfig().withSchedulerName("sched").withReconcileCronExpression("0 0 3 * * ?").withReconcileCronTimeZoneId(" ")))
+         .anyMatch(e -> e.startsWith("reconcileCronExpression requires reconcileCronTimeZoneId"));
+   }
+
+
+
+   /*******************************************************************************
+    ** The cron expression and the zone id are checked the way QQQ's instance
+    ** validator checks them: Quartz cron syntax and a known TimeZone id.
+    *******************************************************************************/
+   @Test
+   void testScheduling_invalidCronOrTimeZone_addsErrors()
+   {
+      List<String> errors = validate(baseConfig().withSchedulerName("sched").withReconcileCronExpression("0 0 3 * *").withReconcileCronTimeZoneId("UTC"));
+      assertThat(errors).singleElement().satisfies(e -> assertThat(e).startsWith("reconcileCronExpression [0 0 3 * *] is not a valid Quartz cron expression"));
+
+      errors = validate(baseConfig().withSchedulerName("sched").withReconcileCronExpression("0 0 3 * * ?").withReconcileCronTimeZoneId("Mars/Olympus_Mons"));
+      assertThat(errors).containsExactly("reconcileCronTimeZoneId [Mars/Olympus_Mons] is not a recognized time zone ID");
+
+      errors = validate(baseConfig().withSchedulerName("sched").withReconcileCronExpression("0 0 3 * * ?").withReconcileCronTimeZoneId("UTC"));
+      assertThat(errors).isEmpty();
+   }
+
+
+
+   /*******************************************************************************
+    ** QQQ's simple scheduler only runs fixed intervals; a cron schedule on it
+    ** fails when the schedule manager starts.
+    *******************************************************************************/
+   @Test
+   void testScheduling_cronOnSchedulerWithoutCronSupport_addsError()
+   {
+      QInstance qInstance = instanceWithBackendAndCustomer();
+      qInstance.addScheduler(new SimpleSchedulerMetaData().withName("simple"));
+
+      List<String> errors = new ArrayList<>();
+      baseConfig().withSchedulerName("simple").withReconcileCronExpression("0 0 3 * * ?").withReconcileCronTimeZoneId("UTC").validate(qInstance, errors);
+      assertThat(errors).containsExactly("reconcileCronExpression requires a scheduler that supports cron schedules, such as a QuartzSchedulerMetaData; scheduler [simple] is of type simple");
+
+      ////////////////////////////////////////////////
+      // basepull's fixed interval runs on either   //
+      ////////////////////////////////////////////////
+      errors = new ArrayList<>();
+      baseConfig().withSchedulerName("simple").validate(qInstance, errors);
+      assertThat(errors).isEmpty();
    }
 
 

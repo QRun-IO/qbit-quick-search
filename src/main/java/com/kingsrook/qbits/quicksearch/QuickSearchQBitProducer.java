@@ -386,8 +386,12 @@ public class QuickSearchQBitProducer implements QBitMetaDataProducer<QuickSearch
          QTableMetaData table                  = qInstance.getTable(stc.getTableName());
          if(table != null)
          {
-            primaryKeyField        = table.getPrimaryKeyField();
-            basepullTimestampField = (basepullTimestampField != null && !table.getFields().containsKey(basepullTimestampField)) ? null : basepullTimestampField;
+            primaryKeyField = table.getPrimaryKeyField();
+            if(basepullTimestampField != null && !table.getFields().containsKey(basepullTimestampField))
+            {
+               warnIncrementalBasepullDisabled(table, basepullTimestampField);
+               basepullTimestampField = null;
+            }
             removeHiddenFields(table, searchableFields, fieldWeights, fieldIncludeLabels);
          }
 
@@ -444,12 +448,25 @@ public class QuickSearchQBitProducer implements QBitMetaDataProducer<QuickSearch
       {
          if(QuickSearchQBitConfig.DEFAULT_BASEPULL_TIMESTAMP_FIELD.equals(basepullTimestampField))
          {
-            LOG.warn("Table has no modifyDate field; incremental basepull is disabled for it (reconcile still covers it)", logPair("tableName", table.getName()));
+            warnIncrementalBasepullDisabled(table, basepullTimestampField);
             return (null);
          }
          throw (new QException("basepullTimestampField [" + basepullTimestampField + "] does not exist on table [" + table.getName() + "]"));
       }
       return (basepullTimestampField);
+   }
+
+
+
+   /*******************************************************************************
+    ** The startup warning, once per table, for annotated and config-driven
+    ** tables alike, when the basepull timestamp field is missing. A field
+    ** explicitly set to null is an opt-out and is not warned about.
+    *******************************************************************************/
+   private static void warnIncrementalBasepullDisabled(QTableMetaData table, String basepullTimestampField)
+   {
+      LOG.warn("Table has no basepull timestamp field; incremental basepull is disabled for it (reconcile still covers it)",
+         logPair("tableName", table.getName()), logPair("timestampField", basepullTimestampField));
    }
 
 

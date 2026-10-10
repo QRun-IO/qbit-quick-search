@@ -16,10 +16,14 @@
 package com.kingsrook.qbits.quicksearch;
 
 
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import com.kingsrook.qqq.backend.core.context.QContext;
 import com.kingsrook.qqq.backend.core.exceptions.QException;
+import com.kingsrook.qqq.backend.core.logging.CollectedLogMessage;
+import com.kingsrook.qqq.backend.core.logging.QCollectingLogger;
+import com.kingsrook.qqq.backend.core.logging.QLogger;
 import com.kingsrook.qqq.backend.core.model.metadata.QAuthenticationType;
 import com.kingsrook.qqq.backend.core.model.metadata.QBackendMetaData;
 import com.kingsrook.qqq.backend.core.model.metadata.QInstance;
@@ -34,8 +38,10 @@ import com.kingsrook.qbits.quicksearch.annotations.QuickSearchField;
 import com.kingsrook.qbits.quicksearch.annotations.QuickSearchable;
 import com.kingsrook.qqq.backend.core.model.metadata.code.QCodeReference;
 import com.kingsrook.qqq.backend.core.model.metadata.permissions.PermissionLevel;
-import com.kingsrook.qqq.backend.core.model.metadata.scheduleing.simple.SimpleSchedulerMetaData;
+import com.kingsrook.qqq.backend.core.model.metadata.scheduleing.quartz.QuartzSchedulerMetaData;
 import com.kingsrook.qbits.quicksearch.listeners.QuickSearchRecordChangeListener;
+import org.apache.logging.log4j.Level;
+import org.json.JSONObject;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -104,6 +110,18 @@ class QuickSearchQBitProducerTest
    {
       @QuickSearchField
       private String nope;
+   }
+
+
+
+   /***************************************************************************
+    ** Annotated entity on a table without the default modifyDate field.
+    ***************************************************************************/
+   @QuickSearchable(tableName = "tag")
+   static class TagEntity
+   {
+      @QuickSearchField
+      private String body;
    }
 
 
@@ -529,14 +547,33 @@ class QuickSearchQBitProducerTest
    void testProduce_schedulesWhenSchedulerConfigured() throws QException
    {
       QInstance qInstance = buildQInstance();
-      qInstance.addScheduler(new SimpleSchedulerMetaData().withName("sched"));
+      qInstance.addScheduler(new QuartzSchedulerMetaData().withName("sched"));
       QContext.init(qInstance, new QSession());
-      new QuickSearchQBitProducer().withConfig(buildValidConfig().withSchedulerName("sched").withBasepullRepeatSeconds(120).withReconcileCronExpression("0 0 3 * * ?")).produce(qInstance);
+      new QuickSearchQBitProducer().withConfig(buildValidConfig().withSchedulerName("sched").withBasepullRepeatSeconds(120).withReconcileCronExpression("0 0 3 * * ?").withReconcileCronTimeZoneId("America/Chicago")).produce(qInstance);
 
       assertThat(qInstance.getProcess(QuickSearchQBitProducer.BASEPULL_PROCESS_NAME).getSchedule().getSchedulerName()).isEqualTo("sched");
       assertThat(qInstance.getProcess(QuickSearchQBitProducer.BASEPULL_PROCESS_NAME).getSchedule().getRepeatSeconds()).isEqualTo(120);
       assertThat(qInstance.getProcess(QuickSearchQBitProducer.RECONCILE_PROCESS_NAME).getSchedule().getCronExpression()).isEqualTo("0 0 3 * * ?");
+      assertThat(qInstance.getProcess(QuickSearchQBitProducer.RECONCILE_PROCESS_NAME).getSchedule().getCronTimeZoneId()).isEqualTo("America/Chicago");
       assertThat(qInstance.getProcess(QuickSearchQBitProducer.FULL_REINDEX_PROCESS_NAME).getSchedule()).isNull();
+   }
+
+
+
+   /*******************************************************************************
+    ** A reconcile cron without a time zone used to pass produce() and then fail
+    ** QQQ's instance validation at startup; now produce() rejects it.
+    *******************************************************************************/
+   @Test
+   void testProduce_cronWithoutTimeZone_failsProduce()
+   {
+      QInstance qInstance = buildQInstance();
+      qInstance.addScheduler(new QuartzSchedulerMetaData().withName("sched"));
+      QContext.init(qInstance, new QSession());
+
+      assertThatThrownBy(() -> new QuickSearchQBitProducer().withConfig(buildValidConfig().withSchedulerName("sched").withReconcileCronExpression("0 0 3 * * ?")).produce(qInstance))
+         .isInstanceOf(QException.class)
+         .hasMessageContaining("reconcileCronExpression requires reconcileCronTimeZoneId");
    }
 
 
@@ -849,6 +886,67 @@ class QuickSearchQBitProducerTest
          .containsEntry("firstName", true)
          .containsEntry("lastName", false)
          .containsEntry("email", false);
+   }
+
+
+
+   /***************************************************************************
+    ** A table without its basepull timestamp field gets the same startup
+    ** warning, once, whether it is annotated or config-driven; a config-driven
+    ** table that sets the field to null has opted out and is not warned about.
+    ***************************************************************************/
+   @Test
+   void testProduce_missingTimestampField_warnsOncePerTableForBothSources() throws QException
+   {
+      QInstance qInstance = buildQInstance();
+      addTableWithoutTimestamp(qInstance, "tag");
+      addTableWithoutTimestamp(qInstance, "note");
+      addTableWithoutTimestamp(qInstance, "memo");
+      QContext.init(qInstance, new QSession());
+
+      QuickSearchQBitConfig config = buildValidConfig()
+         .withSearchableEntityClasses(List.of(TagEntity.class))
+         .withSearchableTable("note", List.of(new SearchableFieldConfig("body")))
+         .withSearchableTable(new SearchableTableConfig("memo", List.of(new SearchableFieldConfig("body"))).withBasepullTimestampField(null));
+
+      QCollectingLogger collectingLogger = QLogger.activateCollectingLoggerForClass(QuickSearchQBitProducer.class);
+      try
+      {
+         new QuickSearchQBitProducer().withConfig(config).produce(qInstance);
+      }
+      finally
+      {
+         QLogger.deactivateCollectingLoggerForClass(QuickSearchQBitProducer.class);
+      }
+
+      List<JSONObject> warnings = new ArrayList<>();
+      for(CollectedLogMessage message : collectingLogger.getCollectedMessages())
+      {
+         if(Level.WARN.equals(message.getLevel()) && message.getMessage().contains("incremental basepull is disabled"))
+         {
+            warnings.add(message.getMessageAsJSONObject());
+         }
+      }
+
+      assertThat(warnings).extracting(w -> w.getString("tableName")).containsExactly("tag", "note");
+      assertThat(warnings).extracting(w -> w.getString("timestampField")).containsOnly("modifyDate");
+      assertThat(warnings).extracting(w -> w.getString("message")).containsOnly(warnings.get(0).getString("message"));
+      assertThat(QuickSearchRuntime.get().getDiscoveredTables()).allSatisfy(t -> assertThat(t.getBasepullTimestampField()).isNull());
+   }
+
+
+
+   /***************************************************************************
+    ** Add a table with an id and a body field, but no modifyDate.
+    ***************************************************************************/
+   private void addTableWithoutTimestamp(QInstance qInstance, String tableName)
+   {
+      qInstance.addTable(new QTableMetaData()
+         .withName(tableName)
+         .withBackendName(BACKEND_NAME)
+         .withPrimaryKeyField("id")
+         .withField(new QFieldMetaData("id", QFieldType.INTEGER).withIsEditable(false))
+         .withField(new QFieldMetaData("body", QFieldType.STRING)));
    }
 
 
