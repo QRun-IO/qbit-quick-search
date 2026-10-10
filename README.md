@@ -128,9 +128,9 @@ Search runs as the current `QContext` session: tables the session cannot read ar
 
 | Process | Trigger | What it does |
 |---|---|---|
-| Quick Search Basepull Index | Scheduled every `basepullRepeatSeconds` when `schedulerName` is set; also on demand | Replays failed real-time events, re-indexes rows changed since the last run start minus `basepullOverlapSeconds`, purges old run history |
+| Quick Search Basepull Index | Scheduled every `basepullRepeatSeconds` when `schedulerName` is set; also on demand | Recovers a full reindex that stopped without finishing, replays failed real-time events, re-indexes rows changed since the last run start minus `basepullOverlapSeconds`, purges old run history |
 | Quick Search Reconcile Index | Cron via `reconcileCronExpression` when `schedulerName` is set; also on demand (optional `tableName` input) | Re-indexes everything in place, removes documents without a source row and documents of unconfigured tables |
-| Quick Search Full Reindex | On demand (optional `tableName` input) | All tables: build a fresh physical index and swap the alias. One table: reconcile algorithm in place |
+| Quick Search Full Reindex | On demand (optional `tableName` input) | All tables: build a fresh physical index and swap the alias. One table: reconcile algorithm in place. Fails to start while another full reindex is running |
 
 Without `schedulerName` the processes exist but nothing runs them; the QBit logs a warning at startup.
 
@@ -155,6 +155,7 @@ Without `schedulerName` the processes exist but nothing runs them; the QBit logs
 | `basepullOverlapSeconds` | 300 | Re-read window before the previous run start |
 | `defaultBasepullIntervalMinutes` | 5 | Per-table due interval for config-driven tables |
 | `runHistoryRetentionDays` | 30 | Purge run records older than this; null keeps them |
+| `fullReindexStaleMinutes` | 30 | A running full reindex that shows no sign of life for this long is treated as stopped: it no longer blocks a new one, and basepull recovers its tables. Keep it well above the time one page of `sourceBatchSize` records takes; null means the default |
 | `bulkBatchSize`, `maxBulkRequestBytes`, `sourceBatchSize` | 500, 5 MiB, 1000 | Batch sizes |
 | `maxFieldLength` | 10000 | Truncate each indexed value |
 | `maxSearchLimit` | 100 | Largest page size |
@@ -171,7 +172,7 @@ Without `schedulerName` the processes exist but nothing runs them; the QBit logs
 
 - `quickSearchIndex`: one row per table with `enabled` (honoured by indexing and search, cached for one minute), `basepullIntervalMinutes`, `lastBasepullTime`, `lastReconcileTime`, `lastFullReindexTime`, `lastRunStatus`, `lastErrorMessage`, `recordCount`, `documentCount`, `realTimeErrorCount`, `status` (`ACTIVE`, `NEEDS_REINDEX` when the configured fields changed since the row was created, or `REBUILDING` while a full reindex of all tables runs). Unique on `tableName`.
 - `quickSearchIndexRun`: `runType` (`BASEPULL`, `RECONCILE`, `FULL_REINDEX`), `status`, counts, `errorMessage`.
-- `quickSearchFailedEvent`: real-time events that could not be applied; `status` `PENDING` or `EXHAUSTED` after 10 attempts. Deletes made while a full reindex of all tables runs are also recorded here with status `AWAITING_REINDEX`: the reindex applies them to the new index after the alias swap (basepull does not replay them). While a table is `REBUILDING`, drift detection is suspended for it. If a full reindex is killed mid-run, its tables stay `REBUILDING` and deletes keep collecting as `AWAITING_REINDEX`; no data is lost, and the recovery is to run a full reindex of all tables again, which applies the collected deletes and returns the tables to `ACTIVE`.
+- `quickSearchFailedEvent`: real-time events that could not be applied; `status` `PENDING` or `EXHAUSTED` after 10 attempts. Deletes made while a full reindex of all tables runs are also recorded here with status `AWAITING_REINDEX`: the reindex applies them to the new index after the alias swap (basepull does not replay them). While a table is `REBUILDING`, drift detection is suspended for it. Only one full reindex runs at a time: starting one while another is running fails. A full reindex shows it is running through its `FULL_REINDEX` run records, which stay `RUNNING` with `modifyDate` refreshed after every page. If it is killed mid-run (pod restart, OOM, deploy), recovery is automatic once its run records have shown no sign of life for `fullReindexStaleMinutes` (30 by default): the next basepull, or the next full reindex, marks those run records `FAILED`, returns the tables to `ACTIVE` with `lastBasepullTime` moved back to the run's start, and turns the `AWAITING_REINDEX` rows `PENDING` so basepull replays the deletes. No data is lost. A run that was only slow and is judged stopped notices before its alias swap and fails without swapping, or, after its swap, stops applying its captured deletes; basepull skips a replayed delete whose record exists again.
 
 ## Extending
 

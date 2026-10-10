@@ -279,6 +279,7 @@ class QuickSearchQBitConfigValidationTest
          .withBasepullRepeatSeconds(0)
          .withBasepullOverlapSeconds(-5)
          .withRunHistoryRetentionDays(0)
+         .withFullReindexStaleMinutes(0)
          .withMaxFieldLength(0));
       assertThat(errors).anyMatch(e -> e.startsWith("connectTimeoutMillis"));
       assertThat(errors).anyMatch(e -> e.startsWith("responseTimeoutMillis"));
@@ -287,7 +288,19 @@ class QuickSearchQBitConfigValidationTest
       assertThat(errors).anyMatch(e -> e.startsWith("basepullRepeatSeconds"));
       assertThat(errors).anyMatch(e -> e.startsWith("basepullOverlapSeconds"));
       assertThat(errors).anyMatch(e -> e.startsWith("runHistoryRetentionDays"));
+      assertThat(errors).anyMatch(e -> e.startsWith("fullReindexStaleMinutes"));
       assertThat(errors).anyMatch(e -> e.startsWith("maxFieldLength"));
+   }
+
+
+
+   @Test
+   void testFullReindexStaleMinutes_nullIsValid_andMeansTheDefault()
+   {
+      QuickSearchQBitConfig config = baseConfig().withFullReindexStaleMinutes(null);
+      assertThat(validate(config)).isEmpty();
+      assertThat(config.getEffectiveFullReindexStaleMinutes()).isEqualTo(QuickSearchQBitConfig.DEFAULT_FULL_REINDEX_STALE_MINUTES);
+      assertThat(config.withFullReindexStaleMinutes(5).getEffectiveFullReindexStaleMinutes()).isEqualTo(5);
    }
 
 
@@ -337,6 +350,7 @@ class QuickSearchQBitConfigValidationTest
       assertThat(config.getResponseTimeoutMillis()).isEqualTo(60000);
       assertThat(config.getMaxSearchLimit()).isEqualTo(100);
       assertThat(config.getBasepullOverlapSeconds()).isEqualTo(300);
+      assertThat(config.getFullReindexStaleMinutes()).isEqualTo(30);
       assertThat(config.getAdminPermissionRules().getPermissionBaseName()).isEqualTo(QuickSearchQBitConfig.DEFAULT_ADMIN_PERMISSION_BASE_NAME);
       assertThat(config.getApplyRecordSecurityLocks()).isTrue();
       assertThat(config.getDefaultBackendNameForTables()).isNull();
