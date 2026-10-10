@@ -42,9 +42,11 @@ import com.kingsrook.qqq.backend.core.model.actions.tables.query.QFilterCriteria
 import com.kingsrook.qqq.backend.core.model.actions.tables.query.QQueryFilter;
 import com.kingsrook.qqq.backend.core.model.actions.tables.query.QueryInput;
 import com.kingsrook.qqq.backend.core.model.actions.tables.update.UpdateInput;
+import com.kingsrook.qqq.backend.core.model.actions.tables.update.UpdateOutput;
 import com.kingsrook.qqq.backend.core.model.data.QRecord;
 import com.kingsrook.qqq.backend.core.model.statusmessages.SystemErrorStatusMessage;
 import com.kingsrook.qbits.quicksearch.BaseQuickSearchTest;
+import com.kingsrook.qbits.quicksearch.QuickSearchQBitConfig;
 import com.kingsrook.qbits.quicksearch.QuickSearchQBitContext;
 import com.kingsrook.qbits.quicksearch.QuickSearchableTableConfig;
 import com.kingsrook.qbits.quicksearch.model.QuickSearchFailedEvent;
@@ -66,6 +68,7 @@ import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.anyList;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.inOrder;
 import static org.mockito.Mockito.mock;
@@ -1358,6 +1361,158 @@ class FullReindexStepTest extends BaseQuickSearchTest
       verify(mockClient, times(2)).deleteDocuments(anyList(), anyInt());
       assertThat(queryAll(QuickSearchFailedEvent.TABLE_NAME)).singleElement()
          .satisfies(event -> assertThat(event.getValueString("recordId")).isEqualTo("7"));
+   }
+
+
+
+   /*******************************************************************************
+    ** Test: when the stale run records cannot be marked FAILED (every update
+    ** comes back with a per-row error), recovery fails and the new full
+    ** reindex does not start, since a live run misjudged as stopped would not
+    ** learn it was taken over.
+    *******************************************************************************/
+   @Test
+   void testRecovery_failedRunRecordsNotWritten_newRunDoesNotStart() throws QException
+   {
+      insertTestEntities(1);
+      insertIndexRow(true);
+      updateIndexRowStatus(AbstractIndexingStep.STATUS_REBUILDING);
+      Integer staleRunId = insertRunningRun(queryIndexRow().getValueInteger("id"), 120, 120).getValueInteger("id");
+
+      try(MockedConstruction<UpdateAction> updateActions = mockConstruction(UpdateAction.class, (updateAction, context) ->
+         when(updateAction.execute(any())).thenAnswer(invocation ->
+         {
+            UpdateInput  updateInput  = invocation.getArgument(0);
+            UpdateOutput updateOutput = new UpdateOutput();
+            updateOutput.setRecords(updateInput.getRecords().stream().map(record -> new QRecord(record).withError(new SystemErrorStatusMessage("row is locked"))).toList());
+            return (updateOutput);
+         })))
+      {
+         assertThatThrownBy(() -> new FullReindexStep().run(new RunBackendStepInput(), new RunBackendStepOutput()))
+            .isInstanceOf(QException.class)
+            .hasMessageContaining("FAILED")
+            .hasMessageContaining("row is locked");
+      }
+
+      verify(mockClient, never()).createPhysicalIndex(anyString());
+      verify(mockClient, never()).indexDocuments(anyString(), anyList(), anyInt());
+      assertThat(queryAll(QuickSearchIndexRun.TABLE_NAME)).singleElement()
+         .satisfies(run ->
+         {
+            assertThat(run.getValueInteger("id")).isEqualTo(staleRunId);
+            assertThat(run.getValueString("status")).isEqualTo(AbstractIndexingStep.RUN_RUNNING);
+         });
+   }
+
+
+
+   /*******************************************************************************
+    ** Test: the run keeps itself alive at every point where it could otherwise
+    ** go quiet: after each page, right before its pre-swap ownership check,
+    ** before each table's update after the swap, and before each batch of the
+    ** captured-delete drain.
+    *******************************************************************************/
+   @Test
+   void testAllTables_heartbeatsBeforeTheOwnershipCheckEachTableAndEachDrainBatch() throws QException
+   {
+      QuickSearchQBitContext.getConfig().withSourceBatchSize(1);
+      insertTestEntities(1);
+      insertCapturedDelete("8");
+      insertCapturedDelete("9");
+
+      List<String> events = new ArrayList<>();
+      doAnswer(invocation ->
+      {
+         events.add("refresh");
+         return (null);
+      }).when(mockClient).refreshIndex(PHYSICAL_INDEX);
+      doAnswer(invocation ->
+      {
+         events.add("swap");
+         return (null);
+      }).when(mockClient).swapAliasTo(PHYSICAL_INDEX);
+      when(mockClient.deleteDocuments(anyList(), anyInt())).thenAnswer(invocation ->
+      {
+         events.add("drainBatch");
+         return (new BulkIndexResult().withSuccessCount(1));
+      });
+
+      new FullReindexStep()
+      {
+         @Override
+         protected void heartbeat(QuickSearchIndexRun run)
+         {
+            events.add("heartbeat");
+            super.heartbeat(run);
+         }
+
+
+
+         @Override
+         protected void updateIndexRow(Integer indexId, Map<String, ? extends Serializable> values) throws QException
+         {
+            if(values.containsKey("lastFullReindexTime"))
+            {
+               events.add("tableDone");
+            }
+            super.updateIndexRow(indexId, values);
+         }
+      }.run(new RunBackendStepInput(), new RunBackendStepOutput());
+
+      assertThat(events).containsExactly(
+         "heartbeat",
+         "refresh", "heartbeat", "swap",
+         "heartbeat", "tableDone",
+         "heartbeat", "drainBatch", "heartbeat", "drainBatch", "heartbeat");
+   }
+
+
+
+   /*******************************************************************************
+    ** Test: when a run fails and cannot read whether a recovery took it over,
+    ** it leaves its run records RUNNING and its tables REBUILDING, so the next
+    ** recovery (once the records are stale) puts everything back, watermark
+    ** rewind included.
+    *******************************************************************************/
+   @Test
+   void testFailure_takeoverUnreadable_leavesRunRecordsRunningForRecovery() throws QException
+   {
+      insertTestEntities(1);
+      AtomicBoolean databaseDown = new AtomicBoolean(false);
+      when(mockClient.indexDocuments(anyString(), anyList(), anyInt())).thenAnswer(invocation ->
+      {
+         databaseDown.set(true);
+         throw (new QException("bulk failed"));
+      });
+
+      assertThatThrownBy(() -> new FullReindexStep()
+      {
+         @Override
+         protected QuickSearchQBitConfig getConfig() throws QException
+         {
+            ///////////////////////////////////////////////////////////////////
+            // only the first read after the failure (the takeover check) is //
+            // lost; everything after it would work                          //
+            ///////////////////////////////////////////////////////////////////
+            if(databaseDown.getAndSet(false))
+            {
+               throw (new QException("database unavailable"));
+            }
+            return (super.getConfig());
+         }
+      }.run(new RunBackendStepInput(), new RunBackendStepOutput()))
+         .isInstanceOf(QException.class)
+         .hasMessageContaining("bulk failed");
+
+      verify(mockClient).deletePhysicalIndex(PHYSICAL_INDEX);
+      assertThat(queryIndexRow().getValueString("status")).isEqualTo(AbstractIndexingStep.STATUS_REBUILDING);
+      QRecord run = queryAll(QuickSearchIndexRun.TABLE_NAME).get(0);
+      assertThat(run.getValueString("status")).isEqualTo(AbstractIndexingStep.RUN_RUNNING);
+
+      backdateRun(run.getValueInteger("id"));
+      assertThat(new FullReindexStep().recoverDeadRun(true)).isEmpty();
+      assertThat(queryIndexRow().getValueString("status")).isEqualTo(AbstractIndexingStep.STATUS_ACTIVE);
+      assertThat(queryRun(run.getValueInteger("id")).getValueString("status")).isEqualTo(AbstractIndexingStep.RUN_FAILED);
    }
 
 

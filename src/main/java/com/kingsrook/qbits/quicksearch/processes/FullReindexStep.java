@@ -344,7 +344,9 @@ public class FullReindexStep extends AbstractIndexingStep
     ** handCapturedDeletesToBasepull, every AWAITING_REINDEX row up to the
     ** newest one read here becomes PENDING; and only then is each stale RUNNING
     ** record marked FAILED, so a recovery that fails partway leaves them for
-    ** the next one, run start included. Replaying those deletes is harmless
+    ** the next one, run start included. Unlike completeRunRecord, that write
+    ** fails the recovery (and so the full reindex calling it) when any record
+    ** is not updated. Replaying those deletes is harmless
     ** whether or not the stopped run swapped: before a swap the alias points at
     ** the old index, which the listener already deleted from (a missing
     ** document counts as success); after one, it removes the copy the run read
@@ -397,15 +399,74 @@ public class FullReindexStep extends AbstractIndexingStep
          handCapturedDeletesToBasepull(lastCapturedId);
       }
 
+      failDeadRuns(runningRuns);
+      return (alive);
+   }
+
+
+
+   /*******************************************************************************
+    ** Mark the stale run records FAILED, failing when any of them is not
+    ** updated: a live run misjudged as stopped learns it was taken over only
+    ** from these records, so recovery must not finish, and no new full reindex
+    ** may start, until they are written. The status is mirrored onto each
+    ** index row, as completeRunRecord does.
+    *******************************************************************************/
+   private void failDeadRuns(List<QRecord> runningRuns) throws QException
+   {
+      if(runningRuns.isEmpty())
+      {
+         return;
+      }
+
+      Instant       endTime = Instant.now();
+      List<QRecord> updates = new ArrayList<>();
       for(QRecord runRecord : runningRuns)
       {
-         QuickSearchIndexRun run = new QuickSearchIndexRun()
-            .withId(runRecord.getValueInteger("id"))
-            .withQuickSearchIndexId(runRecord.getValueInteger("quickSearchIndexId"))
-            .withRunType(RUN_TYPE);
-         completeRunRecord(run, RUN_FAILED, 0, 0, 1, "Full reindex stopped without finishing (no heartbeat since " + lastSeen(runRecord) + "); recovered automatically");
+         updates.add(new QRecord()
+            .withValue("id", runRecord.getValue("id"))
+            .withValue("status", RUN_FAILED)
+            .withValue("endTime", endTime)
+            .withValue("recordsProcessed", 0)
+            .withValue("recordsIndexed", 0)
+            .withValue("errorCount", 1)
+            .withValue("errorMessage", truncate(staleRunMessage(runRecord), 4000)));
       }
-      return (alive);
+
+      UpdateInput updateInput = new UpdateInput();
+      updateInput.setTableName(getConfig().getQuickSearchIndexRunTableName());
+      updateInput.setRecords(updates);
+      List<QRecord> results = CollectionUtils.nonNullList(new UpdateAction().execute(updateInput).getRecords());
+      List<QRecord> written = results.stream().filter(result -> CollectionUtils.nullSafeIsEmpty(result.getErrors())).toList();
+      if(written.size() < updates.size())
+      {
+         List<QRecord> notWritten = results.stream().filter(result -> CollectionUtils.nullSafeHasContents(result.getErrors())).toList();
+         throw (new QException("Could not mark " + (updates.size() - written.size()) + " stopped full reindex run record(s) FAILED"
+            + (notWritten.isEmpty() ? "" : " (first error: " + notWritten.get(0).getErrors() + ")")
+            + "; recovery did not finish, and no full reindex starts until it does"));
+      }
+
+      for(QRecord runRecord : runningRuns)
+      {
+         Integer indexId = runRecord.getValueInteger("quickSearchIndexId");
+         if(indexId != null)
+         {
+            Map<String, Serializable> values = new HashMap<>();
+            values.put("lastRunStatus", RUN_TYPE + " " + RUN_FAILED);
+            values.put("lastErrorMessage", truncate(staleRunMessage(runRecord), 4000));
+            updateIndexRow(indexId, values);
+         }
+      }
+   }
+
+
+
+   /*******************************************************************************
+    ** The error message recorded on a run that stopped without finishing.
+    *******************************************************************************/
+   private static String staleRunMessage(QRecord runRecord)
+   {
+      return ("Full reindex stopped without finishing (no heartbeat since " + lastSeen(runRecord) + "); recovered automatically");
    }
 
 
