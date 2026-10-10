@@ -37,6 +37,12 @@ import com.kingsrook.qqq.backend.core.model.actions.tables.update.UpdateInput;
 import com.kingsrook.qqq.backend.core.model.data.QRecord;
 import com.kingsrook.qqq.backend.core.model.metadata.QInstance;
 import com.kingsrook.qqq.backend.core.model.metadata.code.QCodeReference;
+import com.kingsrook.qqq.backend.core.model.metadata.fields.QFieldMetaData;
+import com.kingsrook.qqq.backend.core.model.metadata.fields.QFieldType;
+import com.kingsrook.qqq.backend.core.model.metadata.possiblevalues.PVSValueFormatAndFields;
+import com.kingsrook.qqq.backend.core.model.metadata.possiblevalues.QPossibleValue;
+import com.kingsrook.qqq.backend.core.model.metadata.possiblevalues.QPossibleValueSource;
+import com.kingsrook.qqq.backend.core.model.metadata.possiblevalues.QPossibleValueSourceType;
 import com.kingsrook.qqq.backend.core.model.metadata.qbits.QBitMetaData;
 import com.kingsrook.qbits.quicksearch.BaseQuickSearchTest;
 import com.kingsrook.qbits.quicksearch.MissingLibraryTransportCustomizer;
@@ -46,7 +52,9 @@ import com.kingsrook.qbits.quicksearch.QuickSearchRuntime;
 import com.kingsrook.qbits.quicksearch.QuickSearchableTableConfig;
 import com.kingsrook.qbits.quicksearch.model.QuickSearchFailedEvent;
 import com.kingsrook.qbits.quicksearch.model.QuickSearchIndex;
+import com.kingsrook.qbits.quicksearch.opensearch.OpenSearchDocument;
 import com.kingsrook.qbits.quicksearch.processes.AbstractIndexingStep;
+import com.kingsrook.qbits.quicksearch.processes.IndexingUtils;
 import com.kingsrook.qbits.quicksearch.publisher.IndexEvent;
 import com.kingsrook.qbits.quicksearch.publisher.IndexEventAction;
 import com.kingsrook.qbits.quicksearch.publisher.IndexEventPublisher;
@@ -166,6 +174,59 @@ class QuickSearchRecordChangeListenerTest extends BaseQuickSearchTest
       insert("widget", transaction);
       transaction.rollback();
 
+      verify(publisher, never()).publishIndexEvents(anyList());
+   }
+
+
+
+   @Test
+   void testInsert_indexesDisplayValuesAndPossibleValueLabels() throws QException
+   {
+      ///////////////////////////////////////////////////////////////////////
+      // the inserted record holds the raw categoryId (1); its document    //
+      // must carry the possible-value label, as an updated record's does //
+      ///////////////////////////////////////////////////////////////////////
+      addCategoryPossibleValueField();
+
+      InsertInput insertInput = new InsertInput();
+      insertInput.setTableName(TEST_ENTITY_TABLE);
+      insertInput.setRecords(List.of(new QRecord().withValue("name", "widget").withValue("description", "d").withValue("categoryId", 1)));
+      new InsertAction().execute(insertInput);
+
+      ArgumentCaptor<List<IndexEvent>> captor = ArgumentCaptor.forClass(List.class);
+      verify(publisher, times(1)).publishIndexEvents(captor.capture());
+      OpenSearchDocument document = IndexingUtils.buildDocument(captor.getValue().get(0).getRecord(), new QuickSearchableTableConfig()
+         .withTableName(TEST_ENTITY_TABLE)
+         .withPrimaryKeyField("id")
+         .withSearchableFields(List.of("name", "categoryId")));
+
+      assertThat(document.getFieldValues()).containsEntry("categoryId", "Gadgets");
+      assertThat(document.getSearchableText()).isEqualTo("widget Gadgets");
+      assertThat(document.getRecordLabel()).isEqualTo("widget - Gadgets");
+   }
+
+
+
+   @Test
+   void testInsert_reReadFails_recordsFailedEventsAfterCommit() throws QException
+   {
+      QBackendTransaction transaction = new QBackendTransaction();
+      try(MockedConstruction<QueryAction> ignored = failingQueries(new QException("possible-value backend unavailable")))
+      {
+         assertThatCode(() -> new QuickSearchRecordChangeListener().onRecordsChanged(changeEvent(RecordChangeType.INSERT, transaction, 7, 8))).doesNotThrowAnyException();
+      }
+
+      assertThat(queryFailedEvents()).isEmpty();
+      transaction.commit();
+
+      List<QRecord> failed = queryFailedEvents();
+      assertThat(failed).extracting(r -> r.getValueString("recordId")).containsExactlyInAnyOrder("7", "8");
+      assertThat(failed).allSatisfy(r ->
+      {
+         assertThat(r.getValueString("action")).isEqualTo("INDEX");
+         assertThat(r.getValueString("status")).isEqualTo(QuickSearchFailedEvent.STATUS_PENDING);
+         assertThat(r.getValueString("errorMessage")).contains("possible-value backend unavailable");
+      });
       verify(publisher, never()).publishIndexEvents(anyList());
    }
 
@@ -354,7 +415,7 @@ class QuickSearchRecordChangeListenerTest extends BaseQuickSearchTest
       assertThat(collectingLogger.getCollectedMessages()).anySatisfy(m ->
       {
          assertThat(m.getLevel()).isEqualTo(Level.WARN);
-         assertThat(m.getMessage()).contains("Could not re-read updated records").contains(TEST_ENTITY_TABLE).contains("\"recordCount\":2").doesNotContain("changed");
+         assertThat(m.getMessage()).contains("Could not re-read inserted or updated records").contains(TEST_ENTITY_TABLE).contains("\"recordCount\":2").doesNotContain("changed");
          assertThat(m.getMessage()).contains("possible-value backend unavailable");
       });
    }
@@ -408,7 +469,7 @@ class QuickSearchRecordChangeListenerTest extends BaseQuickSearchTest
          .anySatisfy(m ->
          {
             assertThat(m.getLevel()).isEqualTo(Level.WARN);
-            assertThat(m.getMessage()).contains("Could not re-read updated records").contains(TEST_ENTITY_TABLE).doesNotContain("changed");
+            assertThat(m.getMessage()).contains("Could not re-read inserted or updated records").contains(TEST_ENTITY_TABLE).doesNotContain("changed");
          })
          .anySatisfy(m ->
          {
@@ -471,12 +532,38 @@ class QuickSearchRecordChangeListenerTest extends BaseQuickSearchTest
 
    private RecordChangeEvent updateEvent(QBackendTransaction transaction, Integer... ids)
    {
+      return (changeEvent(RecordChangeType.UPDATE, transaction, ids));
+   }
+
+
+
+   private RecordChangeEvent changeEvent(RecordChangeType type, QBackendTransaction transaction, Integer... ids)
+   {
       List<QRecord> records = new ArrayList<>();
       for(Integer id : ids)
       {
          records.add(new QRecord().withValue("id", id).withValue("description", "changed"));
       }
-      return (new RecordChangeEvent().withTableName(TEST_ENTITY_TABLE).withType(RecordChangeType.UPDATE).withRecords(records).withTransaction(transaction));
+      return (new RecordChangeEvent().withTableName(TEST_ENTITY_TABLE).withType(type).withRecords(records).withTransaction(transaction));
+   }
+
+
+
+   /*******************************************************************************
+    ** Give the test table a categoryId field backed by an enum possible-value
+    ** source (1 is "Gadgets"), and a record label that includes it.
+    *******************************************************************************/
+   private void addCategoryPossibleValueField()
+   {
+      QInstance qInstance = QContext.getQInstance();
+      qInstance.addPossibleValueSource(new QPossibleValueSource()
+         .withName("testCategory")
+         .withType(QPossibleValueSourceType.ENUM)
+         .withValueFormatAndFields(PVSValueFormatAndFields.LABEL_ONLY)
+         .withEnumValues(List.of(new QPossibleValue<>(1, "Gadgets"))));
+      qInstance.getTable(TEST_ENTITY_TABLE)
+         .withField(new QFieldMetaData("categoryId", QFieldType.INTEGER).withPossibleValueSourceName("testCategory"))
+         .withRecordLabelFormatAndFields("%s - %s", "name", "categoryId");
    }
 
 
