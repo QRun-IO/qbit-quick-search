@@ -39,6 +39,7 @@ import com.kingsrook.qqq.backend.core.model.metadata.QInstance;
 import com.kingsrook.qqq.backend.core.model.metadata.authentication.QAuthenticationMetaData;
 import com.kingsrook.qqq.backend.core.model.metadata.fields.QFieldMetaData;
 import com.kingsrook.qqq.backend.core.model.metadata.fields.QFieldType;
+import com.kingsrook.qqq.backend.core.model.metadata.possiblevalues.QPossibleValueSource;
 import com.kingsrook.qqq.backend.core.model.metadata.tables.QTableMetaData;
 import com.kingsrook.qqq.backend.core.model.session.QSession;
 import com.kingsrook.qqq.backend.core.modules.backend.implementations.memory.MemoryBackendModule;
@@ -64,8 +65,8 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 /*******************************************************************************
  ** Integration tests, against a real OpenSearch, that real-time indexing keeps
- ** the index in step with the source table through updates and deletes, and
- ** that the reconcile process repairs an index that has drifted.
+ ** the index in step with the source table through inserts, updates and
+ ** deletes, and that the reconcile process repairs an index that has drifted.
  **
  ** Each test uses its own record IDs and search terms, so tests are independent.
  *******************************************************************************/
@@ -75,6 +76,7 @@ class IndexDriftIntegrationTest
 {
    private static final String BACKEND_NAME = "driftMemoryBackend";
    private static final String TABLE_NAME   = "driftCustomer";
+   private static final String COMPANY_NAME = "driftCompany";
    private static final String INDEX_NAME   = "quick_search_drift_test";
 
    @Container
@@ -98,6 +100,9 @@ class IndexDriftIntegrationTest
 
       @QuickSearchField
       private String city;
+
+      @QuickSearchField
+      private Integer companyId;
    }
 
 
@@ -119,12 +124,22 @@ class IndexDriftIntegrationTest
          .withName("anonymous")
          .withType(QAuthenticationType.FULLY_ANONYMOUS));
       qInstance.addTable(new QTableMetaData()
+         .withName(COMPANY_NAME)
+         .withBackendName(BACKEND_NAME)
+         .withPrimaryKeyField("id")
+         .withRecordLabelFormatAndFields("%s", "name")
+         .withField(new QFieldMetaData("id", QFieldType.INTEGER).withIsEditable(false))
+         .withField(new QFieldMetaData("name", QFieldType.STRING)));
+      qInstance.addPossibleValueSource(QPossibleValueSource.newForTable(COMPANY_NAME));
+      qInstance.addTable(new QTableMetaData()
          .withName(TABLE_NAME)
          .withBackendName(BACKEND_NAME)
          .withPrimaryKeyField("id")
+         .withRecordLabelFormatAndFields("%s (%s)", "name", "companyId")
          .withField(new QFieldMetaData("id", QFieldType.INTEGER).withIsEditable(false))
          .withField(new QFieldMetaData("name", QFieldType.STRING))
-         .withField(new QFieldMetaData("city", QFieldType.STRING)));
+         .withField(new QFieldMetaData("city", QFieldType.STRING))
+         .withField(new QFieldMetaData("companyId", QFieldType.INTEGER).withPossibleValueSourceName(COMPANY_NAME)));
 
       QuickSearchQBitConfig config = new QuickSearchQBitConfig()
          .withBackendName(BACKEND_NAME)
@@ -150,6 +165,27 @@ class IndexDriftIntegrationTest
       QContext.clear();
       QuickSearchQBitContext.clear();
       MemoryRecordStore.getInstance().reset();
+   }
+
+
+
+   /*******************************************************************************
+    ** Test: a just-inserted record is indexed with its possible-value labels, in
+    ** its searchable text and its record label, not with the raw foreign key.
+    *******************************************************************************/
+   @Test
+   void testInsert_indexesPossibleValueLabels() throws Exception
+   {
+      InsertInput companyInsert = new InsertInput();
+      companyInsert.setTableName(COMPANY_NAME);
+      companyInsert.setRecords(List.of(new QRecord().withValue("id", 1).withValue("name", "Rocketworks")));
+      new InsertAction().execute(companyInsert);
+
+      insert(new QRecord().withValue("id", 31).withValue("name", "Cyrus").withValue("city", "Labelton").withValue("companyId", 1));
+
+      List<QuickSearchResult> results = search("rocketworks");
+      assertThat(results).extracting(QuickSearchResult::getRecordId).containsExactly("31");
+      assertThat(results.get(0).getRecordLabel()).isEqualTo("Cyrus (Rocketworks)");
    }
 
 
@@ -268,11 +304,20 @@ class IndexDriftIntegrationTest
     *******************************************************************************/
    private List<String> searchRecordIds(String term) throws QException
    {
-      client().refreshIndex();
-      return (new QuickSearchAction().execute(new QuickSearchInput().withSearchTerm(term).withTableName(TABLE_NAME))
-         .getResults().stream()
+      return (search(term).stream()
          .map(QuickSearchResult::getRecordId)
          .toList());
+   }
+
+
+
+   /*******************************************************************************
+    ** Refresh the index, then return the search results matching the term.
+    *******************************************************************************/
+   private List<QuickSearchResult> search(String term) throws QException
+   {
+      client().refreshIndex();
+      return (new QuickSearchAction().execute(new QuickSearchInput().withSearchTerm(term).withTableName(TABLE_NAME)).getResults());
    }
 
 
