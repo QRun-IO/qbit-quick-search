@@ -20,6 +20,7 @@
 
 - Real-time indexing happens after commit. Code that searched for a record inside the same transaction that inserted it will not find it until commit.
 - Real-time failures no longer vanish: they land in `quickSearchFailedEvent` and are replayed by the next basepull. Review that table after an OpenSearch outage.
+- Inserted and updated records are re-read inside the write's transaction, with display values and possible-value labels, before they are indexed. That is one extra query per write batch on an indexed table, and it runs the host's possible-value providers. If the re-read fails, the write still succeeds and the records are replayed by basepull.
 - A table without the change-detection field (`modifyDate` by default) is indexed on the first basepull and thereafter only by reconcile.
 - `limit` is capped (default 100), `offset + limit` at 10,000, and search terms must be 2 to 100 characters.
 - Query semantics changed from OR over n-grams to AND over whole terms with prefix matching: "blue widget" now requires both words.

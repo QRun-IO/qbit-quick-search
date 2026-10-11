@@ -37,7 +37,11 @@ import com.kingsrook.qqq.backend.core.model.actions.tables.update.UpdateInput;
 import com.kingsrook.qqq.backend.core.model.data.QRecord;
 import com.kingsrook.qqq.backend.core.model.metadata.QInstance;
 import com.kingsrook.qqq.backend.core.model.metadata.code.QCodeReference;
+import com.kingsrook.qqq.backend.core.model.metadata.fields.QFieldMetaData;
+import com.kingsrook.qqq.backend.core.model.metadata.fields.QFieldType;
+import com.kingsrook.qqq.backend.core.model.metadata.possiblevalues.QPossibleValueSource;
 import com.kingsrook.qqq.backend.core.model.metadata.qbits.QBitMetaData;
+import com.kingsrook.qqq.backend.core.model.metadata.tables.QTableMetaData;
 import com.kingsrook.qbits.quicksearch.BaseQuickSearchTest;
 import com.kingsrook.qbits.quicksearch.MissingLibraryTransportCustomizer;
 import com.kingsrook.qbits.quicksearch.QuickSearchQBitConfig;
@@ -74,6 +78,8 @@ import static org.mockito.Mockito.when;
  *******************************************************************************/
 class QuickSearchRecordChangeListenerTest extends BaseQuickSearchTest
 {
+   private static final String COMPANY_TABLE = "company";
+
    private IndexEventPublisher publisher;
    private QuickSearchRuntime  runtime;
 
@@ -100,6 +106,25 @@ class QuickSearchRecordChangeListenerTest extends BaseQuickSearchTest
       config.setRuntime(runtime);
 
       QInstance qInstance = QContext.getQInstance();
+
+      ///////////////////////////////////////////////////////////////////
+      // a foreign key to a company table, through a table PVS, and a  //
+      // record label over it, so display values can be asserted      //
+      ///////////////////////////////////////////////////////////////////
+      qInstance.addTable(new QTableMetaData()
+         .withName(COMPANY_TABLE)
+         .withBackendName(TEST_BACKEND_NAME)
+         .withPrimaryKeyField("id")
+         .withRecordLabelFormat("%s")
+         .withRecordLabelFields("name")
+         .withField(new QFieldMetaData("id", QFieldType.INTEGER).withIsEditable(false))
+         .withField(new QFieldMetaData("name", QFieldType.STRING)));
+      qInstance.addPossibleValueSource(QPossibleValueSource.newForTable(COMPANY_TABLE));
+      qInstance.getTable(TEST_ENTITY_TABLE)
+         .withField(new QFieldMetaData("companyId", QFieldType.INTEGER).withPossibleValueSourceName(COMPANY_TABLE))
+         .withRecordLabelFormat("%s - %s")
+         .withRecordLabelFields("name", "companyId");
+
       qInstance.addQBit(new QBitMetaData().withGroupId("com.kingsrook.qbits").withArtifactId("quick-search").withVersion("test").withConfig(config));
       qInstance.withRecordChangeListener(new QCodeReference(QuickSearchRecordChangeListener.class));
    }
@@ -141,6 +166,79 @@ class QuickSearchRecordChangeListenerTest extends BaseQuickSearchTest
       assertThat(captor.getValue().get(0).getAction()).isEqualTo(IndexEventAction.INDEX);
       assertThat(captor.getValue().get(0).getRecordId()).isEqualTo(String.valueOf(id));
       assertThat(captor.getValue().get(0).getRecord().getValueString("name")).isEqualTo("widget");
+   }
+
+
+
+   @Test
+   void testInsert_indexesDisplayValuesAndPossibleValueLabels() throws QException
+   {
+      InsertInput companyInsert = new InsertInput();
+      companyInsert.setTableName(COMPANY_TABLE);
+      companyInsert.setRecords(List.of(new QRecord().withValue("name", "Acme Corp")));
+      Integer companyId = new InsertAction().execute(companyInsert).getRecords().get(0).getValueInteger("id");
+
+      InsertInput insertInput = new InsertInput();
+      insertInput.setTableName(TEST_ENTITY_TABLE);
+      insertInput.setRecords(List.of(new QRecord().withValue("name", "widget").withValue("description", "d").withValue("companyId", companyId)));
+      new InsertAction().execute(insertInput);
+
+      ArgumentCaptor<List<IndexEvent>> captor = ArgumentCaptor.forClass(List.class);
+      verify(publisher, times(1)).publishIndexEvents(captor.capture());
+      QRecord indexed = captor.getValue().get(0).getRecord();
+      assertThat(indexed.getValueInteger("companyId")).isEqualTo(companyId);
+      assertThat(indexed.getDisplayValue("companyId")).as("the PVS label, not the raw key").isEqualTo("Acme Corp");
+      assertThat(indexed.getRecordLabel()).isEqualTo("widget - Acme Corp");
+   }
+
+
+
+   @Test
+   void testInsert_reReadFails_recordsFailedEventsAfterCommit() throws QException
+   {
+      QBackendTransaction transaction = new QBackendTransaction();
+      try(MockedConstruction<QueryAction> ignored = failingQueries(new QException("possible-value backend unavailable")))
+      {
+         assertThatCode(() -> new QuickSearchRecordChangeListener().onRecordsChanged(changeEvent(RecordChangeType.INSERT, transaction, 7, 8))).doesNotThrowAnyException();
+      }
+
+      assertThat(queryFailedEvents()).isEmpty();
+      transaction.commit();
+
+      List<QRecord> failed = queryFailedEvents();
+      assertThat(failed).extracting(r -> r.getValueString("recordId")).containsExactlyInAnyOrder("7", "8");
+      assertThat(failed).allSatisfy(r ->
+      {
+         assertThat(r.getValueString("action")).isEqualTo("INDEX");
+         assertThat(r.getValueString("status")).isEqualTo(QuickSearchFailedEvent.STATUS_PENDING);
+         assertThat(r.getValueString("errorMessage")).contains("possible-value backend unavailable");
+      });
+      verify(publisher, never()).publishIndexEvents(anyList());
+   }
+
+
+
+   @Test
+   void testInsert_reReadFailsThenRollback_logsCauseAndRecordsNothing() throws QException
+   {
+      QCollectingLogger   collectingLogger = QLogger.activateCollectingLoggerForClass(QuickSearchRecordChangeListener.class);
+      QBackendTransaction transaction      = new QBackendTransaction();
+      try(MockedConstruction<QueryAction> ignored = failingQueries(new NoClassDefFoundError("com/example/pvs/Provider")))
+      {
+         new QuickSearchRecordChangeListener().onRecordsChanged(changeEvent(RecordChangeType.INSERT, transaction, 7));
+      }
+      finally
+      {
+         QLogger.deactivateCollectingLoggerForClass(QuickSearchRecordChangeListener.class);
+      }
+      transaction.rollback();
+
+      assertThat(queryFailedEvents()).isEmpty();
+      assertThat(collectingLogger.getCollectedMessages()).anySatisfy(m ->
+      {
+         assertThat(m.getLevel()).isEqualTo(Level.WARN);
+         assertThat(m.getMessage()).contains("Could not re-read inserted records").contains(TEST_ENTITY_TABLE).contains("com/example/pvs/Provider");
+      });
    }
 
 
@@ -471,12 +569,19 @@ class QuickSearchRecordChangeListenerTest extends BaseQuickSearchTest
 
    private RecordChangeEvent updateEvent(QBackendTransaction transaction, Integer... ids)
    {
+      return (changeEvent(RecordChangeType.UPDATE, transaction, ids));
+   }
+
+
+
+   private RecordChangeEvent changeEvent(RecordChangeType type, QBackendTransaction transaction, Integer... ids)
+   {
       List<QRecord> records = new ArrayList<>();
       for(Integer id : ids)
       {
          records.add(new QRecord().withValue("id", id).withValue("description", "changed"));
       }
-      return (new RecordChangeEvent().withTableName(TEST_ENTITY_TABLE).withType(RecordChangeType.UPDATE).withRecords(records).withTransaction(transaction));
+      return (new RecordChangeEvent().withTableName(TEST_ENTITY_TABLE).withType(type).withRecords(records).withTransaction(transaction));
    }
 
 

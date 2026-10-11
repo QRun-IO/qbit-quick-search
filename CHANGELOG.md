@@ -55,6 +55,7 @@ Requires QQQ 4.1. Closes every blocker of the 2026-10-04 production-readiness au
 - An update was dropped without a `quickSearchFailedEvent` row when the listener's re-read failed or the optional AWS SDK was missing (`LinkageError`); both are now recorded for basepull, and a `DEGRADED` start without the AWS SDK no longer aborts host startup (#13).
 - Search pages overlapped under record locks, per-table mode ignored `offset`, and a large `maxSearchLimit` could exceed the 10,000 result window (#16).
 - A failing document count was swallowed and cleared `documentCount`; it is now logged at warn and the previous count is kept (#17).
+- A real-time insert was indexed with raw values (a foreign key as its id, the record label as "2 - email") until the next basepull. Inserts are now re-read in the write's transaction with display values and possible-value labels, as updates are; a failed re-read is recorded in `quickSearchFailedEvent` for basepull and never fails the insert (#28).
 
 ## [0.2.0] - 2026-03-30
 - Config-driven table indexing (`SearchableTableConfig`).

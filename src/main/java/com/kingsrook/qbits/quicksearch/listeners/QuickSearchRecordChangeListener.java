@@ -51,14 +51,20 @@ import static com.kingsrook.qqq.backend.core.logging.LogUtils.logPair;
  ** Real-time indexing hook. Registered once per QInstance; applies to the
  ** tables this QBit indexes.
  **
- ** Events are built while the write's transaction is open (so updates can be
- ** re-read in full), but published only after that transaction commits, via
+ ** Events are built while the write's transaction is open, but published only
+ ** after that transaction commits, via
  ** QBackendTransaction.addAfterCommitCallback. A write without a transaction
  ** is already committed, so it publishes immediately. A rolled-back write never
  ** reaches the index.
  **
- ** This listener never fails the host's write. When the re-read of updated
- ** records or publishing fails (including a LinkageError from a missing
+ ** Inserted and updated records are re-read inside that transaction, with
+ ** display values and possible-value labels, so a real-time document matches
+ ** the one basepull, reconcile and full reindex build. The event's own records
+ ** are not enough: for an update they are the sparse input, and for an insert
+ ** they carry only raw values.
+ **
+ ** This listener never fails the host's write. When the re-read of inserted or
+ ** updated records or publishing fails (including a LinkageError from a missing
  ** optional library while the client is built), each affected (table, record,
  ** action) is written to quickSearchFailedEvent for the scheduled basepull to
  ** replay. A failed re-read is recorded after the commit too, so a rolled-back
@@ -115,8 +121,7 @@ public class QuickSearchRecordChangeListener implements RecordChangeListenerInte
 
       switch(event.getType())
       {
-         case INSERT -> indexEvents.addAll(toIndexEvents(tableName, primaryKeyField, event.getRecords()));
-         case UPDATE ->
+         case INSERT, UPDATE ->
          {
             try
             {
@@ -127,10 +132,11 @@ public class QuickSearchRecordChangeListener implements RecordChangeListenerInte
                ///////////////////////////////////////////////////////////////////////
                // log now: with a transaction, nothing else is logged until commit, //
                // and a rollback (a transaction the failed re-read aborted, too)    //
-               // would leave no trace. Then record the updated keys after commit,  //
+               // would leave no trace. Then record the written keys after commit,  //
                // so basepull re-reads and indexes them.                            //
                ///////////////////////////////////////////////////////////////////////
-               LOG.warn("Could not re-read updated records for indexing; recording them for replay once the write commits", e,
+               LOG.warn("Could not re-read " + (event.getType() == RecordChangeType.INSERT ? "inserted" : "updated")
+                     + " records for indexing; recording them for replay once the write commits", e,
                   logPair("tableName", tableName), logPair("recordCount", event.getRecords().size()));
                List<IndexEvent> failedEvents = toIndexEvents(tableName, primaryKeyField, event.getRecords());
                runAfterCommit(event, () -> recordFailures(runtime, failedEvents, e));
@@ -444,8 +450,9 @@ public class QuickSearchRecordChangeListener implements RecordChangeListenerInte
 
 
    /*******************************************************************************
-    ** Updated records are "as the backend returned them", which for RDBMS is the
-    ** sparse input. Re-read the full rows inside the same transaction, with
+    ** The event's records are "as the backend returned them": for an update on
+    ** RDBMS that is the sparse input, and for an insert the raw values with no
+    ** display values. Re-read the full rows inside the same transaction, with
     ** display values so possible-value labels are indexed (which can run host
     ** possible-value providers).
     *******************************************************************************/
