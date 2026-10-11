@@ -2,6 +2,19 @@
 
 All notable changes to this project are documented here. The format follows Keep a Changelog; versions follow semantic versioning.
 
+## [1.1.0] - Unreleased
+
+Requires the QQQ release that carries the record-search provider SPI (QRun-IO/qqq#1042); built against 4.1.0-SNAPSHOT until it is released. See `docs/MIGRATION-1.1.md`.
+
+### Added
+- `QuickSearchRecordSearchProvider`: serves QQQ core record search (`RecordSearchAction`, `POST /qqq/v1/search`, the Next UI global search) from OpenSearch for the tables Quick Search indexes. One `_msearch` request with a per-table top-N search (same query, AND semantics and field weights as `QuickSearchAction`); returns record ids only, which core re-reads through `QueryAction` (permissions, record locks, labels). Audit finding F-11, decision D1.
+- `serveCoreRecordSearch` (default `true`): registers the provider and gives indexed tables core `searchFields` (visible string and integer searchable fields) when they have none. Host `searchFields` and a host-registered provider are never replaced.
+- `recordSearchTimeoutMillis` (default 2500): wall-clock limit on the OpenSearch request; on timeout or any failure core falls back to its own search, and the provider claims no tables for 30 seconds.
+- `QuickSearchOpenSearchClient.searchRecordIdsPerTable`.
+
+### Security
+- Fields of type `PASSWORD` are no longer indexed (as hidden fields already were). Reconcile or fully reindex once to remove values a 1.0 index may hold.
+
 ## [1.0.0-RC.2] - 2026-10-06
 
 Second release candidate, published to Maven Central from `release/1.0`. Fixes the five pre-GA findings from the PR #10 review (#13 to #17); the changes are listed under 1.0.0 below. Requires QQQ 4.1. No schema change, but two new status values: `REBUILDING` on `quickSearchIndex.status` and `AWAITING_REINDEX` on `quickSearchFailedEvent.status`; a host that sized its own `quickSearchFailedEvent.status` column needs at least 16 characters. Known gaps before GA are tracked in #12.

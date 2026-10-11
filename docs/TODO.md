@@ -9,7 +9,7 @@
 - [ ] qqq-all follow-up PR: remove the manual `instance.addQBit(...)` for quick-search in `DemoQBits`, pass `withSchedulerName("demoScheduler")`, set `withStartupMode(QuickSearchStartupMode.DEGRADED)` for the full profile test, pin 1.0.0.
 - [ ] Voyage: pin 1.0.0, set `schedulerName`, switch to `opensearchUrl` and `${env.}` credentials.
 - [ ] CI: add a second test job with `-Dopensearch.test.image=opensearchproject/opensearch:3.9.0` (needs a qqq-orb parameter for extra Maven args, or a plain job).
-- [ ] Open the qqq issue proposing `RecordSearchProviderInterface` (D1); quick-search adapter lands in 1.1.
+- [x] Core SPI proposed as QRun-IO/qqq#1042 (D1); the 1.1 adapter `QuickSearchRecordSearchProvider` is on `feature/record-search-provider`.
 - [x] Tracking issue #12 created and recorded in the PRD (2026-10-06).
 - [x] PR #8 merged 2026-10-05; Dependabot PR #1 closed as superseded.
 - [x] PR #10 merged and `1.0.0-RC.1` published to Maven Central from `release/1.0` (2026-10-05).
@@ -25,6 +25,11 @@
 - [x] `1.0.0-RC.2` published to Maven Central from `release/1.0` (2026-10-06).
 - [ ] Stuck `REBUILDING` after a killed or overlapping full reindex (from the PR #20 review): only another all-tables reindex clears it, `AWAITING_REINDEX` rows accumulate and drift detection stays off for those tables. No data is lost. Fix needs a liveness check on the `FULL_REINDEX` run record before reconcile may reset the status, plus refusing a second concurrent full reindex.
 - [ ] Drift detection still writes `NEEDS_REINDEX` into `status`, so a few-millisecond window can overwrite `REBUILDING`; the durable fix is a separate drift field (schema change, so 1.1 at the earliest).
+
+## Before releasing 1.1.0
+
+- [ ] Re-point the `qqq-snapshot` profile from `4.1.0-SNAPSHOT` to the QQQ release that carries the record-search provider SPI (QRun-IO/qqq#1042).
+- [ ] qqq-all / Website-Backend: confirm the Next UI search box is served from OpenSearch (provider registered, indexed tables have `searchFields`).
 
 ## Later (1.x)
 
