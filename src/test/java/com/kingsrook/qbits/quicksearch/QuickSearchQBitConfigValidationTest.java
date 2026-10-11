@@ -276,6 +276,7 @@ class QuickSearchQBitConfigValidationTest
          .withResponseTimeoutMillis(-1)
          .withMaxConnections(0)
          .withMaxSearchLimit(0)
+         .withRecordSearchTimeoutMillis(0)
          .withBasepullRepeatSeconds(0)
          .withBasepullOverlapSeconds(-5)
          .withRunHistoryRetentionDays(0)
@@ -284,6 +285,7 @@ class QuickSearchQBitConfigValidationTest
       assertThat(errors).anyMatch(e -> e.startsWith("responseTimeoutMillis"));
       assertThat(errors).anyMatch(e -> e.startsWith("maxConnections"));
       assertThat(errors).anyMatch(e -> e.startsWith("maxSearchLimit"));
+      assertThat(errors).anyMatch(e -> e.startsWith("recordSearchTimeoutMillis"));
       assertThat(errors).anyMatch(e -> e.startsWith("basepullRepeatSeconds"));
       assertThat(errors).anyMatch(e -> e.startsWith("basepullOverlapSeconds"));
       assertThat(errors).anyMatch(e -> e.startsWith("runHistoryRetentionDays"));

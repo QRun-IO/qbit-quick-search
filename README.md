@@ -8,7 +8,7 @@
 
 Annotate entity classes or declare tables in config, point the QBit at an OpenSearch cluster, produce it into your `QInstance`, and you get real-time indexing of committed writes, a scheduled catch-up and reconcile, a blackout-free full rebuild, and a permission-aware search API with relevance scoring, typeahead, highlights and pagination.
 
-Requires QQQ 4.1 (the QBit uses 4.1's record-change listeners, after-commit callbacks and runtime services).
+Requires QQQ 4.1 (the QBit uses 4.1's record-change listeners, after-commit callbacks and runtime services). Serving core search (`POST /qqq/v1/search`, below) needs the QQQ release that carries the record-search provider SPI (QRun-IO/qqq#1042); until it is released, 1.1 builds against 4.1.0-SNAPSHOT.
 
 ## What it does
 
@@ -18,6 +18,7 @@ Requires QQQ 4.1 (the QBit uses 4.1's record-change listeners, after-commit call
 | Basepull catch-up | Scheduled process (`schedulerName` plus `basepullRepeatSeconds`) that re-indexes rows changed since the previous run's start, with a configurable overlap, paging by primary key. |
 | Reconcile | Scheduled or on-demand process that re-indexes everything in place, then removes documents whose source row is gone, including documents of tables no longer configured. No search blackout. |
 | Full rebuild | Indexes every table into a fresh physical index and atomically swaps the alias; the old index keeps serving until the new one is complete. Also upgrades an index created by an older release. |
+| Core search | `QuickSearchRecordSearchProvider` serves QQQ's `RecordSearchAction` (`POST /qqq/v1/search`, the Next UI global search box) from OpenSearch for the indexed tables, with a timeout and an automatic fallback to core's own search. |
 | Search | `QuickSearchAction`: AND semantics, edge-ngram typeahead with a plain search analyzer, per-field weights, highlights, `tableNames` and `limitPerTable`, bounded paging, `tableLabel` on results. Only tables the session may read are searched; hits are re-read through `QueryAction` so record security locks apply. |
 | Connections | HTTP or HTTPS, basic auth, AWS IAM SigV4, custom CA or trust store, mTLS, timeouts, pool size, a transport customizer SPI for anything else. Secrets by `${env.X}` reference. |
 | Operations | `quickSearchIndex` (per-table status, counts, last run, last error), `quickSearchIndexRun` (history, purged after `runHistoryRetentionDays`), `quickSearchFailedEvent`, a `quickSearchAdmin` app, explicit permission rules, fail-fast or degraded startup. |
@@ -99,7 +100,7 @@ config.withSearchableTable(new SearchableTableConfig("crmContact", List.of(
    .withRecordLabelFormat("%s %s", "firstName", "lastName"));
 ```
 
-Annotation and config-driven tables can be mixed; a table may appear in only one of them. Hidden fields are never indexed. A table without the change-detection field (`modifyDate` by default) is covered by reconcile instead of incremental basepull.
+Annotation and config-driven tables can be mixed; a table may appear in only one of them. Hidden and password fields are never indexed. A table without the change-detection field (`modifyDate` by default) is covered by reconcile instead of incremental basepull.
 
 ### Searching
 
@@ -123,6 +124,17 @@ output.getTotalHits(); output.getTotalHitsIsLowerBound(); output.getHasMore();
 `offset` skips N accessible results: with record security locks on, hits a lock hides are not counted, so consecutive pages never overlap or skip a visible hit, and with `limitPerTable` the offset applies within each table. With locks on, `totalHits` counts hits confirmed accessible so far; `totalHitsIsLowerBound` is true when the scan stopped before reading every candidate (page full, result window, or scan budget). A single-list search reads at most 10,000 raw hits in batches of at most 1,000. In per-table mode the T tables share that budget, each getting max(10,000 / T, 2 x `limitPerTable`) hits, so one call reads at most max(10,000, T x 2 x `limitPerTable`) raw hits. Paging within a table stops past that share of raw hits, as it does past 10,000 in a single list: `hasMore` turns false and `totalHitsIsLowerBound` stays true to signal unreachable matches.
 
 Search runs as the current `QContext` session: tables the session cannot read are skipped, and with `applyRecordSecurityLocks` (default) hits are re-read through `QueryAction` so record security locks apply.
+
+### Core search (`POST /qqq/v1/search`)
+
+QQQ core has its own record search (`RecordSearchAction`, served at `POST /qqq/v1/search` and used by the Next UI's global search box): a case-insensitive contains-query over each table's `searchFields`. With `serveCoreRecordSearch` (default `true`) the producer registers `QuickSearchRecordSearchProvider` on the instance, and core asks it to search every table Quick Search indexes. The API and the UI do not change.
+
+- **What is served from OpenSearch.** Tables this QBit indexes and that are enabled in `quickSearchIndex`. Core offers a table only when it has `searchFields`, the session may read it, and it supports query, so the producer gives each indexed table that has no `searchFields` its visible string and integer searchable fields (never hidden or password fields). `searchFields` you set yourself are kept. A table must be in the `QInstance` before the QBit is produced to get them.
+- **How.** One `_msearch` request with one search per table (Quick Search's query, AND semantics and field weights); each table returns up to 4 x `limitPerTable` record ids (at most 100) in relevance order. Core re-reads them by primary key through `QueryAction`, so table permissions, record security locks and record labels are core's, and records deleted since they were indexed drop out.
+- **Failure.** The OpenSearch request is cancelled after `recordSearchTimeoutMillis` (default 2500). Any failure (timeout, cluster down, index missing) makes core search those tables with its own contains-query instead, so search degrades but never fails. After a failure, Quick Search claims no tables for 30 seconds, so a down cluster does not add a timeout to every search.
+- **Opting out.** `withServeCoreRecordSearch(false)` leaves core search and `searchFields` untouched. If the host already registered another record-search provider, the QBit keeps it and logs a warning (an instance has one provider).
+
+`QuickSearchAction` remains the richer API (scores, highlights, pagination, totals).
 
 ### Processes
 
@@ -159,6 +171,8 @@ Without `schedulerName` the processes exist but nothing runs them; the QBit logs
 | `maxFieldLength` | 10000 | Truncate each indexed value |
 | `maxSearchLimit` | 100 | Largest page size |
 | `applyRecordSecurityLocks` | `true` | Re-read hits through `QueryAction` |
+| `serveCoreRecordSearch` | `true` | Register `QuickSearchRecordSearchProvider` so core `POST /qqq/v1/search` uses OpenSearch for indexed tables, and give those tables `searchFields` when they have none |
+| `recordSearchTimeoutMillis` | 2500 | Wall-clock limit on the OpenSearch request behind a core search; past it, core falls back to its own search |
 | `adminPermissionRules` | `HAS_ACCESS_PERMISSION`, base name `quickSearchAdmin` | Rules for the app and processes |
 | `tablePermissionRules` | `READ_WRITE_PERMISSIONS` | Rules for the operational tables |
 | `tableMetaDataCustomizer` | | Applied to every produced table (backend details, for example) |
@@ -186,6 +200,10 @@ CI=true ./mvnw verify                       # plus Testcontainers integration te
 ```
 
 Use the wrapper: Maven 3.10 cannot read the published parent POM. The build imports qqq 4.1.0-RC.1 through the default-active `qqq-snapshot` profile until `qbit-build-parent` 2.1.0 ships (override with `-Dqqq.snapshot.version=...`). Without Docker the integration tests are skipped locally; with `CI=true` they fail instead.
+
+## Upgrading from 1.0
+
+See [docs/MIGRATION-1.1.md](docs/MIGRATION-1.1.md). In short: 1.1 needs the QQQ release with the record-search provider SPI; core search starts using OpenSearch for indexed tables by default, and indexed tables gain `searchFields` (set `serveCoreRecordSearch(false)` to keep 1.0 behaviour).
 
 ## Upgrading from 0.x
 

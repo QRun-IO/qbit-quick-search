@@ -15,7 +15,7 @@ This file provides guidance to Codex when working with code in this repository.
 ./mvnw package          # Build JAR
 CI=true ./mvnw verify   # Full verify: integration tests (Docker) and the JaCoCo gate
 ./mvnw verify -Dopensearch.test.image=opensearchproject/opensearch:3.9.0   # other server line
-./mvnw verify -Dqqq.snapshot.version=4.1.0-SNAPSHOT   # other qqq 4.1 build (profile is active by default)
+./mvnw verify -Dqqq.snapshot.version=4.1.0-RC.1   # other qqq 4.1 build (profile is active by default)
 ```
 
 Integration tests (require Docker) run via `mvn verify` using maven-failsafe-plugin.
@@ -34,6 +34,7 @@ Integration tests use `@ExtendWith(RequiresDockerCondition.class)`: skipped with
 - `listeners/QuickSearchRecordChangeListener` - Real-time path: builds events in the write's transaction, publishes after commit, records failures in `quickSearchFailedEvent`.
 - `processes/AbstractIndexingStep` - Keyset paging by primary key with display values, run records, drift detection, run purge. `BasepullIndexStep` (replays failed events, start-anchored watermark with overlap), `ReconcileIndexStep` (in place, orphan sweep), `FullReindexStep` (all tables: new physical index plus alias swap; one table: reconcile algorithm).
 - `actions/QuickSearchAction` - Permission-aware search (table READ filter, `QueryAction` post-filter), bounds, `tableNames`, `limitPerTable`, `tableLabel`.
+- `actions/QuickSearchRecordSearchProvider` - QQQ core `RecordSearchProviderInterface` (`POST /qqq/v1/search`): claims indexed, enabled tables; one `_msearch` per call returning ordered record ids per table; bounded by `recordSearchTimeoutMillis`; failures make core fall back and start a 30 s backoff (`QuickSearchRuntime.markRecordSearchFailed`). Registered, with default table `searchFields`, when `serveCoreRecordSearch` is true.
 - `metadata/*` - Component producers and the table/process helpers.
 
 **Tables Produced:** `quickSearchIndex`, `quickSearchIndexRun`, `quickSearchFailedEvent` (plus a PVS over `quickSearchIndex`).
@@ -50,7 +51,7 @@ Integration tests use `@ExtendWith(RequiresDockerCondition.class)`: skipped with
 ## Dependencies
 
 - Java 21
-- Parent `com.kingsrook:qbit-build-parent:2.0.0` (qqq 4.0.0). 1.0 needs qqq 4.1, so the `qqq-snapshot` profile is active by default and imports `qqq-bom-pom:4.1.0-RC.1` ahead of the parent's BOM; remove that activation when the parent moves to 4.1 (ADR-0007)
+- Parent `com.kingsrook:qbit-build-parent:2.0.0` (qqq 4.0.0). 1.0 needs qqq 4.1, so the `qqq-snapshot` profile is active by default and imports `qqq-bom-pom` ahead of the parent's BOM; remove that activation when the parent moves to 4.1 (ADR-0007). 1.1 temporarily imports `4.1.0-SNAPSHOT` for the record-search provider SPI (QRun-IO/qqq#1042); re-pin to the QQQ release that carries it before releasing 1.1.0
 - OpenSearch Java Client 3.10.0; optional AWS SDK v2 `apache-client` and `sts` for `AWS_SIGV4`
 - Apache HttpClient5 and jackson-datatype-jsr310, versions managed by the qqq BOM (keep them unpinned so they match its httpcore5 and jackson)
 - JUnit 5 + AssertJ + Mockito for testing
