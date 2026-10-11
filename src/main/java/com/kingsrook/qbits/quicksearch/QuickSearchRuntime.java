@@ -57,6 +57,8 @@ public class QuickSearchRuntime
 
    private static final long ENABLED_CACHE_TTL_MILLIS = 60_000L;
 
+   public static final long RECORD_SEARCH_BACKOFF_MILLIS = 30_000L;
+
    private final QuickSearchQBitConfig config;
 
    private List<QuickSearchableTableConfig>        discoveredTables = new ArrayList<>();
@@ -64,8 +66,9 @@ public class QuickSearchRuntime
 
    private volatile QuickSearchOpenSearchClient client;
    private volatile IndexEventPublisher         publisher;
-   private volatile boolean                     indexReady = false;
-   private volatile boolean                     closed     = false;
+   private volatile boolean                     indexReady                     = false;
+   private volatile boolean                     closed                         = false;
+   private volatile long                        recordSearchBackoffUntilMillis = 0L;
 
    private final Map<String, CachedFlag> enabledCache = new ConcurrentHashMap<>();
 
@@ -298,6 +301,40 @@ public class QuickSearchRuntime
    public void invalidateEnabledCache()
    {
       enabledCache.clear();
+   }
+
+
+
+   /*******************************************************************************
+    ** Record that a core record search through OpenSearch failed. For the next
+    ** RECORD_SEARCH_BACKOFF_MILLIS the record-search provider claims no tables,
+    ** so core searches them itself at once instead of waiting for another
+    ** timeout on every search while OpenSearch is down.
+    *******************************************************************************/
+   public void markRecordSearchFailed()
+   {
+      recordSearchBackoffUntilMillis = System.currentTimeMillis() + RECORD_SEARCH_BACKOFF_MILLIS;
+   }
+
+
+
+   /*******************************************************************************
+    ** Whether core record search is backing off after a recent failure.
+    *******************************************************************************/
+   public boolean isRecordSearchBackingOff()
+   {
+      return (System.currentTimeMillis() < recordSearchBackoffUntilMillis);
+   }
+
+
+
+   /*******************************************************************************
+    ** End a record-search backoff early (an operator or test knows OpenSearch is
+    ** back).
+    *******************************************************************************/
+   public void clearRecordSearchBackoff()
+   {
+      recordSearchBackoffUntilMillis = 0L;
    }
 
 
