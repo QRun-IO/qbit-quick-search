@@ -57,14 +57,20 @@ import org.quartz.CronExpression;
  ** enableMaintenanceProcesses, schedulerName plus basepull/reconcile schedules,
  ** permission rules for the admin surface, search bounds, and indexing limits.
  **
+ ** Core search: serveCoreRecordSearch (default true) registers
+ ** QuickSearchRecordSearchProvider, so QQQ's POST /qqq/v1/search (the Next UI
+ ** global search) is served from OpenSearch for indexed tables, bounded by
+ ** recordSearchTimeoutMillis.
+ **
  ** Tables: searchableEntityClasses (annotated entities) and/or searchableTables
  ** (config-driven). validate() is list-based and never throws; the producer
  ** fails production when it reports errors.
  *******************************************************************************/
 public class QuickSearchQBitConfig implements QBitConfig
 {
-   public static final String DEFAULT_ADMIN_PERMISSION_BASE_NAME = "quickSearchAdmin";
-   public static final String DEFAULT_BASEPULL_TIMESTAMP_FIELD   = "modifyDate";
+   public static final String DEFAULT_ADMIN_PERMISSION_BASE_NAME   = "quickSearchAdmin";
+   public static final String DEFAULT_BASEPULL_TIMESTAMP_FIELD     = "modifyDate";
+   public static final int    DEFAULT_RECORD_SEARCH_TIMEOUT_MILLIS = 2500;
 
    private static final Pattern INDEX_NAME_PATTERN = Pattern.compile("^[a-z0-9][a-z0-9_+.-]*$");
    private static final Set<String> AWS_SERVICE_NAMES = Set.of("es", "aoss");
@@ -105,6 +111,8 @@ public class QuickSearchQBitConfig implements QBitConfig
    private Integer maxFieldLength = 10000;
    private Integer maxSearchLimit = 100;
    private Boolean applyRecordSecurityLocks = true;
+   private Boolean serveCoreRecordSearch = true;
+   private Integer recordSearchTimeoutMillis = DEFAULT_RECORD_SEARCH_TIMEOUT_MILLIS;
    private List<Class<?>> searchableEntityClasses;
    private List<SearchableTableConfig> searchableTables;
 
@@ -392,6 +400,7 @@ public class QuickSearchQBitConfig implements QBitConfig
       requirePositive(maxBulkRequestBytes, "maxBulkRequestBytes", errors);
       requirePositive(basepullRepeatSeconds, "basepullRepeatSeconds", errors);
       requirePositive(maxSearchLimit, "maxSearchLimit", errors);
+      requirePositive(recordSearchTimeoutMillis, "recordSearchTimeoutMillis", errors);
       requirePositive(maxFieldLength, "maxFieldLength", errors);
       requirePositive(runHistoryRetentionDays, "runHistoryRetentionDays", errors);
 
@@ -1936,6 +1945,72 @@ public class QuickSearchQBitConfig implements QBitConfig
    public QuickSearchQBitConfig withApplyRecordSecurityLocks(Boolean applyRecordSecurityLocks)
    {
       this.applyRecordSecurityLocks = applyRecordSecurityLocks;
+      return (this);
+   }
+
+
+
+   /*******************************************************************************
+    ** Getter for serveCoreRecordSearch: register QuickSearchRecordSearchProvider
+    ** so core RecordSearchAction (POST /qqq/v1/search) searches indexed tables in
+    ** OpenSearch, and give indexed tables core searchFields when they have none
+    *******************************************************************************/
+   public Boolean getServeCoreRecordSearch()
+   {
+      return (this.serveCoreRecordSearch);
+   }
+
+
+
+   /*******************************************************************************
+    ** Setter for serveCoreRecordSearch
+    *******************************************************************************/
+   public void setServeCoreRecordSearch(Boolean serveCoreRecordSearch)
+   {
+      this.serveCoreRecordSearch = serveCoreRecordSearch;
+   }
+
+
+
+   /*******************************************************************************
+    ** Fluent setter for serveCoreRecordSearch
+    *******************************************************************************/
+   public QuickSearchQBitConfig withServeCoreRecordSearch(Boolean serveCoreRecordSearch)
+   {
+      this.serveCoreRecordSearch = serveCoreRecordSearch;
+      return (this);
+   }
+
+
+
+   /*******************************************************************************
+    ** Getter for recordSearchTimeoutMillis: wall-clock limit on the OpenSearch
+    ** request behind a core record search; past it the provider fails and core
+    ** falls back to its own search (default 2500)
+    *******************************************************************************/
+   public Integer getRecordSearchTimeoutMillis()
+   {
+      return (this.recordSearchTimeoutMillis);
+   }
+
+
+
+   /*******************************************************************************
+    ** Setter for recordSearchTimeoutMillis
+    *******************************************************************************/
+   public void setRecordSearchTimeoutMillis(Integer recordSearchTimeoutMillis)
+   {
+      this.recordSearchTimeoutMillis = recordSearchTimeoutMillis;
+   }
+
+
+
+   /*******************************************************************************
+    ** Fluent setter for recordSearchTimeoutMillis
+    *******************************************************************************/
+   public QuickSearchQBitConfig withRecordSearchTimeoutMillis(Integer recordSearchTimeoutMillis)
+   {
+      this.recordSearchTimeoutMillis = recordSearchTimeoutMillis;
       return (this);
    }
 

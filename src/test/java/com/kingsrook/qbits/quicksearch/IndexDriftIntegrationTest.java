@@ -39,6 +39,7 @@ import com.kingsrook.qqq.backend.core.model.metadata.QInstance;
 import com.kingsrook.qqq.backend.core.model.metadata.authentication.QAuthenticationMetaData;
 import com.kingsrook.qqq.backend.core.model.metadata.fields.QFieldMetaData;
 import com.kingsrook.qqq.backend.core.model.metadata.fields.QFieldType;
+import com.kingsrook.qqq.backend.core.model.metadata.possiblevalues.QPossibleValueSource;
 import com.kingsrook.qqq.backend.core.model.metadata.tables.QTableMetaData;
 import com.kingsrook.qqq.backend.core.model.session.QSession;
 import com.kingsrook.qqq.backend.core.modules.backend.implementations.memory.MemoryBackendModule;
@@ -64,7 +65,8 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 /*******************************************************************************
  ** Integration tests, against a real OpenSearch, that real-time indexing keeps
- ** the index in step with the source table through updates and deletes, and
+ ** the index in step with the source table through inserts (with display
+ ** values), updates and deletes, and
  ** that the reconcile process repairs an index that has drifted.
  **
  ** Each test uses its own record IDs and search terms, so tests are independent.
@@ -75,6 +77,7 @@ class IndexDriftIntegrationTest
 {
    private static final String BACKEND_NAME = "driftMemoryBackend";
    private static final String TABLE_NAME   = "driftCustomer";
+   private static final String REGION_TABLE = "driftRegion";
    private static final String INDEX_NAME   = "quick_search_drift_test";
 
    @Container
@@ -98,6 +101,9 @@ class IndexDriftIntegrationTest
 
       @QuickSearchField
       private String city;
+
+      @QuickSearchField
+      private Integer regionId;
    }
 
 
@@ -124,7 +130,19 @@ class IndexDriftIntegrationTest
          .withPrimaryKeyField("id")
          .withField(new QFieldMetaData("id", QFieldType.INTEGER).withIsEditable(false))
          .withField(new QFieldMetaData("name", QFieldType.STRING))
-         .withField(new QFieldMetaData("city", QFieldType.STRING)));
+         .withField(new QFieldMetaData("city", QFieldType.STRING))
+         .withField(new QFieldMetaData("regionId", QFieldType.INTEGER).withPossibleValueSourceName(REGION_TABLE))
+         .withRecordLabelFormat("%s - %s")
+         .withRecordLabelFields("name", "regionId"));
+      qInstance.addTable(new QTableMetaData()
+         .withName(REGION_TABLE)
+         .withBackendName(BACKEND_NAME)
+         .withPrimaryKeyField("id")
+         .withRecordLabelFormat("%s")
+         .withRecordLabelFields("name")
+         .withField(new QFieldMetaData("id", QFieldType.INTEGER).withIsEditable(false))
+         .withField(new QFieldMetaData("name", QFieldType.STRING)));
+      qInstance.addPossibleValueSource(QPossibleValueSource.newForTable(REGION_TABLE));
 
       QuickSearchQBitConfig config = new QuickSearchQBitConfig()
          .withBackendName(BACKEND_NAME)
@@ -150,6 +168,33 @@ class IndexDriftIntegrationTest
       QContext.clear();
       QuickSearchQBitContext.clear();
       MemoryRecordStore.getInstance().reset();
+   }
+
+
+
+   /*******************************************************************************
+    ** Test: a just-inserted record's document carries display values: the
+    ** possible-value label of a foreign key is searchable and is in the record
+    ** label, with no basepull in between (#28).
+    *******************************************************************************/
+   @Test
+   void testInsert_documentCarriesDisplayValuesAndPossibleValueLabel() throws Exception
+   {
+      InsertInput regionInsert = new InsertInput();
+      regionInsert.setTableName(REGION_TABLE);
+      regionInsert.setRecords(List.of(new QRecord().withValue("id", 7).withValue("name", "Northwind Territory")));
+      new InsertAction().execute(regionInsert);
+
+      insert(new QRecord().withValue("id", 31).withValue("name", "Rhoda").withValue("city", "Labelburg").withValue("regionId", 7));
+
+      client().refreshIndex();
+      List<QuickSearchResult> results = new QuickSearchAction().execute(new QuickSearchInput().withSearchTerm("northwind").withTableName(TABLE_NAME)).getResults();
+      assertThat(results).as("the region's label, not its key, is indexed").extracting(QuickSearchResult::getRecordId).containsExactly("31");
+      assertThat(results.get(0).getRecordLabel()).isEqualTo("Rhoda - Northwind Territory");
+
+      Map<String, Object> fieldValues = client().search("labelburg", List.of(TABLE_NAME), 10, 0, QuickSearchQBitContext.getDiscoveredTables())
+         .hits().hits().get(0).source().getFieldValues();
+      assertThat(fieldValues).containsEntry("regionId", "Northwind Territory");
    }
 
 
