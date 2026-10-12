@@ -18,9 +18,12 @@ package com.kingsrook.qbits.quicksearch.processes;
 
 
 import java.time.Instant;
+import java.util.ArrayList;
 import java.util.Collections;
 import java.util.HashMap;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import com.kingsrook.qqq.backend.core.actions.values.QValueFormatter;
 import com.kingsrook.qqq.backend.core.context.QContext;
@@ -30,6 +33,7 @@ import com.kingsrook.qqq.backend.core.model.metadata.QInstance;
 import com.kingsrook.qqq.backend.core.model.metadata.tables.QTableMetaData;
 import com.kingsrook.qqq.backend.core.utils.StringUtils;
 import com.kingsrook.qbits.quicksearch.QuickSearchableTableConfig;
+import com.kingsrook.qbits.quicksearch.model.QuickSearchFieldRole;
 import com.kingsrook.qbits.quicksearch.opensearch.OpenSearchDocument;
 import static com.kingsrook.qqq.backend.core.logging.LogUtils.logPair;
 
@@ -45,6 +49,8 @@ import static com.kingsrook.qqq.backend.core.logging.LogUtils.logPair;
 public class IndexingUtils
 {
    private static final QLogger LOG = QLogger.getLogger(IndexingUtils.class);
+
+   static final int MAX_ROLE_VALUE_LENGTH = 500;
 
 
 
@@ -172,7 +178,119 @@ public class IndexingUtils
          doc.withRecordLabel(formatLabel(record, tableConfig, doc.getRecordLabel()));
       }
 
+      if(doc != null)
+      {
+         applyRolesAndAnalyzers(doc, record, tableConfig, table);
+      }
+
       return (doc);
+   }
+
+
+
+   /*******************************************************************************
+    ** Apply the fields' roles and analyzers (from quick_search_index_field):
+    ** only snippet fields go into searchableText; WORD, ENGLISH and EXACT
+    ** fields are also written to fieldValuesWord, fieldValuesEnglish and
+    ** fieldValuesExact (lower-cased) for their analyzers; TITLE fields make the
+    ** record label, SUBTITLE fields the subtitle and DISPLAY fields the
+    ** displayValues (by field label). A table whose fields are all plain BODY
+    ** fields is left exactly as before.
+    *******************************************************************************/
+   static void applyRolesAndAnalyzers(OpenSearchDocument doc, QRecord record, QuickSearchableTableConfig tableConfig, QTableMetaData table)
+   {
+      List<String> fields = tableConfig.getSearchableFields() == null ? List.of() : tableConfig.getSearchableFields();
+      if(!tableConfig.isAllPlainFields())
+      {
+         List<String> snippetFields = new ArrayList<>();
+         for(String fieldName : fields)
+         {
+            if(tableConfig.isIncludedInSnippet(fieldName))
+            {
+               snippetFields.add(fieldName);
+            }
+         }
+         doc.withSearchableText(buildSearchableText(record, snippetFields, tableConfig.getFieldIncludeLabels(), table, tableConfig.getMaxFieldLength()));
+
+         Map<String, Object> word    = new LinkedHashMap<>();
+         Map<String, Object> english = new LinkedHashMap<>();
+         Map<String, Object> exact   = new LinkedHashMap<>();
+         for(String fieldName : fields)
+         {
+            String value = displayValue(record, fieldName, tableConfig.getMaxFieldLength());
+            if(value == null)
+            {
+               continue;
+            }
+            switch(tableConfig.getAnalyzer(fieldName))
+            {
+               case WORD -> word.put(fieldName, value);
+               case ENGLISH -> english.put(fieldName, value);
+               case EXACT -> exact.put(fieldName, normalizeExact(value));
+               default ->
+               {
+                  // PREFIX: fieldValues only
+               }
+            }
+         }
+         doc.withFieldValuesWord(word.isEmpty() ? null : word);
+         doc.withFieldValuesEnglish(english.isEmpty() ? null : english);
+         doc.withFieldValuesExact(exact.isEmpty() ? null : exact);
+      }
+
+      List<String>        titles    = new ArrayList<>();
+      List<String>        subtitles = new ArrayList<>();
+      Map<String, String> display   = new LinkedHashMap<>();
+      for(String fieldName : fields)
+      {
+         QuickSearchFieldRole role = tableConfig.getRole(fieldName);
+         if(role != QuickSearchFieldRole.TITLE && role != QuickSearchFieldRole.SUBTITLE && role != QuickSearchFieldRole.DISPLAY)
+         {
+            continue;
+         }
+         String value = displayValue(record, fieldName, MAX_ROLE_VALUE_LENGTH);
+         if(value == null)
+         {
+            continue;
+         }
+         switch(role)
+         {
+            case TITLE -> titles.add(value);
+            case SUBTITLE -> subtitles.add(value);
+            default -> display.put(fieldLabel(table, fieldName), value);
+         }
+      }
+      if(!titles.isEmpty())
+      {
+         doc.withRecordLabel(String.join(" ", titles));
+      }
+      doc.withSubtitle(subtitles.isEmpty() ? null : String.join(" - ", subtitles));
+      doc.withDisplayValues(display.isEmpty() ? null : display);
+   }
+
+
+
+   /*******************************************************************************
+    ** The form an EXACT value is stored and matched in: trimmed, whitespace
+    ** collapsed, lower-cased.
+    *******************************************************************************/
+   public static String normalizeExact(String value)
+   {
+      return (normalizeSearchText(value).toLowerCase(Locale.ROOT));
+   }
+
+
+
+   /*******************************************************************************
+    ** A field's label, or its name.
+    *******************************************************************************/
+   private static String fieldLabel(QTableMetaData table, String fieldName)
+   {
+      if(table != null && table.getFields().containsKey(fieldName) && StringUtils.hasContent(table.getField(fieldName).getLabel()))
+      {
+         return (table.getField(fieldName).getLabel());
+      }
+      return (fieldName);
    }
 
 

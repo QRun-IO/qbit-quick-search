@@ -990,8 +990,13 @@ class QuickSearchQBitProducerTest
 
       producer.produce(qInstance);
 
-      QuickSearchableTableConfig tableConfig = QuickSearchQBitContext.getDiscoveredTables().get(0);
+      ////////////////////////////////////////////////////////////////////////
+      // a table not in the instance is only a code default: it is never    //
+      // primed into the records, so it is not among the effective tables   //
+      ////////////////////////////////////////////////////////////////////////
+      QuickSearchableTableConfig tableConfig = config.getRuntime().getCodeTables().get(0);
       assertThat(tableConfig.getPrimaryKeyField()).isEqualTo("id");
+      assertThat(QuickSearchQBitContext.getDiscoveredTables()).isEmpty();
    }
 
 

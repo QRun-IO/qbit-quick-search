@@ -77,6 +77,10 @@ public class RecordReindexer
       {
          throw (new QException("Table [" + tableName + "] is disabled in Quick Search Index; enable it before reindexing its records"));
       }
+      if(runtime.isIndexingPaused())
+      {
+         throw (new QException("Quick Search indexing is paused; resume it in Quick Search Settings before reindexing records"));
+      }
 
       Set<String>          ids      = new LinkedHashSet<>(recordIds);
       Map<String, QRecord> readable = DiagnosticRecordReads.loadForIndexing(tableName, ids);

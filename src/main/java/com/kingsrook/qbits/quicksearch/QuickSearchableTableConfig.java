@@ -18,6 +18,8 @@ package com.kingsrook.qbits.quicksearch;
 
 import java.util.List;
 import java.util.Map;
+import com.kingsrook.qbits.quicksearch.model.QuickSearchFieldAnalyzer;
+import com.kingsrook.qbits.quicksearch.model.QuickSearchFieldRole;
 
 
 /*******************************************************************************
@@ -26,6 +28,12 @@ import java.util.Map;
  ** Describes which fields to index, optional per-field boost weights,
  ** optional per-field label-inclusion flags, basepull scheduling, and
  ** whether the table is enabled by default.
+ **
+ ** Code (annotations, searchableTables) builds these as defaults; at runtime
+ ** the effective configs are built from the quick_search_index and
+ ** quick_search_index_field records (QuickSearchConfigStore), which add each
+ ** field's role, analyzer and snippet flag, the table's enabled flag and its
+ ** index row id.
  *******************************************************************************/
 public class QuickSearchableTableConfig
 {
@@ -40,6 +48,11 @@ public class QuickSearchableTableConfig
    private String              recordLabelFormat;
    private List<String>        recordLabelFields;
    private Integer             maxFieldLength;
+   private Map<String, String>  fieldRoles;
+   private Map<String, String>  fieldAnalyzers;
+   private Map<String, Boolean> fieldIncludeInSnippet;
+   private Boolean             enabled;
+   private Integer             quickSearchIndexId;
 
 
 
@@ -380,6 +393,224 @@ public class QuickSearchableTableConfig
    {
       this.maxFieldLength = maxFieldLength;
       return (this);
+   }
+
+
+
+   /*******************************************************************************
+    ** Getter for fieldRoles
+    *******************************************************************************/
+   public Map<String, String> getFieldRoles()
+   {
+      return (this.fieldRoles);
+   }
+
+
+
+   /*******************************************************************************
+    ** Setter for fieldRoles
+    *******************************************************************************/
+   public void setFieldRoles(Map<String, String> fieldRoles)
+   {
+      this.fieldRoles = fieldRoles;
+   }
+
+
+
+   /*******************************************************************************
+    ** Fluent setter for fieldRoles
+    *******************************************************************************/
+   public QuickSearchableTableConfig withFieldRoles(Map<String, String> fieldRoles)
+   {
+      this.fieldRoles = fieldRoles;
+      return (this);
+   }
+
+
+   /*******************************************************************************
+    ** Getter for fieldAnalyzers
+    *******************************************************************************/
+   public Map<String, String> getFieldAnalyzers()
+   {
+      return (this.fieldAnalyzers);
+   }
+
+
+
+   /*******************************************************************************
+    ** Setter for fieldAnalyzers
+    *******************************************************************************/
+   public void setFieldAnalyzers(Map<String, String> fieldAnalyzers)
+   {
+      this.fieldAnalyzers = fieldAnalyzers;
+   }
+
+
+
+   /*******************************************************************************
+    ** Fluent setter for fieldAnalyzers
+    *******************************************************************************/
+   public QuickSearchableTableConfig withFieldAnalyzers(Map<String, String> fieldAnalyzers)
+   {
+      this.fieldAnalyzers = fieldAnalyzers;
+      return (this);
+   }
+
+
+   /*******************************************************************************
+    ** Getter for fieldIncludeInSnippet
+    *******************************************************************************/
+   public Map<String, Boolean> getFieldIncludeInSnippet()
+   {
+      return (this.fieldIncludeInSnippet);
+   }
+
+
+
+   /*******************************************************************************
+    ** Setter for fieldIncludeInSnippet
+    *******************************************************************************/
+   public void setFieldIncludeInSnippet(Map<String, Boolean> fieldIncludeInSnippet)
+   {
+      this.fieldIncludeInSnippet = fieldIncludeInSnippet;
+   }
+
+
+
+   /*******************************************************************************
+    ** Fluent setter for fieldIncludeInSnippet
+    *******************************************************************************/
+   public QuickSearchableTableConfig withFieldIncludeInSnippet(Map<String, Boolean> fieldIncludeInSnippet)
+   {
+      this.fieldIncludeInSnippet = fieldIncludeInSnippet;
+      return (this);
+   }
+
+
+   /*******************************************************************************
+    ** Getter for enabled
+    *******************************************************************************/
+   public Boolean getEnabled()
+   {
+      return (this.enabled);
+   }
+
+
+
+   /*******************************************************************************
+    ** Setter for enabled
+    *******************************************************************************/
+   public void setEnabled(Boolean enabled)
+   {
+      this.enabled = enabled;
+   }
+
+
+
+   /*******************************************************************************
+    ** Fluent setter for enabled
+    *******************************************************************************/
+   public QuickSearchableTableConfig withEnabled(Boolean enabled)
+   {
+      this.enabled = enabled;
+      return (this);
+   }
+
+
+   /*******************************************************************************
+    ** Getter for quickSearchIndexId
+    *******************************************************************************/
+   public Integer getQuickSearchIndexId()
+   {
+      return (this.quickSearchIndexId);
+   }
+
+
+
+   /*******************************************************************************
+    ** Setter for quickSearchIndexId
+    *******************************************************************************/
+   public void setQuickSearchIndexId(Integer quickSearchIndexId)
+   {
+      this.quickSearchIndexId = quickSearchIndexId;
+   }
+
+
+
+   /*******************************************************************************
+    ** Fluent setter for quickSearchIndexId
+    *******************************************************************************/
+   public QuickSearchableTableConfig withQuickSearchIndexId(Integer quickSearchIndexId)
+   {
+      this.quickSearchIndexId = quickSearchIndexId;
+      return (this);
+   }
+
+
+   /*******************************************************************************
+    ** A field's role; BODY when none is set.
+    *******************************************************************************/
+   public QuickSearchFieldRole getRole(String fieldName)
+   {
+      return (QuickSearchFieldRole.fromName(fieldRoles == null ? null : fieldRoles.get(fieldName), QuickSearchFieldRole.BODY));
+   }
+
+
+
+   /*******************************************************************************
+    ** A field's analyzer: the one set, else EXACT for an EXACT field, WORD for a
+    ** KEYWORD field and PREFIX for any other.
+    *******************************************************************************/
+   public QuickSearchFieldAnalyzer getAnalyzer(String fieldName)
+   {
+      QuickSearchFieldRole     role     = getRole(fieldName);
+      QuickSearchFieldAnalyzer fallback = role == QuickSearchFieldRole.EXACT ? QuickSearchFieldAnalyzer.EXACT
+         : (role == QuickSearchFieldRole.KEYWORD ? QuickSearchFieldAnalyzer.WORD : QuickSearchFieldAnalyzer.PREFIX);
+      if(role == QuickSearchFieldRole.EXACT)
+      {
+         return (QuickSearchFieldAnalyzer.EXACT);
+      }
+      return (QuickSearchFieldAnalyzer.fromName(fieldAnalyzers == null ? null : fieldAnalyzers.get(fieldName), fallback));
+   }
+
+
+
+   /*******************************************************************************
+    ** Whether a field's text goes into the highlighted snippet (searchableText).
+    ** Defaults to true, except for KEYWORD and EXACT fields and EXACT-analyzed
+    ** fields, which are matched on their own instead.
+    *******************************************************************************/
+   public boolean isIncludedInSnippet(String fieldName)
+   {
+      if(getAnalyzer(fieldName) == QuickSearchFieldAnalyzer.EXACT)
+      {
+         return (false);
+      }
+      Boolean flag = fieldIncludeInSnippet == null ? null : fieldIncludeInSnippet.get(fieldName);
+      if(flag != null)
+      {
+         return (flag);
+      }
+      QuickSearchFieldRole role = getRole(fieldName);
+      return (role != QuickSearchFieldRole.KEYWORD && role != QuickSearchFieldRole.EXACT);
+   }
+
+
+
+   /*******************************************************************************
+    ** Whether every field is plain: in the snippet with the PREFIX analyzer, so
+    ** documents and queries look exactly as they did before roles existed.
+    *******************************************************************************/
+   public boolean isAllPlainFields()
+   {
+      for(String fieldName : searchableFields == null ? List.<String>of() : searchableFields)
+      {
+         if(!isIncludedInSnippet(fieldName) || getAnalyzer(fieldName) != QuickSearchFieldAnalyzer.PREFIX)
+         {
+            return (false);
+         }
+      }
+      return (true);
    }
 
 }

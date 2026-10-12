@@ -441,7 +441,9 @@ public class QuickSearchAction
             .withRecordId(source.getRecordId())
             .withRecordLabel(source.getRecordLabel())
             .withScore(rawScore != null ? rawScore.floatValue() : null)
-            .withHighlightSnippet(highlightSnippet));
+            .withHighlightSnippet(highlightSnippet)
+            .withSubtitle(source.getSubtitle())
+            .withDisplayValues(source.getDisplayValues()));
       }
 
       return (results);

@@ -25,21 +25,24 @@ import com.kingsrook.qqq.backend.core.model.metadata.QInstance;
 import com.kingsrook.qqq.backend.core.model.metadata.dashboard.QWidgetMetaData;
 import com.kingsrook.qqq.backend.core.model.metadata.layout.QAppMetaData;
 import com.kingsrook.qqq.backend.core.model.metadata.layout.QIcon;
-import com.kingsrook.qqq.backend.core.model.metadata.processes.QProcessMetaData;
 import com.kingsrook.qqq.backend.core.model.metadata.qbits.QBitComponentMetaDataProducer;
 import com.kingsrook.qqq.backend.core.model.metadata.qbits.QBitProductionContext;
 import com.kingsrook.qqq.backend.core.model.metadata.tables.QTableMetaData;
 import com.kingsrook.qbits.quicksearch.QuickSearchQBitConfig;
+import com.kingsrook.qbits.quicksearch.model.QuickSearchConfigTombstone;
 import com.kingsrook.qbits.quicksearch.model.QuickSearchDiagnosticEvent;
 import com.kingsrook.qbits.quicksearch.model.QuickSearchFailedEvent;
 import com.kingsrook.qbits.quicksearch.model.QuickSearchIndex;
+import com.kingsrook.qbits.quicksearch.model.QuickSearchIndexField;
 import com.kingsrook.qbits.quicksearch.model.QuickSearchIndexRun;
+import com.kingsrook.qbits.quicksearch.model.QuickSearchSettings;
 import com.kingsrook.qbits.quicksearch.model.QuickSearchValidationRun;
 
 
 /*******************************************************************************
- ** Produces the quickSearchAdmin app from the tables and processes the other
- ** component producers added to the production output. Runs last.
+ ** Produces the quickSearchAdmin app from the tables the other component
+ ** producers added to the production output. Processes are not app children
+ ** (never in the nav): they run from their tables' Actions. Runs last.
  *******************************************************************************/
 public class QuickSearchAdminAppMetaDataProducer extends QBitComponentMetaDataProducer<QAppMetaData, QuickSearchQBitConfig>
 {
@@ -73,8 +76,8 @@ public class QuickSearchAdminAppMetaDataProducer extends QBitComponentMetaDataPr
          app.withWidgets(new ArrayList<>(List.of(diagnosticsWidget.getName())));
       }
 
-      for(String tableName : new String[] { QuickSearchIndex.TABLE_NAME, QuickSearchIndexRun.TABLE_NAME, QuickSearchFailedEvent.TABLE_NAME,
-         QuickSearchValidationRun.TABLE_NAME, QuickSearchDiagnosticEvent.TABLE_NAME })
+      for(String tableName : new String[] { QuickSearchIndex.TABLE_NAME, QuickSearchIndexField.TABLE_NAME, QuickSearchSettings.TABLE_NAME, QuickSearchIndexRun.TABLE_NAME,
+         QuickSearchFailedEvent.TABLE_NAME, QuickSearchValidationRun.TABLE_NAME, QuickSearchDiagnosticEvent.TABLE_NAME, QuickSearchConfigTombstone.TABLE_NAME })
       {
          QTableMetaData table = produced.get(QTableMetaData.class, config.applyTablePrefix(tableName));
          if(table != null)
@@ -83,15 +86,10 @@ public class QuickSearchAdminAppMetaDataProducer extends QBitComponentMetaDataPr
          }
       }
 
-      for(String processName : new String[] { QuickSearchProcessMetaDataHelper.BASEPULL_PROCESS_NAME, QuickSearchProcessMetaDataHelper.FULL_REINDEX_PROCESS_NAME, QuickSearchProcessMetaDataHelper.RECONCILE_PROCESS_NAME })
-      {
-         QProcessMetaData process = produced.get(QProcessMetaData.class, config.applyPrefix(processName));
-         if(process != null)
-         {
-            app.withChild(process);
-         }
-      }
-
+      ////////////////////////////////////////////////////////////////////////
+      // processes are never in the nav: Basepull, Full Reindex, Reconcile   //
+      // and the config processes run from their tables' Actions             //
+      ////////////////////////////////////////////////////////////////////////
       return (app);
    }
 

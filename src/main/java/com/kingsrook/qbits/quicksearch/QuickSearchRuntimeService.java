@@ -61,6 +61,7 @@ public class QuickSearchRuntimeService implements QRuntimeServiceInterface
          LOG.warn("Quick Search runtime service started, but no produced Quick Search QBit was found in the QInstance");
          return;
       }
+      runtime.setStartInstance(qInstance);
       runtime.start();
    }
 

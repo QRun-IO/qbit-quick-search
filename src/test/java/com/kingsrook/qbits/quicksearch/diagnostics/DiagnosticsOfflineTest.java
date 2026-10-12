@@ -255,11 +255,13 @@ class DiagnosticsOfflineTest
       assertThat(SearchPathDiagnosis.diagnose(qInstance, runtime, List.of(PRODUCT), new QueryInput()).get(0).reason()).contains("backing off").contains("connection refused");
       runtime.clearRecordSearchBackoff();
 
-      new InsertAction().execute(new InsertInput(QuickSearchIndex.TABLE_NAME).withRecord(new QRecord().withValue("tableName", PRODUCT).withValue("enabled", false)));
-      runtime.invalidateEnabledCache();
+      //////////////////////////////////////////////////////////////////
+      // priming made PRODUCT's row; disabling it shows at once       //
+      //////////////////////////////////////////////////////////////////
+      Integer productRowId = runtime.getTableConfig(PRODUCT).getQuickSearchIndexId();
+      new UpdateAction().execute(new UpdateInput(QuickSearchIndex.TABLE_NAME).withRecord(new QRecord().withValue("id", productRowId).withValue("enabled", false)));
       assertThat(SearchPathDiagnosis.diagnose(qInstance, runtime, List.of(PRODUCT), new QueryInput()).get(0).reason()).contains("disabled");
-      runtime.invalidateEnabledCache();
-      new UpdateAction().execute(new UpdateInput(QuickSearchIndex.TABLE_NAME).withRecord(new QRecord().withValue("id", 1).withValue("enabled", true)));
+      new UpdateAction().execute(new UpdateInput(QuickSearchIndex.TABLE_NAME).withRecord(new QRecord().withValue("id", productRowId).withValue("enabled", true)));
       runtime.invalidateEnabledCache();
 
       config.setServeCoreRecordSearch(false);

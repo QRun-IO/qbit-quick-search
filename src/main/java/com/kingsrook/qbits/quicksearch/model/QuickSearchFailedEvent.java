@@ -38,6 +38,9 @@ public class QuickSearchFailedEvent extends QRecordEntity
    public static final String STATUS_PENDING   = "PENDING";
    public static final String STATUS_EXHAUSTED = "EXHAUSTED";
 
+   /** A change made while indexing was paused; becomes PENDING (replayed by basepull) when indexing resumes. */
+   public static final String STATUS_DEFERRED = "DEFERRED";
+
    ///////////////////////////////////////////////////////////////////////////
    // a delete made while a full reindex rebuilds into a new physical index; //
    // the reindex applies it after the swap, and basepull does not replay it //
