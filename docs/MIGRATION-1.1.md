@@ -28,3 +28,12 @@ new QuickSearchQBitConfig()
 ```
 
 restores 1.0 behaviour: no provider, no `searchFields` changes.
+
+## Diagnostic tools (1.1.0-RC.2)
+
+The QBit now adds admin tools to validate and debug search (see the README, "Diagnostic tools"). They are on by default.
+
+- **Two new operational tables**, on `backendName` like the others: `quickSearchDiagnosticEvent` and `quickSearchValidationRun` (columns in the README, "Operational tables"). Create them in the host's schema, with the naming the host applies to the other operational tables (`tableMetaDataCustomizer` applies to them too). Until they exist, writing events and saving reports fails quietly (logged at warn) and the tools still run.
+- **Permissions.** Grant `quickSearchDebug.hasAccess` to the people who may use the read-only tools and see the widget, `quickSearchAdmin.hasAccess` for Reindex in Search, and `.read` on the two new tables (the QBit writes them; users never do).
+- **New processes** have a `tableName` (Quick Search Index, Quick Search Failed Event, and each indexed table), so they appear as table and record actions. They are not added to the admin app's children; a host that strips processes from its nav needs no change.
+- **Opting out.** `withEnableDiagnosticTools(false)` adds none of it; `withEnableRecordDiagnosticActions(false)` keeps the tools on Quick Search Index but adds nothing to the indexed tables.

@@ -32,6 +32,7 @@ import com.kingsrook.qqq.backend.core.actions.tables.DeleteAction;
 import com.kingsrook.qqq.backend.core.actions.tables.InsertAction;
 import com.kingsrook.qqq.backend.core.actions.tables.QueryAction;
 import com.kingsrook.qqq.backend.core.actions.tables.UpdateAction;
+import com.kingsrook.qqq.backend.core.context.QContext;
 import com.kingsrook.qqq.backend.core.exceptions.QException;
 import com.kingsrook.qqq.backend.core.logging.QLogger;
 import com.kingsrook.qqq.backend.core.model.actions.tables.delete.DeleteInput;
@@ -48,7 +49,9 @@ import com.kingsrook.qqq.backend.core.utils.CollectionUtils;
 import com.kingsrook.qbits.quicksearch.QuickSearchQBitConfig;
 import com.kingsrook.qbits.quicksearch.QuickSearchQBitContext;
 import com.kingsrook.qbits.quicksearch.QuickSearchableTableConfig;
+import com.kingsrook.qbits.quicksearch.model.QuickSearchDiagnosticEvent;
 import com.kingsrook.qbits.quicksearch.model.QuickSearchIndexRun;
+import com.kingsrook.qbits.quicksearch.model.QuickSearchValidationRun;
 import com.kingsrook.qbits.quicksearch.opensearch.BulkIndexResult;
 import com.kingsrook.qbits.quicksearch.opensearch.OpenSearchDocument;
 import com.kingsrook.qbits.quicksearch.opensearch.QuickSearchOpenSearchClient;
@@ -566,18 +569,36 @@ public abstract class AbstractIndexingStep implements BackendStep
     *******************************************************************************/
    protected void purgeOldRuns()
    {
+      Integer retentionDays = getConfigOrNull() == null ? null : getConfigOrNull().getRunHistoryRetentionDays();
+      if(retentionDays == null || retentionDays <= 0)
+      {
+         return;
+      }
+
+      Instant cutoff = Instant.now().minus(retentionDays, ChronoUnit.DAYS);
+      purgeOlderThan(getConfigOrNull().getQuickSearchIndexRunTableName(), "startTime", cutoff, retentionDays);
+      purgeOlderThan(getConfigOrNull().applyPrefix(QuickSearchDiagnosticEvent.TABLE_NAME), "createDate", cutoff, retentionDays);
+      purgeOlderThan(getConfigOrNull().applyPrefix(QuickSearchValidationRun.TABLE_NAME), "createDate", cutoff, retentionDays);
+   }
+
+
+
+   /*******************************************************************************
+    ** Delete up to 5000 rows of a history table older than the cutoff. A table
+    ** not in the instance is skipped; failures are logged.
+    *******************************************************************************/
+   private void purgeOlderThan(String tableName, String dateField, Instant cutoff, Integer retentionDays)
+   {
       try
       {
-         Integer retentionDays = getConfig().getRunHistoryRetentionDays();
-         if(retentionDays == null || retentionDays <= 0)
+         if(QContext.getQInstance() == null || QContext.getQInstance().getTable(tableName) == null)
          {
             return;
          }
 
-         Instant    cutoff     = Instant.now().minus(retentionDays, ChronoUnit.DAYS);
          QueryInput queryInput = new QueryInput();
-         queryInput.setTableName(getConfig().getQuickSearchIndexRunTableName());
-         queryInput.setFilter(new QQueryFilter(new QFilterCriteria("startTime", QCriteriaOperator.LESS_THAN, cutoff)).withLimit(5000));
+         queryInput.setTableName(tableName);
+         queryInput.setFilter(new QQueryFilter(new QFilterCriteria(dateField, QCriteriaOperator.LESS_THAN, cutoff)).withLimit(5000));
          List<QRecord> old = new QueryAction().execute(queryInput).getRecords();
          if(CollectionUtils.nullSafeIsEmpty(old))
          {
@@ -591,14 +612,31 @@ public abstract class AbstractIndexingStep implements BackendStep
          }
 
          DeleteInput deleteInput = new DeleteInput();
-         deleteInput.setTableName(getConfig().getQuickSearchIndexRunTableName());
+         deleteInput.setTableName(tableName);
          deleteInput.setPrimaryKeys(ids);
          new DeleteAction().execute(deleteInput);
-         LOG.info("Purged old Quick Search run records", logPair("count", ids.size()), logPair("olderThanDays", retentionDays));
+         LOG.info("Purged old Quick Search history records", logPair("tableName", tableName), logPair("count", ids.size()), logPair("olderThanDays", retentionDays));
       }
       catch(Exception e)
       {
-         LOG.warn("Failed to purge old run records", e);
+         LOG.warn("Failed to purge old Quick Search history records", e, logPair("tableName", tableName));
+      }
+   }
+
+
+
+   /*******************************************************************************
+    ** The config, or null when it cannot be resolved (purging is best effort).
+    *******************************************************************************/
+   private QuickSearchQBitConfig getConfigOrNull()
+   {
+      try
+      {
+         return (getConfig());
+      }
+      catch(Exception e)
+      {
+         return (null);
       }
    }
 
