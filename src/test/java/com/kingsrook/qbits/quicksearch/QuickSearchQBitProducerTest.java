@@ -16,10 +16,14 @@
 package com.kingsrook.qbits.quicksearch;
 
 
+import java.time.Instant;
 import java.util.List;
 import java.util.Map;
+import com.kingsrook.qqq.backend.core.actions.tables.RecordSearchProviderInterface;
 import com.kingsrook.qqq.backend.core.context.QContext;
 import com.kingsrook.qqq.backend.core.exceptions.QException;
+import com.kingsrook.qqq.backend.core.model.actions.tables.search.RecordSearchInput;
+import com.kingsrook.qqq.backend.core.model.actions.tables.search.RecordSearchOutput;
 import com.kingsrook.qqq.backend.core.model.metadata.QAuthenticationType;
 import com.kingsrook.qqq.backend.core.model.metadata.QBackendMetaData;
 import com.kingsrook.qqq.backend.core.model.metadata.QInstance;
@@ -35,6 +39,7 @@ import com.kingsrook.qbits.quicksearch.annotations.QuickSearchable;
 import com.kingsrook.qqq.backend.core.model.metadata.code.QCodeReference;
 import com.kingsrook.qqq.backend.core.model.metadata.permissions.PermissionLevel;
 import com.kingsrook.qqq.backend.core.model.metadata.scheduleing.simple.SimpleSchedulerMetaData;
+import com.kingsrook.qbits.quicksearch.actions.QuickSearchRecordSearchProvider;
 import com.kingsrook.qbits.quicksearch.listeners.QuickSearchRecordChangeListener;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
@@ -95,6 +100,43 @@ class QuickSearchQBitProducerTest
    static class UnannotatedEntity
    {
       private String name;
+   }
+
+
+
+   /***************************************************************************
+    ** Test entity with fields core search must not get: hidden, password and
+    ** non-text, plus an integer field it may get.
+    ***************************************************************************/
+   @QuickSearchable(tableName = "account")
+   static class AccountEntity
+   {
+      @QuickSearchField
+      private String name;
+
+      @QuickSearchField
+      private Integer accountNumber;
+
+      @QuickSearchField
+      private String secretNote;
+
+      @QuickSearchField
+      private String password;
+
+      @QuickSearchField
+      private Instant openedAt;
+   }
+
+
+
+   /***************************************************************************
+    ** Test entity whose only searchable field is a date.
+    ***************************************************************************/
+   @QuickSearchable(tableName = "event")
+   static class EventEntity
+   {
+      @QuickSearchField
+      private Instant occurredAt;
    }
 
 
@@ -285,6 +327,141 @@ class QuickSearchQBitProducerTest
       assertThat(qInstance.getRecordChangeListeners()).extracting(QCodeReference::getName).contains(QuickSearchRecordChangeListener.class.getName());
       assertThat(qInstance.getTable(SOURCE_TABLE).getCustomizers() == null || qInstance.getTable(SOURCE_TABLE).getCustomizers().isEmpty()).isTrue();
       assertThat(qInstance.getRuntimeServices()).extracting(QCodeReference::getName).contains(QuickSearchRuntimeService.class.getName());
+   }
+
+
+
+   /***************************************************************************
+    ** By default the producer registers the core record-search provider and
+    ** gives indexed tables core searchFields from their searchable fields.
+    ***************************************************************************/
+   @Test
+   void testProduce_registersRecordSearchProviderAndSearchFields() throws QException
+   {
+      QInstance qInstance = buildQInstance();
+      QContext.init(qInstance, new QSession());
+      new QuickSearchQBitProducer().withConfig(buildValidConfig()).produce(qInstance);
+
+      assertThat(qInstance.getRecordSearchProvider()).isNotNull();
+      assertThat(qInstance.getRecordSearchProvider().getName()).isEqualTo(QuickSearchRecordSearchProvider.class.getName());
+      assertThat(qInstance.getTable(SOURCE_TABLE).getSearchFields()).containsExactly("firstName", "lastName", "email");
+   }
+
+
+
+   /***************************************************************************
+    ** serveCoreRecordSearch false leaves core search alone.
+    ***************************************************************************/
+   @Test
+   void testProduce_serveCoreRecordSearchOff_noProviderNoSearchFields() throws QException
+   {
+      QInstance qInstance = buildQInstance();
+      QContext.init(qInstance, new QSession());
+      new QuickSearchQBitProducer().withConfig(buildValidConfig().withServeCoreRecordSearch(false)).produce(qInstance);
+
+      assertThat(qInstance.getRecordSearchProvider()).isNull();
+      assertThat(qInstance.getTable(SOURCE_TABLE).getSearchFields()).isNull();
+   }
+
+
+
+   /***************************************************************************
+    ** searchFields the host set are kept, and a provider the host registered
+    ** is not replaced.
+    ***************************************************************************/
+   @Test
+   void testProduce_keepsHostSearchFieldsAndProvider() throws QException
+   {
+      QInstance qInstance = buildQInstance();
+      qInstance.getTable(SOURCE_TABLE).withSearchFields("email");
+      QCodeReference hostProvider = new QCodeReference(HostRecordSearchProvider.class);
+      qInstance.withRecordSearchProvider(hostProvider);
+      QContext.init(qInstance, new QSession());
+
+      new QuickSearchQBitProducer().withConfig(buildValidConfig()).produce(qInstance);
+
+      assertThat(qInstance.getTable(SOURCE_TABLE).getSearchFields()).containsExactly("email");
+      assertThat(qInstance.getRecordSearchProvider()).isSameAs(hostProvider);
+   }
+
+
+
+   /***************************************************************************
+    ** Producing twice (same provider already registered) keeps one provider.
+    ***************************************************************************/
+   @Test
+   void testRegisterRecordSearchProvider_idempotent()
+   {
+      QInstance qInstance = new QInstance();
+      QuickSearchQBitProducer.registerRecordSearchProvider(qInstance);
+      QuickSearchQBitProducer.registerRecordSearchProvider(qInstance);
+      assertThat(qInstance.getRecordSearchProvider().getName()).isEqualTo(QuickSearchRecordSearchProvider.class.getName());
+   }
+
+
+
+   /***************************************************************************
+    ** Hidden and password fields are never indexed; core searchFields only get
+    ** visible string or integer fields; a table with none gets no searchFields.
+    ***************************************************************************/
+   @Test
+   void testProduce_searchFieldsAndIndexing_skipHiddenPasswordAndNonText() throws QException
+   {
+      QInstance qInstance = buildQInstance();
+      qInstance.addTable(new QTableMetaData()
+         .withName("account")
+         .withBackendName(BACKEND_NAME)
+         .withPrimaryKeyField("id")
+         .withField(new QFieldMetaData("id", QFieldType.INTEGER).withIsEditable(false))
+         .withField(new QFieldMetaData("name", QFieldType.STRING))
+         .withField(new QFieldMetaData("accountNumber", QFieldType.INTEGER))
+         .withField(new QFieldMetaData("secretNote", QFieldType.STRING).withIsHidden(true))
+         .withField(new QFieldMetaData("password", QFieldType.PASSWORD))
+         .withField(new QFieldMetaData("openedAt", QFieldType.DATE_TIME))
+         .withField(new QFieldMetaData("modifyDate", QFieldType.DATE_TIME)));
+      qInstance.addTable(new QTableMetaData()
+         .withName("event")
+         .withBackendName(BACKEND_NAME)
+         .withPrimaryKeyField("id")
+         .withField(new QFieldMetaData("id", QFieldType.INTEGER).withIsEditable(false))
+         .withField(new QFieldMetaData("occurredAt", QFieldType.DATE_TIME))
+         .withField(new QFieldMetaData("modifyDate", QFieldType.DATE_TIME)));
+      QContext.init(qInstance, new QSession());
+
+      QuickSearchQBitConfig config = buildValidConfig().withSearchableEntityClasses(List.of(AccountEntity.class, EventEntity.class));
+      new QuickSearchQBitProducer().withConfig(config).produce(qInstance);
+
+      QuickSearchableTableConfig account = config.getRuntime().getTableConfig("account");
+      assertThat(account.getSearchableFields()).containsExactly("name", "accountNumber", "openedAt");
+      assertThat(qInstance.getTable("account").getSearchFields()).containsExactly("name", "accountNumber");
+      assertThat(qInstance.getTable("event").getSearchFields()).isNull();
+   }
+
+
+
+   /***************************************************************************
+    ** A config-driven table that is not in the instance yet, or whose backend
+    ** uses variants, gets no searchFields (and production does not fail).
+    ***************************************************************************/
+   @Test
+   void testDefaultCoreSearchFields_missingTableAndVariantBackend()
+   {
+      QInstance qInstance = buildQInstance();
+      qInstance.addBackend(new QBackendMetaData().withName("variants").withBackendType(MemoryBackendModule.class).withUsesVariants(true));
+      qInstance.addTable(new QTableMetaData()
+         .withName("variantTable")
+         .withBackendName("variants")
+         .withPrimaryKeyField("id")
+         .withField(new QFieldMetaData("id", QFieldType.INTEGER))
+         .withField(new QFieldMetaData("name", QFieldType.STRING)));
+
+      QuickSearchQBitProducer.defaultCoreSearchFields(qInstance, List.of(
+         new QuickSearchableTableConfig().withTableName("notThere").withSearchableFields(List.of("name")),
+         new QuickSearchableTableConfig().withTableName("variantTable").withSearchableFields(List.of("name")),
+         new QuickSearchableTableConfig().withTableName(SOURCE_TABLE).withSearchableFields(List.of("lastName", "nope", "lastName"))));
+
+      assertThat(qInstance.getTable("variantTable").getSearchFields()).isNull();
+      assertThat(qInstance.getTable(SOURCE_TABLE).getSearchFields()).containsExactly("lastName");
    }
 
 
@@ -912,6 +1089,28 @@ class QuickSearchQBitProducerTest
          .withOpensearchPort(9200)
          .withOpensearchIndexName("test-quick-search")
          .withSearchableEntityClasses(List.of(PersonEntity.class));
+   }
+
+
+
+   /***************************************************************************
+    ** A record search provider a host registered itself.
+    ***************************************************************************/
+   public static class HostRecordSearchProvider implements RecordSearchProviderInterface
+   {
+      @Override
+      public boolean claimsTable(QTableMetaData table)
+      {
+         return (false);
+      }
+
+
+
+      @Override
+      public RecordSearchOutput search(RecordSearchInput input)
+      {
+         return (new RecordSearchOutput());
+      }
    }
 
 }

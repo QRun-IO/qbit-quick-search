@@ -21,9 +21,14 @@ import java.io.Closeable;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Collection;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ExecutionException;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.SerializationFeature;
 import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule;
@@ -32,6 +37,7 @@ import com.kingsrook.qqq.backend.core.logging.QLogger;
 import com.kingsrook.qbits.quicksearch.QuickSearchQBitConfig;
 import com.kingsrook.qbits.quicksearch.QuickSearchableTableConfig;
 import org.opensearch.client.json.JsonData;
+import org.opensearch.client.opensearch.OpenSearchAsyncClient;
 import org.opensearch.client.opensearch.OpenSearchClient;
 import org.opensearch.client.opensearch._types.Conflicts;
 import org.opensearch.client.opensearch._types.FieldValue;
@@ -51,12 +57,17 @@ import org.opensearch.client.opensearch.core.DeleteByQueryRequest;
 import org.opensearch.client.opensearch.core.DeleteByQueryResponse;
 import org.opensearch.client.opensearch.core.DeleteRequest;
 import org.opensearch.client.opensearch.core.IndexRequest;
+import org.opensearch.client.opensearch.core.MsearchRequest;
+import org.opensearch.client.opensearch.core.MsearchResponse;
 import org.opensearch.client.opensearch.core.SearchRequest;
 import org.opensearch.client.opensearch.core.SearchResponse;
 import org.opensearch.client.opensearch.core.bulk.BulkOperation;
 import org.opensearch.client.opensearch.core.bulk.BulkResponseItem;
 import org.opensearch.client.opensearch.core.bulk.DeleteOperation;
 import org.opensearch.client.opensearch.core.bulk.IndexOperation;
+import org.opensearch.client.opensearch.core.msearch.MultiSearchResponseItem;
+import org.opensearch.client.opensearch.core.msearch.RequestItem;
+import org.opensearch.client.opensearch.core.search.Hit;
 import org.opensearch.client.opensearch.core.search.Highlight;
 import org.opensearch.client.opensearch.core.search.HighlightField;
 import org.opensearch.client.opensearch.indices.CreateIndexRequest;
@@ -92,11 +103,12 @@ public class QuickSearchOpenSearchClient implements Closeable
    public static final String SEARCH_ANALYZER      = "quick_search_search_analyzer";
    public static final int    MAX_RESULT_WINDOW    = 10_000;
 
-   private final OpenSearchClient    client;
-   private final OpenSearchTransport transport;
-   private final String              indexName;
-   private final int                 maxBulkRequestBytes;
-   private final ObjectMapper        sizingMapper;
+   private final OpenSearchClient      client;
+   private final OpenSearchAsyncClient asyncClient;
+   private final OpenSearchTransport   transport;
+   private final String                indexName;
+   private final int                   maxBulkRequestBytes;
+   private final ObjectMapper          sizingMapper;
 
    private volatile Boolean mappingOutdated = false;
    private          Boolean closed          = false;
@@ -110,6 +122,7 @@ public class QuickSearchOpenSearchClient implements Closeable
    {
       this.transport           = OpenSearchTransportFactory.build(config);
       this.client              = new OpenSearchClient(transport);
+      this.asyncClient         = new OpenSearchAsyncClient(transport);
       this.indexName           = config.getOpensearchIndexName();
       this.maxBulkRequestBytes = config.getMaxBulkRequestBytes() == null ? 5 * 1024 * 1024 : config.getMaxBulkRequestBytes();
       this.sizingMapper        = new ObjectMapper().registerModule(new JavaTimeModule()).disable(SerializationFeature.WRITE_DATES_AS_TIMESTAMPS);
@@ -652,14 +665,7 @@ public class QuickSearchOpenSearchClient implements Closeable
    {
       try
       {
-         List<FieldValue> allowed = allowedTables.stream().map(FieldValue::of).toList();
-
-         BoolQuery.Builder boolBuilder = new BoolQuery.Builder()
-            .must(Query.of(q -> q.multiMatch(MultiMatchQuery.of(mm -> mm.query(searchTerm).fields("searchableText").operator(Operator.And)))))
-            .filter(Query.of(q -> q.terms(t -> t.field("sourceTable").terms(tv -> tv.value(allowed)))))
-            .should(buildFieldBoostQueries(searchTerm, tableConfigs, allowedTables));
-
-         Query     finalQuery = Query.of(q -> q.bool(boolBuilder.build()));
+         Query     finalQuery = buildSearchQuery(searchTerm, allowedTables, tableConfigs);
          Highlight highlight  = Highlight.of(h -> h.fields("searchableText", HighlightField.of(hf -> hf)));
 
          SearchRequest request = SearchRequest.of(r -> r
@@ -677,6 +683,117 @@ public class QuickSearchOpenSearchClient implements Closeable
       {
          throw wrap("Search failed for term [" + searchTerm + "]", e);
       }
+   }
+
+
+
+   /*******************************************************************************
+    ** Record ids of the best matches in each table, best first, for core record
+    ** search. One _msearch request with one search per table (the same query and
+    ** ranking as {@link #search}, restricted to that table), so every table gets
+    ** its own top idsPerTable hits. Only sourceTable and recordId are fetched.
+    **
+    ** The whole request is bounded by timeoutMillis of wall-clock time (and the
+    ** same server-side search timeout): when it runs out, the request is
+    ** cancelled and a QException is thrown. A failed search for any table fails
+    ** the call. Returns every requested table as a key, in the given order.
+    *******************************************************************************/
+   public Map<String, List<String>> searchRecordIdsPerTable(String searchTerm, List<String> tableNames, int idsPerTable, List<QuickSearchableTableConfig> tableConfigs, int timeoutMillis) throws QException
+   {
+      Map<String, List<String>> idsByTable = new LinkedHashMap<>();
+      if(tableNames == null || tableNames.isEmpty())
+      {
+         return (idsByTable);
+      }
+
+      List<RequestItem> searches = new ArrayList<>();
+      for(String tableName : tableNames)
+      {
+         Query query = buildSearchQuery(searchTerm, List.of(tableName), tableConfigs);
+         searches.add(RequestItem.of(ri -> ri
+            .header(h -> h.index(indexName))
+            .body(b -> b
+               .query(query)
+               .size(idsPerTable)
+               .trackTotalHits(t -> t.enabled(false))
+               .source(sc -> sc.filter(f -> f.includes("sourceTable", "recordId")))
+               .timeout(timeoutMillis + "ms"))));
+      }
+
+      CompletableFuture<MsearchResponse<OpenSearchDocument>> future = null;
+      try
+      {
+         future = asyncClient.msearch(MsearchRequest.of(r -> r.searches(searches)), OpenSearchDocument.class);
+         MsearchResponse<OpenSearchDocument> response = future.get(timeoutMillis, TimeUnit.MILLISECONDS);
+
+         List<MultiSearchResponseItem<OpenSearchDocument>> items = response.responses();
+         if(items == null || items.size() != tableNames.size())
+         {
+            throw (new QException("Record search failed: OpenSearch returned " + (items == null ? 0 : items.size()) + " responses for " + tableNames.size() + " searches"));
+         }
+
+         for(int i = 0; i < tableNames.size(); i++)
+         {
+            MultiSearchResponseItem<OpenSearchDocument> item = items.get(i);
+            if(item.isFailure())
+            {
+               String reason = item.failure() != null && item.failure().error() != null ? item.failure().error().reason() : "unknown error";
+               throw (new QException("Record search failed for table [" + tableNames.get(i) + "]: " + reason));
+            }
+
+            List<String> ids = new ArrayList<>();
+            for(Hit<OpenSearchDocument> hit : item.result().hits().hits())
+            {
+               if(hit.source() != null && hit.source().getRecordId() != null)
+               {
+                  ids.add(hit.source().getRecordId());
+               }
+            }
+            idsByTable.put(tableNames.get(i), ids);
+         }
+         return (idsByTable);
+      }
+      catch(TimeoutException e)
+      {
+         future.cancel(true);
+         throw (new QException("Record search timed out after " + timeoutMillis + " ms", e));
+      }
+      catch(InterruptedException e)
+      {
+         if(future != null)
+         {
+            future.cancel(true);
+         }
+         Thread.currentThread().interrupt();
+         throw (new QException("Record search was interrupted", e));
+      }
+      catch(ExecutionException e)
+      {
+         throw wrap("Record search failed", e.getCause() instanceof Exception cause ? cause : e);
+      }
+      catch(OpenSearchException | java.io.IOException e)
+      {
+         throw wrap("Record search failed", e);
+      }
+   }
+
+
+
+   /*******************************************************************************
+    ** The search query: every term of the query (operator AND) must match
+    ** searchableText, only the allowed tables match (an empty set matches
+    ** nothing), and per-field should clauses boost by configured weight.
+    *******************************************************************************/
+   private Query buildSearchQuery(String searchTerm, Collection<String> allowedTables, List<QuickSearchableTableConfig> tableConfigs)
+   {
+      List<FieldValue> allowed = allowedTables.stream().map(FieldValue::of).toList();
+
+      BoolQuery.Builder boolBuilder = new BoolQuery.Builder()
+         .must(Query.of(q -> q.multiMatch(MultiMatchQuery.of(mm -> mm.query(searchTerm).fields("searchableText").operator(Operator.And)))))
+         .filter(Query.of(q -> q.terms(t -> t.field("sourceTable").terms(tv -> tv.value(allowed)))))
+         .should(buildFieldBoostQueries(searchTerm, tableConfigs, allowedTables));
+
+      return (Query.of(q -> q.bool(boolBuilder.build())));
    }
 
 
