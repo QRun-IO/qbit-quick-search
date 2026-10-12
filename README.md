@@ -1,6 +1,6 @@
 # QBit: Quick Search
 
-[![Version](https://img.shields.io/badge/version-1.0.0--RC.1-blue.svg)](https://github.com/QRun-IO/qbit-quick-search)
+[![Version](https://img.shields.io/badge/version-1.1.0--RC.1-blue.svg)](https://github.com/QRun-IO/qbit-quick-search)
 [![License](https://img.shields.io/badge/license-Apache%202.0-green.svg)](https://www.apache.org/licenses/LICENSE-2.0)
 [![Java](https://img.shields.io/badge/java-21+-blue.svg)](https://adoptium.net/)
 
@@ -49,11 +49,11 @@ For `AWS_SIGV4` add these optional dependencies to your host (the QBit declares 
 <dependency>
     <groupId>com.kingsrook.qbits</groupId>
     <artifactId>qbit-quick-search</artifactId>
-    <version>1.0.0-RC.1</version>
+    <version>1.1.0-RC.1</version>
 </dependency>
 ```
 
-`1.0.0-RC.1` is the current release candidate; `1.0.0` follows once host applications have adopted it (#12).
+`1.1.0-RC.1` is the current release candidate (the 1.1 line, published from `release/1.1`; it needs QQQ 4.1.0-RC.2 or later, see [Upgrading from 1.0](#upgrading-from-10)). Hosts staying on the 1.0 line use `1.0.0-RC.2`; `1.0.0` follows once host applications have adopted it (#12).
 
 Annotate entity classes:
 
@@ -221,7 +221,7 @@ See [docs/MIGRATION-1.1.md](docs/MIGRATION-1.1.md). In short: 1.1 needs the QQQ 
 
 ## Upgrading from 0.x
 
-See [docs/MIGRATION-1.0.md](docs/MIGRATION-1.0.md). In short: QQQ 4.1 is required, remove any manual `addQBit` for this QBit, set `schedulerName`, prefer `opensearchUrl` and `${env.}` secrets, and run a full reindex once so the index gets the new mapping.
+See [docs/MIGRATION-1.0.md](docs/MIGRATION-1.0.md). In short: QQQ 4.1 is required, remove any manual `addQBit` for this QBit, set `schedulerName`, prefer `opensearchUrl` and `${env.}` secrets, grant `quickSearchAdmin.hasAccess` and the table permissions, add the new operational table columns and `quickSearchFailedEvent`, and run a full reindex once so the index gets the new mapping.
 
 ## License
 
