@@ -80,6 +80,8 @@ public class RecordReindexer
 
       Set<String>          ids      = new LinkedHashSet<>(recordIds);
       Map<String, QRecord> readable = DiagnosticRecordReads.loadForIndexing(tableName, ids);
+      Set<String>          validIds = new HashSet<>();
+      DiagnosticRecordReads.typedIds(QContext.getQInstance().getTable(tableName), ids).forEach(id -> validIds.add(String.valueOf(id)));
 
       ////////////////////////////////////////////////////////////////////
       // ids the user cannot read: exists at all (system view)? if not, //
@@ -131,6 +133,10 @@ public class RecordReindexer
          {
             outcomes.add(failedIds.contains(id) ? new Outcome(id, OUTCOME_FAILED, "OpenSearch rejected the document; see the run's errors")
                : new Outcome(id, OUTCOME_INDEXED, "Rebuilt from the database and written to the index."));
+         }
+         else if(!validIds.contains(id))
+         {
+            outcomes.add(new Outcome(id, OUTCOME_SKIPPED, "Not a valid id for this table."));
          }
          else if(existing.contains(id))
          {

@@ -33,6 +33,7 @@ import com.kingsrook.qqq.backend.core.model.metadata.processes.QProcessMetaData;
 import com.kingsrook.qqq.backend.core.model.metadata.scheduleing.QSchedulerMetaData;
 import com.kingsrook.qqq.backend.core.model.metadata.scheduleing.quartz.QuartzSchedulerMetaData;
 import com.kingsrook.qqq.backend.core.model.metadata.scheduleing.simple.SimpleSchedulerMetaData;
+import com.kingsrook.qqq.backend.core.model.metadata.tables.Capability;
 import com.kingsrook.qqq.backend.core.model.metadata.tables.QTableMetaData;
 import com.kingsrook.qqq.backend.core.model.session.QSession;
 import com.kingsrook.qqq.backend.core.modules.backend.implementations.memory.MemoryBackendModule;
@@ -118,6 +119,11 @@ class DiagnosticsMetaDataTest
       assertThat(qInstance.getTable(QuickSearchDiagnosticEvent.TABLE_NAME)).isNotNull();
       assertThat(qInstance.getTable(QuickSearchValidationRun.TABLE_NAME)).isNotNull();
       assertThat(qInstance.getTable(QuickSearchValidationRun.TABLE_NAME).getField("reportHtml").getType()).isEqualTo(QFieldType.HTML);
+      for(String history : List.of(QuickSearchDiagnosticEvent.TABLE_NAME, QuickSearchValidationRun.TABLE_NAME))
+      {
+         assertThat(qInstance.getTable(history).getDisabledCapabilities()).as(history)
+            .contains(Capability.TABLE_INSERT, Capability.TABLE_UPDATE, Capability.TABLE_DELETE);
+      }
 
       for(String name : List.of(QuickSearchDiagnosticsProcessMetaDataHelper.PLAYGROUND_PROCESS_NAME, QuickSearchDiagnosticsProcessMetaDataHelper.VALIDATE_PROCESS_NAME,
          QuickSearchDiagnosticsProcessMetaDataHelper.ANALYZE_PROCESS_NAME))

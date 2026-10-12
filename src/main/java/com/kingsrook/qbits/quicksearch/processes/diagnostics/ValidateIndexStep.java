@@ -18,11 +18,14 @@ package com.kingsrook.qbits.quicksearch.processes.diagnostics;
 
 
 import java.util.List;
+import com.kingsrook.qqq.backend.core.context.QContext;
 import com.kingsrook.qqq.backend.core.exceptions.QException;
 import com.kingsrook.qqq.backend.core.exceptions.QUserFacingException;
 import com.kingsrook.qqq.backend.core.model.actions.processes.RunBackendStepInput;
 import com.kingsrook.qqq.backend.core.model.actions.processes.RunBackendStepOutput;
 import com.kingsrook.qqq.backend.core.model.actions.processes.RunProcessInput;
+import com.kingsrook.qqq.backend.core.model.session.QSession;
+import com.kingsrook.qqq.backend.core.model.session.QSystemUserSession;
 import com.kingsrook.qbits.quicksearch.QuickSearchQBitConfig;
 import com.kingsrook.qbits.quicksearch.QuickSearchRuntime;
 import com.kingsrook.qbits.quicksearch.diagnostics.DiagnosticsHtml;
@@ -72,7 +75,13 @@ public class ValidateIndexStep extends AbstractDiagnosticToolStep
          return;
       }
 
-      boolean scheduled = input.getFrontendStepBehavior() == RunProcessInput.FrontendStepBehavior.SKIP;
+      //////////////////////////////////////////////////////////////////////
+      // a scheduled run skips the frontend and has no user; an API caller //
+      // asking to skip the frontend is still a user, so still rate-limited //
+      //////////////////////////////////////////////////////////////////////
+      QSession session   = QContext.getQSession();
+      boolean  scheduled = input.getFrontendStepBehavior() == RunProcessInput.FrontendStepBehavior.SKIP
+         && (session == null || session instanceof QSystemUserSession || session.getUser() == null);
       long    start     = System.currentTimeMillis();
       if(!scheduled)
       {

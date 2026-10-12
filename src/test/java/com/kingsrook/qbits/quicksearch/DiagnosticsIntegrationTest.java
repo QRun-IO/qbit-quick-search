@@ -212,6 +212,8 @@ class DiagnosticsIntegrationTest
 
       SearchPlayground.TableProbe probe = report.probes().get(0);
       assertThat(probe.error()).isNull();
+      assertThat(probe.hiddenCount()).isZero();
+      assertThat(report.providerHiddenCounts().get(PRODUCT)).isZero();
       assertThat(probe.probe().hits()).hasSize(2);
       QuickSearchDiagnosticsOperations.ProbeHit top = probe.probe().hits().get(0);
       assertThat(top.recordId()).isEqualTo("1");
@@ -351,9 +353,9 @@ class DiagnosticsIntegrationTest
    @Order(6)
    void testReindex_fixesStaleMissingAndOrphan() throws Exception
    {
-      List<RecordReindexer.Outcome> outcomes = new RecordReindexer().reindex(runtime, PRODUCT, List.of("3", "5", "99"));
+      List<RecordReindexer.Outcome> outcomes = new RecordReindexer().reindex(runtime, PRODUCT, List.of("3", "5", "99", "abc"));
       assertThat(outcomes).extracting(RecordReindexer.Outcome::outcome)
-         .containsExactly(RecordReindexer.OUTCOME_INDEXED, RecordReindexer.OUTCOME_INDEXED, RecordReindexer.OUTCOME_DELETED);
+         .containsExactly(RecordReindexer.OUTCOME_INDEXED, RecordReindexer.OUTCOME_INDEXED, RecordReindexer.OUTCOME_DELETED, RecordReindexer.OUTCOME_SKIPPED);
 
       assertThat(new RecordInspector().inspect(runtime, PRODUCT, "3", null, new QueryInput()).verdict()).isEqualTo(RecordInspector.VERDICT_CURRENT);
       assertThat(new RecordInspector().inspect(runtime, PRODUCT, "5", null, new QueryInput()).verdict()).isEqualTo(RecordInspector.VERDICT_CURRENT);

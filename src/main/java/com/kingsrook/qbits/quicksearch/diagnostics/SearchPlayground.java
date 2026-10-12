@@ -27,6 +27,7 @@ import java.util.Map;
 import java.util.Set;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.node.ArrayNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.kingsrook.qqq.backend.core.actions.tables.RecordSearchAction;
 import com.kingsrook.qqq.backend.core.context.QContext;
@@ -92,7 +93,7 @@ public class SearchPlayground
     ** One table's probe: the search, which hit ids the user can read, which
     ** the global search showed, and an error when the probe failed.
     *******************************************************************************/
-   public record TableProbe(String tableName, SearchProbe probe, Set<String> readableIds, Set<String> shownIds, String error)
+   public record TableProbe(String tableName, SearchProbe probe, Set<String> readableIds, Set<String> shownIds, Integer hiddenCount, String error)
    {
    }
 
@@ -103,7 +104,7 @@ public class SearchPlayground
     *******************************************************************************/
    public record Report(String term, List<String> notices, List<AnalyzedToken> termTokens, String termTokensError,
                         SearchPathDiagnosis.ProviderState providerState, List<SearchPathDiagnosis.TablePath> paths,
-                        Map<String, List<String>> providerIds, Long providerMillis, String providerError,
+                        Map<String, List<String>> providerIds, Map<String, Integer> providerHiddenCounts, Long providerMillis, String providerError,
                         Map<String, List<RecordSearchResult>> coreResults, Long coreMillis, String coreError,
                         List<TableProbe> probes, String explainDocumentId, ExplainResult explain, String explainError,
                         Integer limitPerTable, Integer idsPerTable)
@@ -172,6 +173,7 @@ public class SearchPlayground
       ///////////////////////////////////////////////////////////
       List<String> claimed = paths.stream().filter(p -> SearchPathDiagnosis.PATH_OPENSEARCH.equals(p.path())).map(SearchPathDiagnosis.TablePath::tableName).toList();
       Map<String, List<String>> providerIds    = null;
+      Map<String, Integer>      providerHidden = new LinkedHashMap<>();
       Long                      providerMillis = null;
       String                    providerError  = null;
       if(!claimed.isEmpty() && ops != null && term.length() >= QuickSearchAction.MIN_TERM_LENGTH)
@@ -187,6 +189,7 @@ public class SearchPlayground
             providerError = e.getClass().getSimpleName() + ": " + e.getMessage();
          }
          providerMillis = System.currentTimeMillis() - start;
+         providerIds    = providerIds == null ? null : readableOnly(providerIds, providerHidden);
       }
 
       ///////////////////////////////////////////////////////
@@ -226,7 +229,7 @@ public class SearchPlayground
          }
          if(ops == null)
          {
-            probes.add(new TableProbe(path.tableName(), null, Set.of(), Set.of(), opsError));
+            probes.add(new TableProbe(path.tableName(), null, Set.of(), Set.of(), 0, opsError));
             continue;
          }
          probes.add(probeTable(ops, runtime, term, path.tableName(), idsPerTable, coreResults.get(path.tableName())));
@@ -250,7 +253,7 @@ public class SearchPlayground
          }
       }
 
-      return (new Report(term, notices, termTokens, termTokensError, state, paths, providerIds, providerMillis, providerError,
+      return (new Report(term, notices, termTokens, termTokensError, state, paths, providerIds, providerHidden, providerMillis, providerError,
          coreResults, coreMillis, coreError, probes, explainId, explain, explainError, limitPerTable, idsPerTable));
    }
 
@@ -309,37 +312,80 @@ public class SearchPlayground
             shownIds.add(String.valueOf(result.getRecordId()));
          }
 
+         List<ProbeHit> visible = probe.hits().stream().filter(h -> readable.contains(h.recordId())).toList();
+         int            hidden  = probe.hits().size() - visible.size();
          SearchProbe redacted = new SearchProbe(probe.tableName(), probe.requestJson(), redactResponse(probe.responseJson(), readable),
-            probe.tookMillis(), probe.wallMillis(), probe.totalHits(), probe.totalIsLowerBound(),
-            probe.hits().stream().map(h -> readable.contains(h.recordId()) ? h : new ProbeHit(h.recordId(), null, h.score(), h.matchedClauses(), Map.of())).toList());
-         return (new TableProbe(tableName, redacted, readable, shownIds, null));
+            probe.tookMillis(), probe.wallMillis(), hidden == 0 ? probe.totalHits() : null, probe.totalIsLowerBound(), visible);
+         return (new TableProbe(tableName, redacted, readable, shownIds, hidden, null));
       }
       catch(QException e)
       {
-         return (new TableProbe(tableName, null, Set.of(), Set.of(), e.getMessage()));
+         return (new TableProbe(tableName, null, Set.of(), Set.of(), 0, e.getMessage()));
       }
    }
 
 
 
    /*******************************************************************************
-    ** The raw response with the source and highlights of hits the user cannot
-    ** read replaced by a redaction marker.
+    ** The provider's ids per table, keeping only records the user can read;
+    ** how many were dropped goes in hiddenCounts. Ids of records the user
+    ** cannot read are never shown (they would reveal what a locked record
+    ** contains).
+    *******************************************************************************/
+   static Map<String, List<String>> readableOnly(Map<String, List<String>> idsByTable, Map<String, Integer> hiddenCounts)
+   {
+      Map<String, List<String>> readable = new LinkedHashMap<>();
+      for(Map.Entry<String, List<String>> entry : idsByTable.entrySet())
+      {
+         List<String> ids = entry.getValue() == null ? List.of() : entry.getValue();
+         Set<String>  ok;
+         try
+         {
+            ok = new HashSet<>(DiagnosticRecordReads.existingIds(entry.getKey(), ids));
+         }
+         catch(QException e)
+         {
+            ok = Set.of();
+         }
+         Set<String> finalOk = ok;
+         readable.put(entry.getKey(), ids.stream().filter(finalOk::contains).toList());
+         hiddenCounts.put(entry.getKey(), (int) ids.stream().filter(id -> !finalOk.contains(id)).count());
+      }
+      return (readable);
+   }
+
+
+
+   /*******************************************************************************
+    ** The raw response without the hits the user cannot read: they are
+    ** removed whole (id, score, source, highlights, matched queries), and
+    ** when any was removed the total and max score are redacted too, so the
+    ** response reveals nothing about records the user cannot read.
     *******************************************************************************/
    static String redactResponse(String responseJson, Set<String> readableIds)
    {
       try
       {
-         JsonNode root = MAPPER.readTree(responseJson);
-         for(JsonNode hit : root.path("hits").path("hits"))
+         JsonNode root    = MAPPER.readTree(responseJson);
+         JsonNode hitList = root.path("hits").path("hits");
+         int      removed = 0;
+         if(hitList.isArray())
          {
-            String recordId = hit.path("_source").path("recordId").asText(null);
-            if(recordId == null || !readableIds.contains(recordId))
+            ArrayNode array = (ArrayNode) hitList;
+            for(int i = array.size() - 1; i >= 0; i--)
             {
-               ObjectNode hitObject = (ObjectNode) hit;
-               hitObject.putObject("_source").put("redacted", "you cannot read this record (deleted, or hidden by a record security lock)");
-               hitObject.remove("highlight");
+               String recordId = array.get(i).path("_source").path("recordId").asText(null);
+               if(recordId == null || !readableIds.contains(recordId))
+               {
+                  array.remove(i);
+                  removed++;
+               }
             }
+         }
+         if(removed > 0 && root.path("hits") instanceof ObjectNode hits)
+         {
+            hits.put("total", "redacted: " + removed + " hit(s) you cannot read were removed");
+            hits.remove("max_score");
          }
          return (root.toString());
       }
@@ -446,7 +492,9 @@ public class SearchPlayground
          List<String> items = new ArrayList<>();
          for(Map.Entry<String, List<String>> entry : report.providerIds().entrySet())
          {
-            items.add("<strong>" + DiagnosticsHtml.escape(entry.getKey()) + "</strong>: " + entry.getValue().size() + " id(s)"
+            Integer hidden = report.providerHiddenCounts().getOrDefault(entry.getKey(), 0);
+            items.add("<strong>" + DiagnosticsHtml.escape(entry.getKey()) + "</strong>: " + entry.getValue().size() + " id(s) you can read"
+               + (hidden > 0 ? " (" + hidden + " more you cannot read, not shown)" : "")
                + (entry.getValue().isEmpty() ? "" : ": " + DiagnosticsHtml.escape(String.join(", ", entry.getValue().subList(0, Math.min(20, entry.getValue().size()))))
                + (entry.getValue().size() > 20 ? ", ..." : "")));
          }
@@ -544,21 +592,25 @@ public class SearchPlayground
       }
 
       SearchProbe probe = tableProbe.probe();
-      html.paragraph(probe.totalHits() + (Boolean.TRUE.equals(probe.totalIsLowerBound()) ? "+" : "") + " matching document(s); OpenSearch took " + probe.tookMillis()
-         + " ms (" + probe.wallMillis() + " ms wall clock). Showing the top " + probe.hits().size() + ".");
+      html.paragraph((probe.totalHits() == null ? "Matching documents: not shown (some are records you cannot read)"
+         : probe.totalHits() + (Boolean.TRUE.equals(probe.totalIsLowerBound()) ? "+" : "") + " matching document(s)")
+         + "; OpenSearch took " + probe.tookMillis() + " ms (" + probe.wallMillis() + " ms wall clock). Showing the " + probe.hits().size() + " top hit(s) you can read.");
+      if(tableProbe.hiddenCount() != null && tableProbe.hiddenCount() > 0)
+      {
+         html.status(Level.INFO, tableProbe.hiddenCount() + " of the top hits are records you cannot read (deleted, or hidden by a record security lock); they are not shown.");
+      }
 
       List<String> items    = new ArrayList<>();
       int          position = 0;
       for(ProbeHit hit : probe.hits())
       {
          position++;
-         boolean       readable = tableProbe.readableIds().contains(hit.recordId());
-         StringBuilder item     = new StringBuilder();
+         StringBuilder item = new StringBuilder();
          item.append("#").append(position).append(" <strong>")
-            .append(readable ? DiagnosticsHtml.escape(hit.recordLabel() == null ? "(no label)" : hit.recordLabel()) : "(not readable by you)")
+            .append(DiagnosticsHtml.escape(hit.recordLabel() == null ? "(no label)" : hit.recordLabel()))
             .append("</strong> &middot; document <code>").append(DiagnosticsHtml.escape(OpenSearchDocument.buildDocumentId(tableProbe.tableName(), hit.recordId()))).append("</code>")
             .append(" &middot; score ").append(hit.score() == null ? "n/a" : String.format("%.3f", hit.score()))
-            .append(" &middot; ").append(tableProbe.shownIds().contains(hit.recordId()) ? "shown in global search" : (readable ? "not shown (beyond the per-table limit)" : "dropped by core's re-read"));
+            .append(" &middot; ").append(tableProbe.shownIds().contains(hit.recordId()) ? "shown in global search" : "not shown (beyond the per-table limit)");
          if(!hit.matchedClauses().isEmpty())
          {
             List<String> fields = hit.matchedClauses().stream().map(c -> c.startsWith(QuickSearchOpenSearchClient.FIELD_CLAUSE_PREFIX) ? c.substring(QuickSearchOpenSearchClient.FIELD_CLAUSE_PREFIX.length()) : c).toList();
@@ -573,11 +625,11 @@ public class SearchPlayground
       }
       if(items.isEmpty())
       {
-         html.paragraph("No document of this table matches every term.");
+         html.paragraph("No document of this table that you can read matches every term.");
       }
       html.rawList(items);
       html.jsonDetails("Query DSL", probe.requestJson());
-      html.jsonDetails("Raw response (unreadable hits redacted)", probe.responseJson());
+      html.jsonDetails("Raw response (hits you cannot read removed)", probe.responseJson());
    }
 
 

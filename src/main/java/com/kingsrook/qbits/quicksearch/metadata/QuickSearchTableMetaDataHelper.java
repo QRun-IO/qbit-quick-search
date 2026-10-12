@@ -22,6 +22,7 @@ import com.kingsrook.qqq.backend.core.model.metadata.fields.QFieldMetaData;
 import com.kingsrook.qqq.backend.core.model.metadata.fields.QFieldType;
 import com.kingsrook.qqq.backend.core.model.metadata.layout.QIcon;
 import com.kingsrook.qqq.backend.core.model.metadata.possiblevalues.QPossibleValueSource;
+import com.kingsrook.qqq.backend.core.model.metadata.tables.Capability;
 import com.kingsrook.qqq.backend.core.model.metadata.tables.QFieldSection;
 import com.kingsrook.qqq.backend.core.model.metadata.tables.QTableMetaData;
 import com.kingsrook.qqq.backend.core.model.metadata.tables.Tier;
@@ -133,13 +134,16 @@ public class QuickSearchTableMetaDataHelper
 
    /*******************************************************************************
     ** quickSearchDiagnosticEvent: failed searches, diagnostic tool runs (the
-    ** audit trail) and refused runs. Written by the QBit only.
+    ** audit trail) and refused runs. Written by the QBit only: insert, update
+    ** and delete are disabled for users and the API (core actions, which the
+    ** QBit uses, do not check capabilities).
     *******************************************************************************/
    public static QTableMetaData buildDiagnosticEventTable(QuickSearchQBitConfig config)
    {
       return (new QTableMetaData()
          .withName(config.applyPrefix(QuickSearchDiagnosticEvent.TABLE_NAME))
          .withLabel("Quick Search Diagnostic Event")
+         .withoutCapabilities(Capability.TABLE_INSERT, Capability.TABLE_UPDATE, Capability.TABLE_DELETE)
          .withIcon(new QIcon("bug_report"))
          .withBackendName(config.getBackendName())
          .withPrimaryKeyField("id")
@@ -168,13 +172,16 @@ public class QuickSearchTableMetaDataHelper
 
    /*******************************************************************************
     ** quickSearchValidationRun: index validation reports (history). The
-    ** report is an HTML field, shown in full on the record view.
+    ** report is an HTML field, shown in full on the record view; only the
+    ** QBit writes rows (insert, update and delete are disabled for users and
+    ** the API), so the HTML is always the QBit's escaped output.
     *******************************************************************************/
    public static QTableMetaData buildValidationRunTable(QuickSearchQBitConfig config)
    {
       return (new QTableMetaData()
          .withName(config.applyPrefix(QuickSearchValidationRun.TABLE_NAME))
          .withLabel("Quick Search Validation Run")
+         .withoutCapabilities(Capability.TABLE_INSERT, Capability.TABLE_UPDATE, Capability.TABLE_DELETE)
          .withIcon(new QIcon("fact_check"))
          .withBackendName(config.getBackendName())
          .withPrimaryKeyField("id")

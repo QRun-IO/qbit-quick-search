@@ -139,9 +139,10 @@ public final class DiagnosticsSupport
 
 
    /*******************************************************************************
-    ** Record a failed search (OpenSearch error or timeout).
+    ** Record a failed search (OpenSearch error or timeout). userTerm is the
+    ** user's term: never stored, and redacted from the message and detail.
     *******************************************************************************/
-   public static void recordSearchFailure(QuickSearchRuntime runtime, String source, Collection<String> tableNames, String term, long durationMillis, Throwable error, String detail)
+   public static void recordSearchFailure(QuickSearchRuntime runtime, String source, Collection<String> tableNames, String userTerm, long durationMillis, Throwable error, String detail)
    {
       if(runtime == null)
       {
@@ -155,16 +156,39 @@ public final class DiagnosticsSupport
             .withSource(source)
             .withOutcome(QuickSearchDiagnosticEvent.OUTCOME_ERROR)
             .withTableNames(tableNames == null || tableNames.isEmpty() ? null : String.join(",", tableNames))
-            .withSearchTerm(term)
             .withDurationMillis((int) Math.min(Integer.MAX_VALUE, durationMillis))
             .withErrorClass(cause == null ? null : cause.getClass().getName())
-            .withErrorMessage(error == null ? null : error.getMessage())
-            .withDetail(detail));
+            .withErrorMessage(redactTerm(error == null ? null : error.getMessage(), userTerm))
+            .withDetail(redactTerm(detail, userTerm)));
       }
       catch(Exception e)
       {
          LOG.debug("Could not queue a search failure event", e);
       }
+   }
+
+
+
+   /*******************************************************************************
+    ** The text with the user's search term, and each of its words of three or
+    ** more characters, replaced by a marker (case-insensitive): error messages
+    ** (ours and OpenSearch's) can echo the term, which may hold personal data.
+    *******************************************************************************/
+   public static String redactTerm(String text, String userTerm)
+   {
+      if(text == null || userTerm == null || userTerm.isBlank())
+      {
+         return (text);
+      }
+      String redacted = text.replaceAll("(?i)" + java.util.regex.Pattern.quote(userTerm.trim()), "[search term]");
+      for(String word : userTerm.trim().split("\\s+"))
+      {
+         if(word.length() >= 3)
+         {
+            redacted = redacted.replaceAll("(?i)" + java.util.regex.Pattern.quote(word), "[search term]");
+         }
+      }
+      return (redacted);
    }
 
 

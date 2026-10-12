@@ -227,7 +227,7 @@ class DiagnosticsOfflineTest
       String json = "{\"hits\":{\"hits\":[{\"_source\":{\"recordId\":\"1\",\"recordLabel\":\"ok\"},\"highlight\":{\"x\":[\"y\"]}},"
          + "{\"_source\":{\"recordId\":\"2\",\"recordLabel\":\"private\"},\"highlight\":{\"x\":[\"secret\"]}}]}}";
       String redacted = SearchPlayground.redactResponse(json, Set.of("1"));
-      assertThat(redacted).contains("\"recordLabel\":\"ok\"").doesNotContain("private").doesNotContain("secret").contains("redacted");
+      assertThat(redacted).contains("\"recordLabel\":\"ok\"").doesNotContain("private").doesNotContain("secret").doesNotContain("\"2\"").contains("redacted: 1 hit(s)");
       assertThat(SearchPlayground.redactResponse("nope", Set.of())).contains("could not be parsed");
    }
 
@@ -346,6 +346,39 @@ class DiagnosticsOfflineTest
       assertThat(event.getValueString("detail")).contains("term length 6");
       assertThat(event.getValueString("tableNames")).isEqualTo(PRODUCT);
       assertThat(event.getValueString("errorClass")).isNotBlank();
+      assertThat(event.getValueString("errorMessage")).doesNotContainIgnoringCase("widget");
+   }
+
+
+
+   /*******************************************************************************
+    ** QuickSearchAction's failure message names the term; the event never
+    ** keeps it.
+    *******************************************************************************/
+   @Test
+   void testQuickSearchActionFailure_termNeverStored() throws QException
+   {
+      assertThatThrownBy(() -> new com.kingsrook.qbits.quicksearch.actions.QuickSearchAction().execute(
+         new com.kingsrook.qbits.quicksearch.actions.QuickSearchInput().withSearchTerm("Jane Doe-Smith")))
+         .hasMessageContaining("Jane Doe-Smith");
+
+      runtime.getDiagnosticEventRecorder().flush(5000);
+      QRecord event = events().stream().filter(r -> QuickSearchDiagnosticEvent.SOURCE_QUICK_SEARCH_ACTION.equals(r.getValueString("source"))).findFirst().orElseThrow();
+      assertThat(event.getValueString("searchTerm")).isNull();
+      assertThat(event.getValueString("errorMessage")).contains("[search term]").doesNotContainIgnoringCase("jane").doesNotContainIgnoringCase("smith");
+      assertThat(event.getValueString("detail")).contains("term length 14");
+   }
+
+
+
+   @Test
+   void testRedactTerm()
+   {
+      assertThat(DiagnosticsSupport.redactTerm("Search failed for term [Blue Widget]: parse error near 'widget'", "blue widget"))
+         .isEqualTo("Search failed for term [[search term]]: parse error near '[search term]'");
+      assertThat(DiagnosticsSupport.redactTerm("no term here", "a b")).isEqualTo("no term here");
+      assertThat(DiagnosticsSupport.redactTerm(null, "x")).isNull();
+      assertThat(DiagnosticsSupport.redactTerm("x (y)", "(y)")).isEqualTo("x [search term]");
    }
 
 

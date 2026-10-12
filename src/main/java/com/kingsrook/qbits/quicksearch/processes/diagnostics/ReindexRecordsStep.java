@@ -54,7 +54,6 @@ public class ReindexRecordsStep extends AbstractDiagnosticToolStep
       if(STEP_PREPARE.equals(input.getStepName()))
       {
          List<Target> targets = targetsFromInput(input, runtime, MAX_RECORDS);
-         saveTargets(output, targets);
          Map<String, List<String>> byTable = groupByTable(targets);
          List<String>              lines   = new ArrayList<>();
          byTable.forEach((table, ids) -> lines.add(ids.size() + " record(s) of " + table));
@@ -69,7 +68,7 @@ public class ReindexRecordsStep extends AbstractDiagnosticToolStep
       DiagnosticsSupport.checkRateLimit(runtime, DiagnosticsSupport.TOOL_REINDEX_RECORDS);
 
       StringBuilder html = new StringBuilder();
-      for(Map.Entry<String, List<String>> entry : groupByTable(savedTargets(input)).entrySet())
+      for(Map.Entry<String, List<String>> entry : groupByTable(targetsFromInput(input, runtime, MAX_RECORDS)).entrySet())
       {
          try
          {

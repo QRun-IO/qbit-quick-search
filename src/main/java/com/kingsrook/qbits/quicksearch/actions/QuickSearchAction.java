@@ -481,7 +481,7 @@ public class QuickSearchAction
     *******************************************************************************/
    private static void recordFailure(List<String> tables, String term, long start, Exception e)
    {
-      DiagnosticsSupport.recordSearchFailure(QuickSearchRuntime.get(), QuickSearchDiagnosticEvent.SOURCE_QUICK_SEARCH_ACTION, tables, null,
+      DiagnosticsSupport.recordSearchFailure(QuickSearchRuntime.get(), QuickSearchDiagnosticEvent.SOURCE_QUICK_SEARCH_ACTION, tables, term,
          System.currentTimeMillis() - start, e, "term length " + (term == null ? 0 : term.length()));
    }
 

@@ -51,17 +51,11 @@ public class InspectRecordStep extends AbstractDiagnosticToolStep
    public void run(RunBackendStepInput input, RunBackendStepOutput output) throws QException
    {
       QuickSearchRuntime runtime = DiagnosticsSupport.requireRuntime();
-      List<Target>       targets;
-      if(STEP_PREPARE.equals(input.getStepName()))
-      {
-         targets = targetsFromInput(input, runtime, MAX_RECORDS);
-         saveTargets(output, targets);
-      }
-      else
+      if(!STEP_PREPARE.equals(input.getStepName()))
       {
          loopBackToForm(output);
-         targets = savedTargets(input);
       }
+      List<Target> targets = targetsFromInput(input, runtime, MAX_RECORDS);
 
       long   start = System.currentTimeMillis();
       String term  = STEP_PREPARE.equals(input.getStepName()) ? null : input.getValueString(FIELD_TERM);

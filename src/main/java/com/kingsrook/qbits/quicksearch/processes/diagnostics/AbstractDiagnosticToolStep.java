@@ -56,8 +56,6 @@ public abstract class AbstractDiagnosticToolStep implements BackendStep
    public static final String STEP_RUN     = "run";
    public static final String STEP_RESULT  = "result";
 
-   public static final String FIELD_TARGETS = "diagnosticTargets";
-
 
 
    /*******************************************************************************
@@ -122,7 +120,10 @@ public abstract class AbstractDiagnosticToolStep implements BackendStep
    /*******************************************************************************
     ** The records the process was started on, as targets: for a source table,
     ** its primary keys; for the failed event table, each row's table and
-    ** record id. At most max; more is a user-facing error.
+    ** record id (only tables Quick Search indexes). Read from the records the
+    ** backend loaded into the process state (never from client values), so
+    ** every step works on exactly the records the user selected and may read.
+    ** At most max; more is a user-facing error.
     *******************************************************************************/
    protected static List<Target> targetsFromInput(RunBackendStepInput input, QuickSearchRuntime runtime, int max) throws QException
    {
@@ -150,45 +151,12 @@ public abstract class AbstractDiagnosticToolStep implements BackendStep
       {
          String targetTable = failedEvents ? record.getValueString("tableName") : tableName;
          String recordId    = failedEvents ? record.getValueString("recordId") : record.getValueString(table.getPrimaryKeyField());
-         if(StringUtils.hasContent(targetTable) && StringUtils.hasContent(recordId))
+         if(StringUtils.hasContent(targetTable) && StringUtils.hasContent(recordId) && runtime.getTableConfig(targetTable) != null)
          {
             targets.add(new Target(targetTable, recordId));
          }
       }
       return (new ArrayList<>(targets));
-   }
-
-
-
-   /*******************************************************************************
-    ** Targets saved in the process value FIELD_TARGETS.
-    *******************************************************************************/
-   protected static List<Target> savedTargets(RunBackendStepInput input)
-   {
-      List<Target> targets = new ArrayList<>();
-      String       saved   = input.getValueString(FIELD_TARGETS);
-      if(StringUtils.hasContent(saved))
-      {
-         for(String part : saved.split("\n"))
-         {
-            Target target = Target.parse(part.trim());
-            if(target != null)
-            {
-               targets.add(target);
-            }
-         }
-      }
-      return (targets);
-   }
-
-
-
-   /*******************************************************************************
-    ** Save targets in the process value FIELD_TARGETS.
-    *******************************************************************************/
-   protected static void saveTargets(RunBackendStepOutput output, List<Target> targets)
-   {
-      output.addValue(FIELD_TARGETS, String.join("\n", targets.stream().map(Target::toString).toList()));
    }
 
 }

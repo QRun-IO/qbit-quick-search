@@ -148,7 +148,7 @@ public class QuickSearchRecordSearchProvider implements RecordSearchProviderInte
          // the user's term is not recorded (it may hold personal data); its //
          // length is, so a length-related failure is still visible          //
          //////////////////////////////////////////////////////////////////////
-         DiagnosticsSupport.recordSearchFailure(runtime, QuickSearchDiagnosticEvent.SOURCE_CORE_RECORD_SEARCH, tableNames, null, System.currentTimeMillis() - start, e,
+         DiagnosticsSupport.recordSearchFailure(runtime, QuickSearchDiagnosticEvent.SOURCE_CORE_RECORD_SEARCH, tableNames, term, System.currentTimeMillis() - start, e,
             "term length " + term.length() + ", " + idsPerTable + " ids per table, timeout " + timeoutMillis + " ms; core searched these tables itself");
          LOG.info("Quick Search record search failed; core searches these tables itself, and Quick Search claims none for a while", logPair("tables", tableNames),
             logPair("backoffMillis", QuickSearchRuntime.RECORD_SEARCH_BACKOFF_MILLIS), logPair("error", e.getMessage()));
