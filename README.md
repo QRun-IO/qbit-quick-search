@@ -1,6 +1,6 @@
 # QBit: Quick Search
 
-[![Version](https://img.shields.io/badge/version-1.0.0--RC.1-blue.svg)](https://github.com/QRun-IO/qbit-quick-search)
+[![Version](https://img.shields.io/badge/version-1.1.0--RC.1-blue.svg)](https://github.com/QRun-IO/qbit-quick-search)
 [![License](https://img.shields.io/badge/license-Apache%202.0-green.svg)](https://www.apache.org/licenses/LICENSE-2.0)
 [![Java](https://img.shields.io/badge/java-21+-blue.svg)](https://adoptium.net/)
 
@@ -49,11 +49,11 @@ For `AWS_SIGV4` add these optional dependencies to your host (the QBit declares 
 <dependency>
     <groupId>com.kingsrook.qbits</groupId>
     <artifactId>qbit-quick-search</artifactId>
-    <version>1.0.0-RC.1</version>
+    <version>1.1.0-RC.1</version>
 </dependency>
 ```
 
-`1.0.0-RC.1` is the current release candidate; `1.0.0` follows once host applications have adopted it (#12).
+`1.1.0-RC.1` is the current release candidate (the 1.1 line, published from `release/1.1`; it needs QQQ 4.1.0-RC.2 or later, see [Upgrading from 1.0](#upgrading-from-10)). Hosts staying on the 1.0 line use `1.0.0-RC.2`; `1.0.0` follows once host applications have adopted it (#12).
 
 Annotate entity classes:
 
@@ -100,7 +100,7 @@ config.withSearchableTable(new SearchableTableConfig("crmContact", List.of(
    .withRecordLabelFormat("%s %s", "firstName", "lastName"));
 ```
 
-Annotation and config-driven tables can be mixed; a table may appear in only one of them. Hidden and password fields are never indexed. A table without the change-detection field (`modifyDate` by default) is covered by reconcile instead of incremental basepull.
+Annotation and config-driven tables can be mixed; a table may appear in only one of them. Hidden and password fields are never indexed. A table without the change-detection field (`modifyDate` by default) is covered by reconcile instead of incremental basepull, and the QBit logs a warning for it at startup. Set `basepullTimestampField` to null on a config-driven table to opt out without the warning.
 
 ### Searching
 
@@ -140,11 +140,25 @@ QQQ core has its own record search (`RecordSearchAction`, served at `POST /qqq/v
 
 | Process | Trigger | What it does |
 |---|---|---|
-| Quick Search Basepull Index | Scheduled every `basepullRepeatSeconds` when `schedulerName` is set; also on demand | Replays failed real-time events, re-indexes rows changed since the last run start minus `basepullOverlapSeconds`, purges old run history |
+| Quick Search Basepull Index | Scheduled every `basepullRepeatSeconds` when `schedulerName` is set; also on demand | Recovers a full reindex that stopped without finishing, replays failed real-time events, re-indexes rows changed since the last run start minus `basepullOverlapSeconds`, purges old run history |
 | Quick Search Reconcile Index | Cron via `reconcileCronExpression` when `schedulerName` is set; also on demand (optional `tableName` input) | Re-indexes everything in place, removes documents without a source row and documents of unconfigured tables |
-| Quick Search Full Reindex | On demand (optional `tableName` input) | All tables: build a fresh physical index and swap the alias. One table: reconcile algorithm in place |
+| Quick Search Full Reindex | On demand (optional `tableName` input) | All tables: build a fresh physical index and swap the alias. One table: reconcile algorithm in place. Fails to start while another full reindex is running |
 
 Without `schedulerName` the processes exist but nothing runs them; the QBit logs a warning at startup.
+
+### Scheduling
+
+The schedules run only when the host starts through QQQ's `QApplicationLauncher` (`com.kingsrook.qqq.middleware.javalin.QApplicationLauncher`, in `qqq-middleware-javalin`). `QApplicationLauncher.run(new MyApplication(), new QApplicationLauncherConfig())` starts the Javalin server, then the `QScheduleManager` (because the QBit's processes are scheduled), then the instance's runtime services. A host that starts only a server, or builds the `QInstance` itself, gets the processes but nothing runs them on a schedule, unless it calls `QScheduleManager.initInstance(qInstance, systemSessionSupplier).start()` itself. `qqq.scheduleManager.enabled=false` (or `QQQ_SCHEDULE_MANAGER_ENABLED=false`) turns schedules off on a node.
+
+Basepull's fixed interval runs on any QQQ scheduler. `reconcileCronExpression` needs a scheduler that supports cron, which in QQQ 4.1 means a `QuartzSchedulerMetaData`; a `SimpleSchedulerMetaData` runs fixed intervals only. The expression uses Quartz syntax, seconds first (`0 0 3 * * ?` is 03:00 every day), and needs `reconcileCronTimeZoneId`, a Java time zone ID such as `UTC` or `America/Chicago`; QQQ has no default zone. `produce()` rejects a cron without a zone, an invalid expression or zone, and a cron on a scheduler in the instance that does not support cron.
+
+```java
+qInstance.addScheduler(new QuartzSchedulerMetaData().withName("quartz").withProperties(quartzProperties));
+
+config.withSchedulerName("quartz")
+   .withReconcileCronExpression("0 0 3 * * ?")
+   .withReconcileCronTimeZoneId("America/Chicago");
+```
 
 ## Configuration reference
 
@@ -163,10 +177,11 @@ Without `schedulerName` the processes exist but nothing runs them; the QBit logs
 | `startupMode` | `FAIL_FAST` | `FAIL_FAST` fails `produce()` when the cluster is unreachable; `DEGRADED` boots and retries on first use |
 | `enableRealTimeIndexing` | `true` | Register the record-change listener |
 | `enableBasepullProcess`, `enableMaintenanceProcesses` | `true` | Register basepull; register full reindex and reconcile. `enableScheduledProcesses` is a deprecated alias for both |
-| `schedulerName`, `basepullRepeatSeconds`, `reconcileCronExpression`, `reconcileCronTimeZoneId` | none, 300, none | Scheduling |
+| `schedulerName`, `basepullRepeatSeconds`, `reconcileCronExpression`, `reconcileCronTimeZoneId` | none, 300, none, none | Scheduling; a cron needs the time zone ID and a Quartz scheduler, and nothing runs without `QApplicationLauncher` (see [Scheduling](#scheduling)) |
 | `basepullOverlapSeconds` | 300 | Re-read window before the previous run start |
 | `defaultBasepullIntervalMinutes` | 5 | Per-table due interval for config-driven tables |
 | `runHistoryRetentionDays` | 30 | Purge run records older than this; null keeps them |
+| `fullReindexStaleMinutes` | 30 | A running full reindex that shows no sign of life for this long is treated as stopped: it no longer blocks a new one, and basepull recovers its tables. Keep it well above the time one page of `sourceBatchSize` records takes; null means the default |
 | `bulkBatchSize`, `maxBulkRequestBytes`, `sourceBatchSize` | 500, 5 MiB, 1000 | Batch sizes |
 | `maxFieldLength` | 10000 | Truncate each indexed value |
 | `maxSearchLimit` | 100 | Largest page size |
@@ -185,7 +200,7 @@ Without `schedulerName` the processes exist but nothing runs them; the QBit logs
 
 - `quickSearchIndex`: one row per table with `enabled` (honoured by indexing and search, cached for one minute), `basepullIntervalMinutes`, `lastBasepullTime`, `lastReconcileTime`, `lastFullReindexTime`, `lastRunStatus`, `lastErrorMessage`, `recordCount`, `documentCount`, `realTimeErrorCount`, `status` (`ACTIVE`, `NEEDS_REINDEX` when the configured fields changed since the row was created, or `REBUILDING` while a full reindex of all tables runs). Unique on `tableName`.
 - `quickSearchIndexRun`: `runType` (`BASEPULL`, `RECONCILE`, `FULL_REINDEX`), `status`, counts, `errorMessage`.
-- `quickSearchFailedEvent`: real-time events that could not be applied; `status` `PENDING` or `EXHAUSTED` after 10 attempts. Deletes made while a full reindex of all tables runs are also recorded here with status `AWAITING_REINDEX`: the reindex applies them to the new index after the alias swap (basepull does not replay them). While a table is `REBUILDING`, drift detection is suspended for it. If a full reindex is killed mid-run, its tables stay `REBUILDING` and deletes keep collecting as `AWAITING_REINDEX`; no data is lost, and the recovery is to run a full reindex of all tables again, which applies the collected deletes and returns the tables to `ACTIVE`.
+- `quickSearchFailedEvent`: real-time events that could not be applied; `status` `PENDING` or `EXHAUSTED` after 10 attempts. Deletes made while a full reindex of all tables runs are also recorded here with status `AWAITING_REINDEX`: the reindex applies them to the new index after the alias swap (basepull does not replay them). While a table is `REBUILDING`, drift detection is suspended for it. Only one full reindex runs at a time: starting one while another is running fails. A full reindex shows it is running through its `FULL_REINDEX` run records, which stay `RUNNING` with `modifyDate` refreshed after every page. If it is killed mid-run (pod restart, OOM, deploy), recovery is automatic once its run records have shown no sign of life for `fullReindexStaleMinutes` (30 by default): the next basepull, or the next full reindex, marks those run records `FAILED`, returns the tables to `ACTIVE` with `lastBasepullTime` moved back to the run's start, and turns the `AWAITING_REINDEX` rows `PENDING` so basepull replays the deletes. No data is lost. A run that was only slow and is judged stopped notices before its alias swap and fails without swapping, or, after its swap, stops applying its captured deletes; basepull skips a replayed delete whose record exists again.
 
 ## Extending
 
@@ -207,7 +222,7 @@ See [docs/MIGRATION-1.1.md](docs/MIGRATION-1.1.md). In short: 1.1 needs the QQQ 
 
 ## Upgrading from 0.x
 
-See [docs/MIGRATION-1.0.md](docs/MIGRATION-1.0.md). In short: QQQ 4.1 is required, remove any manual `addQBit` for this QBit, set `schedulerName`, prefer `opensearchUrl` and `${env.}` secrets, and run a full reindex once so the index gets the new mapping.
+See [docs/MIGRATION-1.0.md](docs/MIGRATION-1.0.md). In short: QQQ 4.1 is required, remove any manual `addQBit` for this QBit, set `schedulerName`, prefer `opensearchUrl` and `${env.}` secrets, grant `quickSearchAdmin.hasAccess` and the table permissions, add the new operational table columns and `quickSearchFailedEvent`, and run a full reindex once so the index gets the new mapping.
 
 ## Adopting in another app
 

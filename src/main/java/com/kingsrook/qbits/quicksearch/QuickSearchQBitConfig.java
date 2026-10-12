@@ -18,10 +18,13 @@ package com.kingsrook.qbits.quicksearch;
 
 
 import java.net.URI;
+import java.text.ParseException;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Set;
+import java.util.TimeZone;
 import java.util.regex.Pattern;
 import com.fasterxml.jackson.annotation.JsonIgnore;
 import com.kingsrook.qqq.backend.core.model.metadata.QInstance;
@@ -30,12 +33,14 @@ import com.kingsrook.qqq.backend.core.model.metadata.permissions.PermissionLevel
 import com.kingsrook.qqq.backend.core.model.metadata.permissions.QPermissionRules;
 import com.kingsrook.qqq.backend.core.model.metadata.producers.MetaDataCustomizerInterface;
 import com.kingsrook.qqq.backend.core.model.metadata.qbits.QBitConfig;
+import com.kingsrook.qqq.backend.core.model.metadata.scheduleing.QSchedulerMetaData;
 import com.kingsrook.qqq.backend.core.model.metadata.tables.QTableMetaData;
 import com.kingsrook.qqq.backend.core.utils.CollectionUtils;
 import com.kingsrook.qqq.backend.core.utils.StringUtils;
 import com.kingsrook.qbits.quicksearch.model.QuickSearchIndex;
 import com.kingsrook.qbits.quicksearch.model.QuickSearchIndexRun;
 import com.kingsrook.qbits.quicksearch.publisher.IndexEventPublisher;
+import org.quartz.CronExpression;
 
 
 /*******************************************************************************
@@ -66,6 +71,15 @@ public class QuickSearchQBitConfig implements QBitConfig
    public static final String DEFAULT_ADMIN_PERMISSION_BASE_NAME   = "quickSearchAdmin";
    public static final String DEFAULT_BASEPULL_TIMESTAMP_FIELD     = "modifyDate";
    public static final int    DEFAULT_RECORD_SEARCH_TIMEOUT_MILLIS = 2500;
+
+   ///////////////////////////////////////////////////////////////////////////////
+   // a live full reindex refreshes its run record after every page; a page is  //
+   // one source query plus sourceBatchSize / bulkBatchSize bulk requests, each //
+   // bounded by the transport timeouts (a few minutes at most by default),     //
+   // so 30 minutes leaves a wide margin before a slow run is judged dead, and  //
+   // basepull (every 5 minutes by default) recovers a dead one soon after      //
+   ///////////////////////////////////////////////////////////////////////////////
+   public static final Integer DEFAULT_FULL_REINDEX_STALE_MINUTES = 30;
 
    private static final Pattern INDEX_NAME_PATTERN = Pattern.compile("^[a-z0-9][a-z0-9_+.-]*$");
    private static final Set<String> AWS_SERVICE_NAMES = Set.of("es", "aoss");
@@ -101,6 +115,7 @@ public class QuickSearchQBitConfig implements QBitConfig
    private Integer basepullOverlapSeconds = 300;
    private Integer defaultBasepullIntervalMinutes = 5;
    private Integer runHistoryRetentionDays = 30;
+   private Integer fullReindexStaleMinutes = DEFAULT_FULL_REINDEX_STALE_MINUTES;
    private Integer bulkBatchSize = 500;
    private Integer sourceBatchSize = 1000;
    private Integer maxFieldLength = 10000;
@@ -398,6 +413,7 @@ public class QuickSearchQBitConfig implements QBitConfig
       requirePositive(recordSearchTimeoutMillis, "recordSearchTimeoutMillis", errors);
       requirePositive(maxFieldLength, "maxFieldLength", errors);
       requirePositive(runHistoryRetentionDays, "runHistoryRetentionDays", errors);
+      requirePositive(fullReindexStaleMinutes, "fullReindexStaleMinutes", errors);
 
       if(basepullOverlapSeconds != null && basepullOverlapSeconds < 0)
       {
@@ -421,18 +437,53 @@ public class QuickSearchQBitConfig implements QBitConfig
 
 
    /*******************************************************************************
-    **
+    ** The scheduler must exist when the instance already has schedulers. A
+    ** reconcile cron gets the checks QQQ's instance validator applies to every
+    ** cron schedule (Quartz syntax, a required and known time zone, which QQQ
+    ** never defaults), plus a scheduler that supports cron, so a bad schedule
+    ** fails produce() naming these fields instead of failing at startup.
     *******************************************************************************/
    private void validateScheduling(QInstance qInstance, List<String> errors)
    {
-      if(StringUtils.hasContent(schedulerName) && qInstance != null && !CollectionUtils.nullSafeIsEmpty(qInstance.getSchedulers()) && qInstance.getScheduler(schedulerName) == null)
+      QSchedulerMetaData scheduler = null;
+      if(StringUtils.hasContent(schedulerName) && qInstance != null && !CollectionUtils.nullSafeIsEmpty(qInstance.getSchedulers()))
       {
-         errors.add("Scheduler not found: " + schedulerName);
+         scheduler = qInstance.getScheduler(schedulerName);
+         if(scheduler == null)
+         {
+            errors.add("Scheduler not found: " + schedulerName);
+         }
       }
 
-      if(StringUtils.hasContent(reconcileCronExpression) && !StringUtils.hasContent(schedulerName))
+      if(StringUtils.hasContent(reconcileCronExpression))
       {
-         errors.add("reconcileCronExpression requires schedulerName");
+         if(!StringUtils.hasContent(schedulerName))
+         {
+            errors.add("reconcileCronExpression requires schedulerName");
+         }
+         else if(scheduler != null && !scheduler.supportsCronSchedules())
+         {
+            errors.add("reconcileCronExpression requires a scheduler that supports cron schedules, such as a QuartzSchedulerMetaData; scheduler [" + schedulerName + "] is of type " + scheduler.getType());
+         }
+
+         try
+         {
+            CronExpression.validateExpression(reconcileCronExpression);
+         }
+         catch(ParseException e)
+         {
+            errors.add("reconcileCronExpression [" + reconcileCronExpression + "] is not a valid Quartz cron expression: " + e.getMessage());
+         }
+
+         if(!StringUtils.hasContent(reconcileCronTimeZoneId))
+         {
+            errors.add("reconcileCronExpression requires reconcileCronTimeZoneId (a time zone ID such as UTC or America/Chicago)");
+         }
+      }
+
+      if(StringUtils.hasContent(reconcileCronTimeZoneId) && !Arrays.asList(TimeZone.getAvailableIDs()).contains(reconcileCronTimeZoneId))
+      {
+         errors.add("reconcileCronTimeZoneId [" + reconcileCronTimeZoneId + "] is not a recognized time zone ID");
       }
    }
 
@@ -563,6 +614,17 @@ public class QuickSearchQBitConfig implements QBitConfig
    public String getEffectiveAwsServiceName()
    {
       return (StringUtils.hasContent(awsServiceName) ? awsServiceName.toLowerCase() : "es");
+   }
+
+
+
+   /*******************************************************************************
+    ** fullReindexStaleMinutes, defaulting to DEFAULT_FULL_REINDEX_STALE_MINUTES.
+    *******************************************************************************/
+   @JsonIgnore
+   public Integer getEffectiveFullReindexStaleMinutes()
+   {
+      return (fullReindexStaleMinutes == null ? DEFAULT_FULL_REINDEX_STALE_MINUTES : fullReindexStaleMinutes);
    }
 
 
@@ -1588,7 +1650,9 @@ public class QuickSearchQBitConfig implements QBitConfig
 
 
    /*******************************************************************************
-    ** Getter for reconcileCronExpression: optional cron schedule for reconcile (needs a scheduler that supports cron)
+    ** Getter for reconcileCronExpression: optional Quartz cron schedule for
+    ** reconcile; needs reconcileCronTimeZoneId and a scheduler that supports
+    ** cron (Quartz)
     *******************************************************************************/
    public String getReconcileCronExpression()
    {
@@ -1620,7 +1684,9 @@ public class QuickSearchQBitConfig implements QBitConfig
 
 
    /*******************************************************************************
-    ** Getter for reconcileCronTimeZoneId: time zone for reconcileCronExpression
+    ** Getter for reconcileCronTimeZoneId: time zone ID for
+    ** reconcileCronExpression (UTC, America/Chicago); required with it, since
+    ** QQQ has no default zone for cron schedules
     *******************************************************************************/
    public String getReconcileCronTimeZoneId()
    {
@@ -1744,6 +1810,36 @@ public class QuickSearchQBitConfig implements QBitConfig
       return (this);
    }
 
+
+
+   /*******************************************************************************
+    ** Getter for fullReindexStaleMinutes: a RUNNING full reindex whose run record shows no sign of life (start or heartbeat) for this many minutes is treated as stopped; null means the default
+    *******************************************************************************/
+   public Integer getFullReindexStaleMinutes()
+   {
+      return (this.fullReindexStaleMinutes);
+   }
+
+
+
+   /*******************************************************************************
+    ** Setter for fullReindexStaleMinutes
+    *******************************************************************************/
+   public void setFullReindexStaleMinutes(Integer fullReindexStaleMinutes)
+   {
+      this.fullReindexStaleMinutes = fullReindexStaleMinutes;
+   }
+
+
+
+   /*******************************************************************************
+    ** Fluent setter for fullReindexStaleMinutes
+    *******************************************************************************/
+   public QuickSearchQBitConfig withFullReindexStaleMinutes(Integer fullReindexStaleMinutes)
+   {
+      this.fullReindexStaleMinutes = fullReindexStaleMinutes;
+      return (this);
+   }
 
 
 
