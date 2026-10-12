@@ -560,8 +560,8 @@ public class QuickSearchQBitProducer implements QBitMetaDataProducer<QuickSearch
 
 
    /*******************************************************************************
-    ** Hidden fields are never indexed: their values would leak through
-    ** searchable text and highlights.
+    ** Hidden and password fields are never indexed: their values would leak
+    ** through searchable text and highlights.
     *******************************************************************************/
    private static void removeHiddenFields(QTableMetaData table, List<String> searchableFields, Map<String, Integer> fieldWeights, Map<String, Boolean> fieldIncludeLabels)
    {
