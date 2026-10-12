@@ -8,7 +8,7 @@
 
 Annotate entity classes or declare tables in config, point the QBit at an OpenSearch cluster, produce it into your `QInstance`, and you get real-time indexing of committed writes, a scheduled catch-up and reconcile, a blackout-free full rebuild, and a permission-aware search API with relevance scoring, typeahead, highlights and pagination.
 
-Requires QQQ 4.1 (the QBit uses 4.1's record-change listeners, after-commit callbacks and runtime services). Serving core search (`POST /qqq/v1/search`, below) needs QQQ 4.1.0-RC.2 or later, the first release that carries the record-search provider SPI; 1.1 builds against 4.1.0-RC.2.
+Requires QQQ 4.1 (the QBit uses 4.1's record-change listeners, after-commit callbacks and runtime services). Serving core search (`POST /qqq/v1/search`, below) needs QQQ 4.1.0-RC.2 or later, the first release that carries the record-search provider SPI. The record developer panel (below) needs QQQ 4.1.0-RC.4 or later, which carries the developer panel contract; the 1.1 line builds against 4.1.0-RC.4 from the next release candidate on.
 
 ## What it does
 
@@ -177,6 +177,21 @@ Search failures are recorded too: when the provider's OpenSearch request fails o
 
 Permissions: the read-only tools and the widget use `debugPermissionRules` (default `quickSearchDebug.hasAccess`); Reindex in Search uses `adminPermissionRules` (`quickSearchAdmin.hasAccess`); the two history tables use `tablePermissionRules` (grant `.read` only: rows are written by the QBit). Impersonation ("search as user X") is deliberately not offered: a fabricated session would not carry the real user's security key values, so its results would mislead.
 
+### Record developer panel
+
+With QQQ 4.1.0-RC.4 or later the QBit registers a record developer panel provider (`QuickSearchDeveloperPanelProvider`, id `quickSearch`, in QQQ's `DeveloperPanelsMetaData`). Frontends that render developer panels (the Next UI, `/app/{table}/{id}/dev`) show a "Quick Search" panel on every record of an indexed table, to users who may read Quick Search Index. Every part is permission-checked:
+
+| Part | Shown when |
+|---|---|
+| Index: enabled, status, record count, last basepull, last full reindex, searchable fields, link to the index row | always (read on Quick Search Index) |
+| Latest index run: type, status, start and end, processed, indexed, errors | the user may read Quick Search Index Run |
+| Search document: verdict (current, stale, missing) and a Field / Database / Index / Match table | `enableDiagnosticTools` and the debug permission (`debugPermissionRules`); otherwise a note says why it is missing |
+| Failed index events of the record | the user may read Quick Search Failed Event and the record has any |
+| Actions: Inspect search document, Reindex this record | the record actions exist and the user may run them (debug and admin permission) |
+| Link to Quick Search Admin | the user may open the app |
+
+The panel's status is Indexed, Stale, Not indexed, Disabled (the table is turned off in Quick Search Index), or OpenSearch unavailable. When OpenSearch cannot be reached the panel still shows the database-side state, with a warning in place of the document comparison. Hosts without a developer-panel frontend are unaffected.
+
 ## Configuration reference
 
 | Field | Default | Description |
@@ -239,7 +254,7 @@ CI=true ./mvnw verify                       # plus Testcontainers integration te
 ./mvnw verify -Dopensearch.test.image=opensearchproject/opensearch:3.9.0
 ```
 
-Use the wrapper: Maven 3.10 cannot read the published parent POM. The build imports qqq 4.1.0-RC.2 through the default-active `qqq-snapshot` profile until `qbit-build-parent` 2.1.0 ships (override with `-Dqqq.snapshot.version=...`). Without Docker the integration tests are skipped locally; with `CI=true` they fail instead.
+Use the wrapper: Maven 3.10 cannot read the published parent POM. The build imports qqq 4.1.0-RC.4 through the default-active `qqq-snapshot` profile until `qbit-build-parent` 2.1.0 ships (override with `-Dqqq.snapshot.version=...`). Without Docker the integration tests are skipped locally; with `CI=true` they fail instead.
 
 ## Upgrading from 1.0
 

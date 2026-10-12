@@ -2,6 +2,13 @@
 
 All notable changes to this project are documented here. The format follows Keep a Changelog; versions follow semantic versioning.
 
+## [Unreleased]
+
+Requires QQQ 4.1.0-RC.4 or later (the developer panel contract, QRun-IO/qqq#1076).
+
+### Added
+- Record developer panel: `QuickSearchDeveloperPanelProvider` (id `quickSearch`) adds a "Quick Search" panel to the developer view of every record of an indexed table (`/app/{table}/{id}/dev` in the Next UI), for users who may read Quick Search Index. It shows the table's index row (enabled, status, record count, last basepull and full reindex, searchable fields), the latest index run, the record's indexed document compared field by field with the database (Inspect Search Document's comparison; needs `debugPermissionRules`), the record's failed index events, the Inspect Search Document and Reindex in Search actions the user may run, and links to the admin app and the index row. An unreachable OpenSearch shows a warning in the panel. Registered by `QuickSearchDeveloperPanelsMetaDataProducer`.
+
 ## [1.1.0-RC.1] - 2026-10-11
 
 First release candidate of 1.1, published to Maven Central from `release/1.1`. It contains every change listed under 1.1.0 and 1.0.0 below (1.0.0 has not been released as GA). Requires QQQ 4.1.0-RC.2 or later. Upgrade notes: `docs/MIGRATION-1.1.md`.

@@ -51,7 +51,7 @@ Integration tests use `@ExtendWith(RequiresDockerCondition.class)`: skipped with
 ## Dependencies
 
 - Java 21
-- Parent `com.kingsrook:qbit-build-parent:2.0.0` (qqq 4.0.0). 1.0 needs qqq 4.1, so the `qqq-snapshot` profile is active by default and imports `qqq-bom-pom` ahead of the parent's BOM; remove that activation when the parent moves to 4.1 (ADR-0007). 1.1 imports `4.1.0-RC.2`, the first QQQ release with the record-search provider SPI
+- Parent `com.kingsrook:qbit-build-parent:2.0.0` (qqq 4.0.0). 1.0 needs qqq 4.1, so the `qqq-snapshot` profile is active by default and imports `qqq-bom-pom` ahead of the parent's BOM; remove that activation when the parent moves to 4.1 (ADR-0007). 1.1 imports `4.1.0-RC.4`: the record-search provider SPI arrived in RC.2, the developer panel contract (`DeveloperPanelProviderInterface`) in RC.4
 - OpenSearch Java Client 3.10.0; optional AWS SDK v2 `apache-client` and `sts` for `AWS_SIGV4`
 - Apache HttpClient5 and jackson-datatype-jsr310, versions managed by the qqq BOM (keep them unpinned so they match its httpcore5 and jackson)
 - JUnit 5 + AssertJ + Mockito for testing
