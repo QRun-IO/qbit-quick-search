@@ -18,19 +18,26 @@ package com.kingsrook.qbits.quicksearch.metadata;
 
 
 import java.util.List;
+import com.kingsrook.qqq.backend.core.actions.customizers.TableCustomizers;
+import com.kingsrook.qqq.backend.core.model.metadata.audits.AuditLevel;
+import com.kingsrook.qqq.backend.core.model.metadata.audits.QAuditRules;
+import com.kingsrook.qqq.backend.core.model.metadata.code.QCodeReference;
 import com.kingsrook.qqq.backend.core.model.metadata.fields.QFieldMetaData;
 import com.kingsrook.qqq.backend.core.model.metadata.fields.QFieldType;
 import com.kingsrook.qqq.backend.core.model.metadata.layout.QIcon;
 import com.kingsrook.qqq.backend.core.model.metadata.possiblevalues.QPossibleValueSource;
+import com.kingsrook.qqq.backend.core.model.metadata.tables.Association;
 import com.kingsrook.qqq.backend.core.model.metadata.tables.Capability;
 import com.kingsrook.qqq.backend.core.model.metadata.tables.QFieldSection;
 import com.kingsrook.qqq.backend.core.model.metadata.tables.QTableMetaData;
 import com.kingsrook.qqq.backend.core.model.metadata.tables.Tier;
 import com.kingsrook.qqq.backend.core.model.metadata.tables.UniqueKey;
 import com.kingsrook.qbits.quicksearch.QuickSearchQBitConfig;
+import com.kingsrook.qbits.quicksearch.config.QuickSearchIndexTableCustomizer;
 import com.kingsrook.qbits.quicksearch.model.QuickSearchDiagnosticEvent;
 import com.kingsrook.qbits.quicksearch.model.QuickSearchFailedEvent;
 import com.kingsrook.qbits.quicksearch.model.QuickSearchIndex;
+import com.kingsrook.qbits.quicksearch.model.QuickSearchIndexField;
 import com.kingsrook.qbits.quicksearch.model.QuickSearchIndexRun;
 import com.kingsrook.qbits.quicksearch.model.QuickSearchValidationRun;
 
@@ -47,6 +54,11 @@ public class QuickSearchTableMetaDataHelper
     *******************************************************************************/
    public static QTableMetaData buildIndexTable(QuickSearchQBitConfig config)
    {
+      ////////////////////////////////////////////////////////////////////////////
+      // rows are added by Add Search Index (and by self-priming) and removed  //
+      // by Remove Search Index, which validate, preview and build or clean up //
+      // the index; the generic create and delete screens are turned off      //
+      ////////////////////////////////////////////////////////////////////////////
       return (new QTableMetaData()
          .withName(config.applyTablePrefix(QuickSearchIndex.TABLE_NAME))
          .withLabel("Quick Search Index")
@@ -55,13 +67,29 @@ public class QuickSearchTableMetaDataHelper
          .withPrimaryKeyField("id")
          .withRecordLabelFields("tableName")
          .withUniqueKey(new UniqueKey("tableName"))
+         .withoutCapabilities(Capability.TABLE_INSERT, Capability.TABLE_DELETE)
          .withPermissionRules(config.getTablePermissionRules() == null ? null : config.getTablePermissionRules().clone())
+         .withAuditRules(new QAuditRules().withAuditLevel(AuditLevel.FIELD))
+         .withCustomizer(TableCustomizers.PRE_INSERT_RECORD, new QCodeReference(QuickSearchIndexTableCustomizer.class))
+         .withCustomizer(TableCustomizers.PRE_UPDATE_RECORD, new QCodeReference(QuickSearchIndexTableCustomizer.class))
+         .withCustomizer(TableCustomizers.POST_INSERT_RECORD, new QCodeReference(QuickSearchIndexTableCustomizer.class))
+         .withCustomizer(TableCustomizers.POST_UPDATE_RECORD, new QCodeReference(QuickSearchIndexTableCustomizer.class))
+         .withCustomizer(TableCustomizers.POST_DELETE_RECORD, new QCodeReference(QuickSearchIndexTableCustomizer.class))
+         .withAssociation(new Association()
+            .withName(QuickSearchConfigMetaDataHelper.FIELDS_ASSOCIATION)
+            .withAssociatedTableName(config.applyTablePrefix(QuickSearchIndexField.TABLE_NAME))
+            .withJoinName(config.applyTablePrefix(QuickSearchConfigMetaDataHelper.INDEX_FIELDS_JOIN)))
          .withField(new QFieldMetaData("id", QFieldType.INTEGER).withIsEditable(false))
-         .withField(new QFieldMetaData("tableName", QFieldType.STRING).withIsRequired(true).withIsEditable(false))
+         .withField(new QFieldMetaData("tableName", QFieldType.STRING).withLabel("Table").withIsRequired(true).withIsEditable(false)
+            .withPossibleValueSourceName(config.applyTablePrefix(QuickSearchSearchableTablePossibleValueSourceProducer.NAME)))
          .withField(new QFieldMetaData("enabled", QFieldType.BOOLEAN))
-         .withField(new QFieldMetaData("basepullIntervalMinutes", QFieldType.INTEGER))
-         .withField(new QFieldMetaData("basepullTimestampField", QFieldType.STRING).withIsEditable(false))
-         .withField(new QFieldMetaData("searchableFieldsJson", QFieldType.TEXT).withIsEditable(false))
+         .withField(new QFieldMetaData("basepullIntervalMinutes", QFieldType.INTEGER).withLabel("Update Interval (Minutes)"))
+         .withField(new QFieldMetaData("basepullTimestampField", QFieldType.STRING).withLabel("Timestamp Field")
+            .withPossibleValueSourceName(config.applyTablePrefix(QuickSearchConfigMetaDataHelper.TIMESTAMP_FIELD_PVS)))
+         .withField(new QFieldMetaData("source", QFieldType.STRING).withIsEditable(false)
+            .withPossibleValueSourceName(config.applyTablePrefix(QuickSearchConfigMetaDataHelper.CONFIG_SOURCE_PVS)))
+         .withField(new QFieldMetaData("ownerEdited", QFieldType.BOOLEAN).withLabel("Edited by Owner").withIsEditable(false))
+         .withField(new QFieldMetaData("searchableFieldsJson", QFieldType.TEXT).withLabel("Fields as Last Built").withIsEditable(false))
          .withField(new QFieldMetaData("lastBasepullTime", QFieldType.DATE_TIME).withIsEditable(false))
          .withField(new QFieldMetaData("lastFullReindexTime", QFieldType.DATE_TIME).withIsEditable(false))
          .withField(new QFieldMetaData("lastReconcileTime", QFieldType.DATE_TIME).withIsEditable(false))
@@ -72,7 +100,15 @@ public class QuickSearchTableMetaDataHelper
          .withField(new QFieldMetaData("realTimeErrorCount", QFieldType.INTEGER).withIsEditable(false))
          .withField(new QFieldMetaData("status", QFieldType.STRING).withIsEditable(false))
          .withField(new QFieldMetaData("createDate", QFieldType.DATE_TIME).withIsEditable(false))
-         .withField(new QFieldMetaData("modifyDate", QFieldType.DATE_TIME).withIsEditable(false)));
+         .withField(new QFieldMetaData("modifyDate", QFieldType.DATE_TIME).withIsEditable(false))
+         .withSection(new QFieldSection("identity", "Search Index", new QIcon("manage_search"), Tier.T1,
+            List.of("id", "tableName", "enabled", "status", "basepullIntervalMinutes", "basepullTimestampField")))
+         .withSection(new QFieldSection("fields", "Searchable Fields", new QIcon("text_fields"), Tier.T2, null)
+            .withWidgetName(config.applyPrefix(QuickSearchConfigMetaDataHelper.INDEX_FIELDS_WIDGET)))
+         .withSection(new QFieldSection("activity", "Activity", new QIcon("history"), Tier.T2,
+            List.of("lastBasepullTime", "lastFullReindexTime", "lastReconcileTime", "lastRunStatus", "lastErrorMessage", "recordCount", "documentCount", "realTimeErrorCount")))
+         .withSection(new QFieldSection("origin", "Origin", new QIcon("info"), Tier.T3,
+            List.of("source", "ownerEdited", "searchableFieldsJson", "createDate", "modifyDate"))));
    }
 
 
@@ -100,6 +136,8 @@ public class QuickSearchTableMetaDataHelper
          .withField(new QFieldMetaData("recordsIndexed", QFieldType.INTEGER).withIsEditable(false))
          .withField(new QFieldMetaData("errorCount", QFieldType.INTEGER).withIsEditable(false))
          .withField(new QFieldMetaData("errorMessage", QFieldType.TEXT).withIsEditable(false))
+         .withField(new QFieldMetaData("cancelRequested", QFieldType.BOOLEAN).withIsEditable(false))
+         .withField(new QFieldMetaData("cancelRequestedBy", QFieldType.STRING).withIsEditable(false))
          .withField(new QFieldMetaData("createDate", QFieldType.DATE_TIME).withIsEditable(false))
          .withField(new QFieldMetaData("modifyDate", QFieldType.DATE_TIME).withIsEditable(false)));
    }

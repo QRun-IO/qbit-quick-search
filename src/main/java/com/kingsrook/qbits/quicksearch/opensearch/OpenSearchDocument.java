@@ -20,6 +20,7 @@ package com.kingsrook.qbits.quicksearch.opensearch;
 import java.time.Instant;
 import java.util.Map;
 import com.fasterxml.jackson.annotation.JsonIgnore;
+import com.fasterxml.jackson.annotation.JsonInclude;
 
 
 /*******************************************************************************
@@ -37,6 +38,21 @@ public class OpenSearchDocument
    private String searchableText;
    private Instant indexedAt;
    private Map<String, Object> fieldValues;
+
+   ////////////////////////////////////////////////////////////////////////
+   // set only for tables whose fields have roles or non-default         //
+   // analyzers, so other documents are written exactly as before        //
+   ////////////////////////////////////////////////////////////////////////
+   @JsonInclude(JsonInclude.Include.NON_NULL)
+   private String subtitle;
+   @JsonInclude(JsonInclude.Include.NON_NULL)
+   private Map<String, String> displayValues;
+   @JsonInclude(JsonInclude.Include.NON_NULL)
+   private Map<String, Object> fieldValuesWord;
+   @JsonInclude(JsonInclude.Include.NON_NULL)
+   private Map<String, Object> fieldValuesEnglish;
+   @JsonInclude(JsonInclude.Include.NON_NULL)
+   private Map<String, Object> fieldValuesExact;
 
    private transient Long version;
 
@@ -210,6 +226,157 @@ public class OpenSearchDocument
    public static String buildDocumentId(String sourceTable, String recordId)
    {
       return (sourceTable + ":" + recordId);
+   }
+
+
+
+   /*******************************************************************************
+    ** Getter for subtitle
+    *******************************************************************************/
+   public String getSubtitle()
+   {
+      return (this.subtitle);
+   }
+
+
+
+   /*******************************************************************************
+    ** Setter for subtitle
+    *******************************************************************************/
+   public void setSubtitle(String subtitle)
+   {
+      this.subtitle = subtitle;
+   }
+
+
+
+   /*******************************************************************************
+    ** Fluent setter for subtitle
+    *******************************************************************************/
+   public OpenSearchDocument withSubtitle(String subtitle)
+   {
+      this.subtitle = subtitle;
+      return (this);
+   }
+
+
+   /*******************************************************************************
+    ** Getter for displayValues
+    *******************************************************************************/
+   public Map<String, String> getDisplayValues()
+   {
+      return (this.displayValues);
+   }
+
+
+
+   /*******************************************************************************
+    ** Setter for displayValues
+    *******************************************************************************/
+   public void setDisplayValues(Map<String, String> displayValues)
+   {
+      this.displayValues = displayValues;
+   }
+
+
+
+   /*******************************************************************************
+    ** Fluent setter for displayValues
+    *******************************************************************************/
+   public OpenSearchDocument withDisplayValues(Map<String, String> displayValues)
+   {
+      this.displayValues = displayValues;
+      return (this);
+   }
+
+
+   /*******************************************************************************
+    ** Getter for fieldValuesWord
+    *******************************************************************************/
+   public Map<String, Object> getFieldValuesWord()
+   {
+      return (this.fieldValuesWord);
+   }
+
+
+
+   /*******************************************************************************
+    ** Setter for fieldValuesWord
+    *******************************************************************************/
+   public void setFieldValuesWord(Map<String, Object> fieldValuesWord)
+   {
+      this.fieldValuesWord = fieldValuesWord;
+   }
+
+
+
+   /*******************************************************************************
+    ** Fluent setter for fieldValuesWord
+    *******************************************************************************/
+   public OpenSearchDocument withFieldValuesWord(Map<String, Object> fieldValuesWord)
+   {
+      this.fieldValuesWord = fieldValuesWord;
+      return (this);
+   }
+
+
+   /*******************************************************************************
+    ** Getter for fieldValuesEnglish
+    *******************************************************************************/
+   public Map<String, Object> getFieldValuesEnglish()
+   {
+      return (this.fieldValuesEnglish);
+   }
+
+
+
+   /*******************************************************************************
+    ** Setter for fieldValuesEnglish
+    *******************************************************************************/
+   public void setFieldValuesEnglish(Map<String, Object> fieldValuesEnglish)
+   {
+      this.fieldValuesEnglish = fieldValuesEnglish;
+   }
+
+
+
+   /*******************************************************************************
+    ** Fluent setter for fieldValuesEnglish
+    *******************************************************************************/
+   public OpenSearchDocument withFieldValuesEnglish(Map<String, Object> fieldValuesEnglish)
+   {
+      this.fieldValuesEnglish = fieldValuesEnglish;
+      return (this);
+   }
+
+
+   /*******************************************************************************
+    ** Getter for fieldValuesExact
+    *******************************************************************************/
+   public Map<String, Object> getFieldValuesExact()
+   {
+      return (this.fieldValuesExact);
+   }
+
+
+
+   /*******************************************************************************
+    ** Setter for fieldValuesExact
+    *******************************************************************************/
+   public void setFieldValuesExact(Map<String, Object> fieldValuesExact)
+   {
+      this.fieldValuesExact = fieldValuesExact;
+   }
+
+
+
+   /*******************************************************************************
+    ** Fluent setter for fieldValuesExact
+    *******************************************************************************/
+   public OpenSearchDocument withFieldValuesExact(Map<String, Object> fieldValuesExact)
+   {
+      this.fieldValuesExact = fieldValuesExact;
+      return (this);
    }
 
 }

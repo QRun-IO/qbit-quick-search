@@ -347,7 +347,7 @@ public class QuickSearchQBitProducer implements QBitMetaDataProducer<QuickSearch
     ** never replaced. A table that is not in the instance yet, uses backend
     ** variants, or has no such field is skipped with a warning.
     *******************************************************************************/
-   static void defaultCoreSearchFields(QInstance qInstance, List<QuickSearchableTableConfig> tableConfigs)
+   public static void defaultCoreSearchFields(QInstance qInstance, List<QuickSearchableTableConfig> tableConfigs)
    {
       for(QuickSearchableTableConfig tableConfig : tableConfigs)
       {
@@ -376,7 +376,7 @@ public class QuickSearchQBitProducer implements QBitMetaDataProducer<QuickSearch
          {
             QFieldMetaData field = table.getFields() == null ? null : table.getFields().get(fieldName);
             if(field != null && !Boolean.TRUE.equals(field.getIsHidden()) && field.getType() != null
-               && (field.getType().isStringLike() || field.getType().isIntegral()) && !field.getType().needsMasked()
+               && (field.getType().isStringLike() || field.getType().isIntegral()) && !field.getType().needsMasked() && !field.getIsSensitive()
                && !searchFields.contains(fieldName))
             {
                searchFields.add(fieldName);
@@ -598,8 +598,8 @@ public class QuickSearchQBitProducer implements QBitMetaDataProducer<QuickSearch
 
 
    /*******************************************************************************
-    ** Hidden and password fields are never indexed: their values would leak
-    ** through searchable text and highlights.
+    ** Hidden, isSensitive and password fields are never indexed: their values
+    ** would leak through searchable text and highlights.
     *******************************************************************************/
    private static void removeHiddenFields(QTableMetaData table, List<String> searchableFields, Map<String, Integer> fieldWeights, Map<String, Boolean> fieldIncludeLabels)
    {
@@ -607,14 +607,14 @@ public class QuickSearchQBitProducer implements QBitMetaDataProducer<QuickSearch
       for(String fieldName : searchableFields)
       {
          QFieldMetaData field = table.getFields().get(fieldName);
-         if(field != null && (Boolean.TRUE.equals(field.getIsHidden()) || (field.getType() != null && field.getType().needsMasked())))
+         if(field != null && (Boolean.TRUE.equals(field.getIsHidden()) || field.getIsSensitive() || (field.getType() != null && field.getType().needsMasked())))
          {
             hidden.add(fieldName);
          }
       }
       if(!hidden.isEmpty())
       {
-         LOG.warn("Hidden and password fields are excluded from Quick Search indexing", logPair("tableName", table.getName()), logPair("fields", hidden));
+         LOG.warn("Hidden, sensitive and password fields are excluded from Quick Search indexing", logPair("tableName", table.getName()), logPair("fields", hidden));
          searchableFields.removeAll(hidden);
          hidden.forEach(fieldWeights::remove);
          hidden.forEach(fieldIncludeLabels::remove);

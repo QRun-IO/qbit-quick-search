@@ -28,6 +28,7 @@ import com.kingsrook.qqq.backend.core.model.metadata.tables.QTableMetaData;
 import com.kingsrook.qqq.backend.core.model.session.QSession;
 import com.kingsrook.qqq.backend.core.modules.backend.implementations.memory.MemoryBackendModule;
 import com.kingsrook.qqq.backend.core.modules.backend.implementations.memory.MemoryRecordStore;
+import com.kingsrook.qbits.quicksearch.metadata.QuickSearchConfigMetaDataHelper;
 import com.kingsrook.qbits.quicksearch.metadata.QuickSearchTableMetaDataHelper;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
@@ -90,6 +91,7 @@ public class BaseQuickSearchTest
       qInstance.addTable(QuickSearchTableMetaDataHelper.buildIndexRunTable(tableConfig));
       qInstance.addTable(QuickSearchTableMetaDataHelper.buildFailedEventTable(tableConfig));
       qInstance.addPossibleValueSource(QuickSearchTableMetaDataHelper.buildIndexPossibleValueSource(tableConfig));
+      QuickSearchConfigMetaDataHelper.addCompanionMetaData(qInstance, tableConfig);
 
       ////////////////////////////////////////////////////
       // testEntity source table                        //

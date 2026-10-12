@@ -30,10 +30,13 @@ import com.kingsrook.qqq.backend.core.model.metadata.qbits.QBitComponentMetaData
 import com.kingsrook.qqq.backend.core.model.metadata.qbits.QBitProductionContext;
 import com.kingsrook.qqq.backend.core.model.metadata.tables.QTableMetaData;
 import com.kingsrook.qbits.quicksearch.QuickSearchQBitConfig;
+import com.kingsrook.qbits.quicksearch.model.QuickSearchConfigTombstone;
 import com.kingsrook.qbits.quicksearch.model.QuickSearchDiagnosticEvent;
 import com.kingsrook.qbits.quicksearch.model.QuickSearchFailedEvent;
 import com.kingsrook.qbits.quicksearch.model.QuickSearchIndex;
+import com.kingsrook.qbits.quicksearch.model.QuickSearchIndexField;
 import com.kingsrook.qbits.quicksearch.model.QuickSearchIndexRun;
+import com.kingsrook.qbits.quicksearch.model.QuickSearchSettings;
 import com.kingsrook.qbits.quicksearch.model.QuickSearchValidationRun;
 
 
@@ -73,8 +76,8 @@ public class QuickSearchAdminAppMetaDataProducer extends QBitComponentMetaDataPr
          app.withWidgets(new ArrayList<>(List.of(diagnosticsWidget.getName())));
       }
 
-      for(String tableName : new String[] { QuickSearchIndex.TABLE_NAME, QuickSearchIndexRun.TABLE_NAME, QuickSearchFailedEvent.TABLE_NAME,
-         QuickSearchValidationRun.TABLE_NAME, QuickSearchDiagnosticEvent.TABLE_NAME })
+      for(String tableName : new String[] { QuickSearchIndex.TABLE_NAME, QuickSearchIndexField.TABLE_NAME, QuickSearchSettings.TABLE_NAME, QuickSearchIndexRun.TABLE_NAME,
+         QuickSearchFailedEvent.TABLE_NAME, QuickSearchValidationRun.TABLE_NAME, QuickSearchDiagnosticEvent.TABLE_NAME, QuickSearchConfigTombstone.TABLE_NAME })
       {
          QTableMetaData table = produced.get(QTableMetaData.class, config.applyTablePrefix(tableName));
          if(table != null)

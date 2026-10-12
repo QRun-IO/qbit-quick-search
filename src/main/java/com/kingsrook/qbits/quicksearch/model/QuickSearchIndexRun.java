@@ -73,6 +73,12 @@ public class QuickSearchIndexRun extends QRecordEntity
    @QField()
    private Instant modifyDate;
 
+   @QField()
+   private Boolean cancelRequested;
+
+   @QField()
+   private String cancelRequestedBy;
+
 
 
    /*******************************************************************************
@@ -322,6 +328,67 @@ public class QuickSearchIndexRun extends QRecordEntity
    public QuickSearchIndexRun withModifyDate(Instant modifyDate)
    {
       this.modifyDate = modifyDate;
+      return (this);
+   }
+
+
+
+   /*******************************************************************************
+    ** Getter for cancelRequested
+    *******************************************************************************/
+   public Boolean getCancelRequested()
+   {
+      return (this.cancelRequested);
+   }
+
+
+
+   /*******************************************************************************
+    ** Setter for cancelRequested
+    *******************************************************************************/
+   public void setCancelRequested(Boolean cancelRequested)
+   {
+      this.cancelRequested = cancelRequested;
+   }
+
+
+
+   /*******************************************************************************
+    ** Fluent setter for cancelRequested
+    *******************************************************************************/
+   public QuickSearchIndexRun withCancelRequested(Boolean cancelRequested)
+   {
+      this.cancelRequested = cancelRequested;
+      return (this);
+   }
+
+
+   /*******************************************************************************
+    ** Getter for cancelRequestedBy
+    *******************************************************************************/
+   public String getCancelRequestedBy()
+   {
+      return (this.cancelRequestedBy);
+   }
+
+
+
+   /*******************************************************************************
+    ** Setter for cancelRequestedBy
+    *******************************************************************************/
+   public void setCancelRequestedBy(String cancelRequestedBy)
+   {
+      this.cancelRequestedBy = cancelRequestedBy;
+   }
+
+
+
+   /*******************************************************************************
+    ** Fluent setter for cancelRequestedBy
+    *******************************************************************************/
+   public QuickSearchIndexRun withCancelRequestedBy(String cancelRequestedBy)
+   {
+      this.cancelRequestedBy = cancelRequestedBy;
       return (this);
    }
 

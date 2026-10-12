@@ -39,6 +39,7 @@ import com.kingsrook.qqq.backend.core.model.data.QRecord;
 import com.kingsrook.qqq.backend.core.utils.CollectionUtils;
 import com.kingsrook.qbits.quicksearch.QuickSearchRuntime;
 import com.kingsrook.qbits.quicksearch.QuickSearchableTableConfig;
+import com.kingsrook.qbits.quicksearch.config.QuickSearchFieldRules;
 import com.kingsrook.qbits.quicksearch.model.QuickSearchFailedEvent;
 import com.kingsrook.qbits.quicksearch.processes.AbstractIndexingStep;
 import com.kingsrook.qbits.quicksearch.publisher.IndexEvent;
@@ -90,6 +91,7 @@ public class QuickSearchRecordChangeListener implements RecordChangeListenerInte
       QuickSearchRuntime runtime = QuickSearchRuntime.get();
       return (runtime != null
          && Boolean.TRUE.equals(runtime.getConfig().getEnableRealTimeIndexing())
+         && !QuickSearchFieldRules.isQuickSearchTable(runtime.getConfig(), tableName)
          && runtime.getTableConfig(tableName) != null);
    }
 
@@ -115,6 +117,19 @@ public class QuickSearchRecordChangeListener implements RecordChangeListenerInte
       }
 
       String primaryKeyField = tableConfig.getPrimaryKeyField() != null ? tableConfig.getPrimaryKeyField() : "id";
+
+      ///////////////////////////////////////////////////////////////////////////
+      // paused: index nothing, but keep the written keys (DEFERRED), which     //
+      // resuming hands to the basepull; search keeps serving the old documents //
+      ///////////////////////////////////////////////////////////////////////////
+      if(runtime.isIndexingPaused())
+      {
+         List<IndexEvent> deferred = event.getType() == RecordChangeType.DELETE
+            ? toDeleteEvents(tableName, primaryKeyField, event.getRecords())
+            : toIndexEvents(tableName, primaryKeyField, event.getRecords());
+         runAfterCommit(event, () -> recordDeferred(runtime, deferred));
+         return;
+      }
 
       List<IndexEvent> indexEvents  = new ArrayList<>();
       List<IndexEvent> deleteEvents = new ArrayList<>();
@@ -272,6 +287,31 @@ public class QuickSearchRecordChangeListener implements RecordChangeListenerInte
       catch(Exception e)
       {
          LOG.error("Could not record failed index events", e, logPair("eventCount", events.size()));
+      }
+   }
+
+
+
+   /*******************************************************************************
+    ** Keep changes made while indexing is paused, for the basepull to replay
+    ** when it resumes. Never throws.
+    *******************************************************************************/
+   static void recordDeferred(QuickSearchRuntime runtime, List<IndexEvent> events)
+   {
+      if(events.isEmpty())
+      {
+         return;
+      }
+      try
+      {
+         if(hasTable(runtime.getConfig().applyTablePrefix(QuickSearchFailedEvent.TABLE_NAME)))
+         {
+            insertFailedEventRows(runtime, events, "deferred: indexing was paused", QuickSearchFailedEvent.STATUS_DEFERRED);
+         }
+      }
+      catch(Exception e)
+      {
+         LOG.warn("Could not keep changes made while indexing is paused; the next reconcile covers them", e, logPair("eventCount", events.size()));
       }
    }
 

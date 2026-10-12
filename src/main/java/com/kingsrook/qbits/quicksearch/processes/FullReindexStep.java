@@ -91,6 +91,9 @@ public class FullReindexStep extends AbstractIndexingStep
 
    public static final String RUN_TYPE = "FULL_REINDEX";
 
+   private List<Integer>       cancelGroup;
+   private QuickSearchIndexRun runOfCurrentTable;
+
 
 
    /*******************************************************************************
@@ -99,6 +102,13 @@ public class FullReindexStep extends AbstractIndexingStep
    @Override
    public void run(RunBackendStepInput input, RunBackendStepOutput output) throws QException
    {
+      if(isPausedSkip(output))
+      {
+         output.addValue("recordsIndexed", 0);
+         output.addValue("aliasSwapped", false);
+         return;
+      }
+
       String  tableNameFilter = input.getValueString("tableName");
       boolean allTables       = tableNameFilter == null || tableNameFilter.isBlank();
 
@@ -144,6 +154,22 @@ public class FullReindexStep extends AbstractIndexingStep
 
 
    /*******************************************************************************
+    ** An all-tables rebuild is one run per table; cancelling any of them
+    ** cancels the rebuild (the old index stays in service).
+    *******************************************************************************/
+   @Override
+   protected boolean isCancelRequested(QuickSearchIndexRun run)
+   {
+      if(cancelGroup != null && !cancelGroup.isEmpty())
+      {
+         return (isAnyCancelRequested(cancelGroup));
+      }
+      return (super.isCancelRequested(run));
+   }
+
+
+
+   /*******************************************************************************
     ** Index every table into a new physical index, then swap the alias.
     *******************************************************************************/
    Integer rebuildAllTables(List<QuickSearchableTableConfig> tables) throws QException
@@ -181,11 +207,14 @@ public class FullReindexStep extends AbstractIndexingStep
          marked = true;
          markRebuilding(tables, priorStatus);
 
+         cancelGroup = new ArrayList<>();
+         runs.values().forEach(r -> cancelGroup.add(r.getId()));
          for(QuickSearchableTableConfig tableConfig : tables)
          {
             String tableName = tableConfig.getTableName();
             startTimes.put(tableName, Instant.now());
 
+            runOfCurrentTable = runs.get(tableConfig);
             IndexCounts tableCounts = indexAllRecords(client, tableConfig, List.of(), physicalIndex, runs.get(tableConfig));
             counts.put(tableName, tableCounts);
             indexed = indexed + tableCounts.indexed();
@@ -273,6 +302,13 @@ public class FullReindexStep extends AbstractIndexingStep
             for(Map.Entry<QuickSearchableTableConfig, QuickSearchIndexRun> entry : runs.entrySet())
             {
                IndexCounts tableCounts = counts.get(entry.getKey().getTableName());
+               if(e instanceof QuickSearchRunCancelledException cancelled)
+               {
+                  IndexCounts stopped = tableCounts != null ? tableCounts : (entry.getValue() == runOfCurrentTable ? cancelled.getCounts() : null);
+                  completeRunRecord(entry.getValue(), RUN_CANCELLED, stopped == null ? 0 : stopped.processed(), stopped == null ? 0 : stopped.indexed(),
+                     stopped == null ? 0 : stopped.errors(), e.getMessage() + "; the previous index stays in service");
+                  continue;
+               }
                completeRunRecord(entry.getValue(), RUN_FAILED,
                   tableCounts == null ? 0 : tableCounts.processed(),
                   tableCounts == null ? 0 : tableCounts.indexed(),

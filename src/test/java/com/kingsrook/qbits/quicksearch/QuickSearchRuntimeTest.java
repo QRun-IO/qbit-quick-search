@@ -31,6 +31,7 @@ import com.kingsrook.qqq.backend.core.model.metadata.QInstance;
 import com.kingsrook.qqq.backend.core.model.metadata.code.QCodeReference;
 import com.kingsrook.qqq.backend.core.model.metadata.qbits.QBitMetaData;
 import com.kingsrook.qbits.quicksearch.model.QuickSearchIndex;
+import com.kingsrook.qbits.quicksearch.model.QuickSearchIndexField;
 import com.kingsrook.qbits.quicksearch.publisher.IndexEventPublisher;
 import com.kingsrook.qbits.quicksearch.publisher.SynchronousIndexEventPublisher;
 import org.apache.logging.log4j.Level;
@@ -115,10 +116,43 @@ class QuickSearchRuntimeTest extends BaseQuickSearchTest
 
 
    @Test
-   void testIsTableEnabled_readsRowAndCaches() throws QException
+   void testIsTableEnabled_recordsMode_followsTheRowAtOnce() throws QException
    {
       QuickSearchRuntime runtime = registerRuntime(new QuickSearchQBitConfig().withBackendName(TEST_BACKEND_NAME).withOpensearchHost("localhost").withOpensearchPort(9200).withOpensearchIndexName("t"));
 
+      assertThat(runtime.isTableEnabled("notConfigured")).isFalse();
+      assertThat(runtime.isTableEnabled(TEST_ENTITY_TABLE)).isTrue();
+      assertThat(runtime.getConfigStore().isRecordsMode()).isTrue();
+
+      //////////////////////////////////////////////////////////////////////
+      // priming made the row; editing it takes effect without waiting for //
+      // the cache, because the table's customizer drops the cached config  //
+      //////////////////////////////////////////////////////////////////////
+      Integer id = runtime.getTableConfig(TEST_ENTITY_TABLE).getQuickSearchIndexId();
+      UpdateInput updateInput = new UpdateInput();
+      updateInput.setTableName(QuickSearchIndex.TABLE_NAME);
+      updateInput.setRecords(List.of(new QRecord().withValue("id", id).withValue("enabled", false)));
+      new UpdateAction().execute(updateInput);
+      assertThat(runtime.isTableEnabled(TEST_ENTITY_TABLE)).isFalse();
+
+      updateInput.setRecords(List.of(new QRecord().withValue("id", id).withValue("enabled", true)));
+      new UpdateAction().execute(updateInput);
+      assertThat(runtime.isTableEnabled(TEST_ENTITY_TABLE)).isTrue();
+   }
+
+
+
+   @Test
+   void testIsTableEnabled_withoutConfigTables_readsRow() throws QException
+   {
+      ////////////////////////////////////////////////////////////////////
+      // a host that has not added the config tables yet (no field table) //
+      ////////////////////////////////////////////////////////////////////
+      QContext.getQInstance().getTables().remove(QuickSearchIndexField.TABLE_NAME);
+      QContext.getQInstance().getTable(QuickSearchIndex.TABLE_NAME).getAssociations().clear();
+      QuickSearchRuntime runtime = registerRuntime(new QuickSearchQBitConfig().withBackendName(TEST_BACKEND_NAME).withOpensearchHost("localhost").withOpensearchPort(9200).withOpensearchIndexName("t"));
+
+      assertThat(runtime.getConfigStore().isRecordsMode()).isFalse();
       assertThat(runtime.isTableEnabled("notConfigured")).isFalse();
       assertThat(runtime.isTableEnabled(TEST_ENTITY_TABLE)).isTrue();
 
@@ -127,11 +161,9 @@ class QuickSearchRuntimeTest extends BaseQuickSearchTest
       insertInput.setRecords(List.of(new QRecord().withValue("tableName", TEST_ENTITY_TABLE).withValue("enabled", false)));
       Integer id = new InsertAction().execute(insertInput).getRecords().get(0).getValueInteger("id");
 
-      //////////////////////////////////////////////////////////////
-      // cached value survives the row change until invalidated   //
-      //////////////////////////////////////////////////////////////
-      assertThat(runtime.isTableEnabled(TEST_ENTITY_TABLE)).isTrue();
-      runtime.invalidateEnabledCache();
+      //////////////////////////////////////////////////////////////////
+      // the row's customizer drops the cached flag, so it shows at once //
+      //////////////////////////////////////////////////////////////////
       assertThat(runtime.isTableEnabled(TEST_ENTITY_TABLE)).isFalse();
 
       UpdateInput updateInput = new UpdateInput();
