@@ -31,6 +31,7 @@ import com.kingsrook.qqq.backend.core.model.metadata.layout.QAppMetaData;
 import com.kingsrook.qqq.backend.core.model.metadata.permissions.PermissionLevel;
 import com.kingsrook.qqq.backend.core.model.metadata.processes.QProcessMetaData;
 import com.kingsrook.qqq.backend.core.model.metadata.scheduleing.QSchedulerMetaData;
+import com.kingsrook.qqq.backend.core.model.metadata.scheduleing.quartz.QuartzSchedulerMetaData;
 import com.kingsrook.qqq.backend.core.model.metadata.scheduleing.simple.SimpleSchedulerMetaData;
 import com.kingsrook.qqq.backend.core.model.metadata.tables.QTableMetaData;
 import com.kingsrook.qqq.backend.core.model.session.QSession;
@@ -209,7 +210,7 @@ class DiagnosticsMetaDataTest
    void testProduce_validationCron_schedulesTheValidation() throws QException
    {
       QInstance qInstance = buildInstance();
-      QSchedulerMetaData scheduler = new SimpleSchedulerMetaData().withName("simple");
+      QSchedulerMetaData scheduler = new QuartzSchedulerMetaData().withName("simple");
       qInstance.addScheduler(scheduler);
       new QuickSearchQBitProducer().withConfig(config().withSchedulerName("simple").withValidationCronExpression("0 0 4 * * ?").withValidationCronTimeZoneId("UTC")).produce(qInstance);
 
@@ -229,10 +230,39 @@ class DiagnosticsMetaDataTest
          .hasMessageContaining("validationCronExpression requires schedulerName");
 
       QInstance second = buildInstance();
-      second.addScheduler(new SimpleSchedulerMetaData().withName("simple"));
-      assertThatThrownBy(() -> new QuickSearchQBitProducer().withConfig(config().withSchedulerName("simple").withValidationCronExpression("0 0 4 * * ?").withEnableDiagnosticTools(false))
+      second.addScheduler(new QuartzSchedulerMetaData().withName("simple"));
+      assertThatThrownBy(() -> new QuickSearchQBitProducer().withConfig(config().withSchedulerName("simple").withValidationCronExpression("0 0 4 * * ?").withValidationCronTimeZoneId("UTC")
+            .withEnableDiagnosticTools(false))
          .produce(second))
          .hasMessageContaining("validationCronExpression requires enableDiagnosticTools");
+   }
+
+
+
+   /*******************************************************************************
+    ** The validation schedule follows the same rules as the reconcile one: a
+    ** cron-capable scheduler, a valid Quartz expression and a time zone.
+    *******************************************************************************/
+   @Test
+   void testValidate_validationCronRules()
+   {
+      QInstance simple = buildInstance();
+      simple.addScheduler(new SimpleSchedulerMetaData().withName("simple"));
+      assertThatThrownBy(() -> new QuickSearchQBitProducer().withConfig(config().withSchedulerName("simple").withValidationCronExpression("0 0 4 * * ?").withValidationCronTimeZoneId("UTC"))
+         .produce(simple))
+         .hasMessageContaining("validationCronExpression requires a scheduler that supports cron schedules");
+
+      QInstance quartz = buildInstance();
+      quartz.addScheduler(new QuartzSchedulerMetaData().withName("quartz"));
+      assertThatThrownBy(() -> new QuickSearchQBitProducer().withConfig(config().withSchedulerName("quartz").withValidationCronExpression("0 0 4 * *")).produce(quartz))
+         .hasMessageContaining("validationCronExpression [0 0 4 * *] is not a valid Quartz cron expression")
+         .hasMessageContaining("validationCronExpression requires validationCronTimeZoneId");
+
+      QInstance zone = buildInstance();
+      zone.addScheduler(new QuartzSchedulerMetaData().withName("quartz"));
+      assertThatThrownBy(() -> new QuickSearchQBitProducer().withConfig(config().withSchedulerName("quartz").withValidationCronExpression("0 0 4 * * ?").withValidationCronTimeZoneId("Mars/Base"))
+         .produce(zone))
+         .hasMessageContaining("validationCronTimeZoneId [Mars/Base] is not a recognized time zone ID");
    }
 
 

@@ -2,6 +2,10 @@
 
 All notable changes to this project are documented here. The format follows Keep a Changelog; versions follow semantic versioning.
 
+## [1.1.0-RC.1] - 2026-10-11
+
+First release candidate of 1.1, published to Maven Central from `release/1.1`. It contains every change listed under 1.1.0 and 1.0.0 below (1.0.0 has not been released as GA). Requires QQQ 4.1.0-RC.2 or later. Upgrade notes: `docs/MIGRATION-1.1.md`.
+
 ## [1.1.0] - Unreleased
 
 Requires QQQ 4.1.0-RC.2 or later, the first release that carries the record-search provider SPI; built against 4.1.0-RC.2. See `docs/MIGRATION-1.1.md`.
