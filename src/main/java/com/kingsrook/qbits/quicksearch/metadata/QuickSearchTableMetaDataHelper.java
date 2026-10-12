@@ -17,16 +17,21 @@
 package com.kingsrook.qbits.quicksearch.metadata;
 
 
+import java.util.List;
 import com.kingsrook.qqq.backend.core.model.metadata.fields.QFieldMetaData;
 import com.kingsrook.qqq.backend.core.model.metadata.fields.QFieldType;
 import com.kingsrook.qqq.backend.core.model.metadata.layout.QIcon;
 import com.kingsrook.qqq.backend.core.model.metadata.possiblevalues.QPossibleValueSource;
+import com.kingsrook.qqq.backend.core.model.metadata.tables.QFieldSection;
 import com.kingsrook.qqq.backend.core.model.metadata.tables.QTableMetaData;
+import com.kingsrook.qqq.backend.core.model.metadata.tables.Tier;
 import com.kingsrook.qqq.backend.core.model.metadata.tables.UniqueKey;
 import com.kingsrook.qbits.quicksearch.QuickSearchQBitConfig;
+import com.kingsrook.qbits.quicksearch.model.QuickSearchDiagnosticEvent;
 import com.kingsrook.qbits.quicksearch.model.QuickSearchFailedEvent;
 import com.kingsrook.qbits.quicksearch.model.QuickSearchIndex;
 import com.kingsrook.qbits.quicksearch.model.QuickSearchIndexRun;
+import com.kingsrook.qbits.quicksearch.model.QuickSearchValidationRun;
 
 
 /*******************************************************************************
@@ -122,6 +127,79 @@ public class QuickSearchTableMetaDataHelper
          .withField(new QFieldMetaData("status", QFieldType.STRING).withIsEditable(false))
          .withField(new QFieldMetaData("createDate", QFieldType.DATE_TIME).withIsEditable(false))
          .withField(new QFieldMetaData("modifyDate", QFieldType.DATE_TIME).withIsEditable(false)));
+   }
+
+
+
+   /*******************************************************************************
+    ** quickSearchDiagnosticEvent: failed searches, diagnostic tool runs (the
+    ** audit trail) and refused runs. Written by the QBit only.
+    *******************************************************************************/
+   public static QTableMetaData buildDiagnosticEventTable(QuickSearchQBitConfig config)
+   {
+      return (new QTableMetaData()
+         .withName(config.applyPrefix(QuickSearchDiagnosticEvent.TABLE_NAME))
+         .withLabel("Quick Search Diagnostic Event")
+         .withIcon(new QIcon("bug_report"))
+         .withBackendName(config.getBackendName())
+         .withPrimaryKeyField("id")
+         .withRecordLabelFormat("%s %s")
+         .withRecordLabelFields("eventType", "source")
+         .withPermissionRules(config.getTablePermissionRules() == null ? null : config.getTablePermissionRules().clone())
+         .withField(new QFieldMetaData("id", QFieldType.INTEGER).withIsEditable(false))
+         .withField(new QFieldMetaData("eventType", QFieldType.STRING).withIsEditable(false))
+         .withField(new QFieldMetaData("source", QFieldType.STRING).withIsEditable(false))
+         .withField(new QFieldMetaData("outcome", QFieldType.STRING).withIsEditable(false))
+         .withField(new QFieldMetaData("userName", QFieldType.STRING).withIsEditable(false))
+         .withField(new QFieldMetaData("tableNames", QFieldType.STRING).withIsEditable(false))
+         .withField(new QFieldMetaData("searchTerm", QFieldType.STRING).withIsEditable(false))
+         .withField(new QFieldMetaData("durationMillis", QFieldType.INTEGER).withIsEditable(false))
+         .withField(new QFieldMetaData("errorClass", QFieldType.STRING).withIsEditable(false))
+         .withField(new QFieldMetaData("errorMessage", QFieldType.TEXT).withIsEditable(false))
+         .withField(new QFieldMetaData("detail", QFieldType.TEXT).withIsEditable(false))
+         .withField(new QFieldMetaData("hostName", QFieldType.STRING).withIsEditable(false))
+         .withField(new QFieldMetaData("createDate", QFieldType.DATE_TIME).withIsEditable(false))
+         .withSection(new QFieldSection("identity", "Event", new QIcon("bug_report"), Tier.T1, List.of("id", "createDate", "eventType", "source", "outcome")))
+         .withSection(new QFieldSection("request", "Request", new QIcon("search"), Tier.T2, List.of("userName", "tableNames", "searchTerm", "durationMillis", "hostName")))
+         .withSection(new QFieldSection("error", "Error and detail", new QIcon("error_outline"), Tier.T2, List.of("errorClass", "errorMessage", "detail"))));
+   }
+
+
+
+   /*******************************************************************************
+    ** quickSearchValidationRun: index validation reports (history). The
+    ** report is an HTML field, shown in full on the record view.
+    *******************************************************************************/
+   public static QTableMetaData buildValidationRunTable(QuickSearchQBitConfig config)
+   {
+      return (new QTableMetaData()
+         .withName(config.applyPrefix(QuickSearchValidationRun.TABLE_NAME))
+         .withLabel("Quick Search Validation Run")
+         .withIcon(new QIcon("fact_check"))
+         .withBackendName(config.getBackendName())
+         .withPrimaryKeyField("id")
+         .withRecordLabelFormat("%s %s")
+         .withRecordLabelFields("status", "startTime")
+         .withPermissionRules(config.getTablePermissionRules() == null ? null : config.getTablePermissionRules().clone())
+         .withField(new QFieldMetaData("id", QFieldType.INTEGER).withIsEditable(false))
+         .withField(new QFieldMetaData("status", QFieldType.STRING).withIsEditable(false))
+         .withField(new QFieldMetaData("triggerType", QFieldType.STRING).withLabel("Trigger").withIsEditable(false))
+         .withField(new QFieldMetaData("userName", QFieldType.STRING).withIsEditable(false))
+         .withField(new QFieldMetaData("tableNames", QFieldType.STRING).withIsEditable(false))
+         .withField(new QFieldMetaData("sampleSize", QFieldType.INTEGER).withIsEditable(false))
+         .withField(new QFieldMetaData("tablesChecked", QFieldType.INTEGER).withIsEditable(false))
+         .withField(new QFieldMetaData("failCount", QFieldType.INTEGER).withLabel("Failed Checks").withIsEditable(false))
+         .withField(new QFieldMetaData("warnCount", QFieldType.INTEGER).withLabel("Warnings").withIsEditable(false))
+         .withField(new QFieldMetaData("summary", QFieldType.STRING).withIsEditable(false))
+         .withField(new QFieldMetaData("reportHtml", QFieldType.HTML).withLabel("Report").withIsEditable(false))
+         .withField(new QFieldMetaData("reportJson", QFieldType.TEXT).withLabel("Report JSON").withIsEditable(false))
+         .withField(new QFieldMetaData("startTime", QFieldType.DATE_TIME).withIsEditable(false))
+         .withField(new QFieldMetaData("endTime", QFieldType.DATE_TIME).withIsEditable(false))
+         .withField(new QFieldMetaData("createDate", QFieldType.DATE_TIME).withIsEditable(false))
+         .withSection(new QFieldSection("identity", "Run", new QIcon("fact_check"), Tier.T1, List.of("id", "status", "summary", "triggerType", "startTime", "endTime")))
+         .withSection(new QFieldSection("scope", "Scope", new QIcon("table_chart"), Tier.T2, List.of("userName", "tableNames", "sampleSize", "tablesChecked", "failCount", "warnCount", "createDate")))
+         .withSection(new QFieldSection("report", "Report", new QIcon("description"), Tier.T2, List.of("reportHtml")))
+         .withSection(new QFieldSection("data", "Report data (JSON)", new QIcon("data_object"), Tier.T3, List.of("reportJson"))));
    }
 
 

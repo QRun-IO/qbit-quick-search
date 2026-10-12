@@ -32,6 +32,8 @@ import com.kingsrook.qqq.backend.core.model.metadata.tables.QTableMetaData;
 import com.kingsrook.qqq.backend.core.utils.CollectionUtils;
 import com.kingsrook.qbits.quicksearch.QuickSearchQBitConfig;
 import com.kingsrook.qbits.quicksearch.QuickSearchRuntime;
+import com.kingsrook.qbits.quicksearch.diagnostics.DiagnosticsSupport;
+import com.kingsrook.qbits.quicksearch.model.QuickSearchDiagnosticEvent;
 import com.kingsrook.qbits.quicksearch.processes.IndexingUtils;
 import static com.kingsrook.qqq.backend.core.logging.LogUtils.logPair;
 
@@ -83,8 +85,14 @@ public class QuickSearchRecordSearchProvider implements RecordSearchProviderInte
          return (false);
       }
 
-      if(runtime.getTableConfig(table.getName()) == null || runtime.isRecordSearchBackingOff())
+      if(runtime.getTableConfig(table.getName()) == null)
       {
+         return (false);
+      }
+
+      if(runtime.isRecordSearchBackingOff())
+      {
+         runtime.countBackoffDeclinedClaim();
          return (false);
       }
 
@@ -127,13 +135,21 @@ public class QuickSearchRecordSearchProvider implements RecordSearchProviderInte
       int timeoutMillis = config.getRecordSearchTimeoutMillis() == null ? QuickSearchQBitConfig.DEFAULT_RECORD_SEARCH_TIMEOUT_MILLIS : config.getRecordSearchTimeoutMillis();
 
       Map<String, List<String>> idsByTable;
+      long                      start = System.currentTimeMillis();
       try
       {
          idsByTable = runtime.getClient().searchRecordIdsPerTable(term, tableNames, idsPerTable, runtime.getDiscoveredTables(), timeoutMillis);
       }
       catch(QException | RuntimeException e)
       {
-         runtime.markRecordSearchFailed();
+         runtime.markRecordSearchFailed(e.getMessage());
+
+         //////////////////////////////////////////////////////////////////////
+         // the user's term is not recorded (it may hold personal data); its //
+         // length is, so a length-related failure is still visible          //
+         //////////////////////////////////////////////////////////////////////
+         DiagnosticsSupport.recordSearchFailure(runtime, QuickSearchDiagnosticEvent.SOURCE_CORE_RECORD_SEARCH, tableNames, null, System.currentTimeMillis() - start, e,
+            "term length " + term.length() + ", " + idsPerTable + " ids per table, timeout " + timeoutMillis + " ms; core searched these tables itself");
          LOG.info("Quick Search record search failed; core searches these tables itself, and Quick Search claims none for a while", logPair("tables", tableNames),
             logPair("backoffMillis", QuickSearchRuntime.RECORD_SEARCH_BACKOFF_MILLIS), logPair("error", e.getMessage()));
          throw (e instanceof QException qe ? qe : new QException("Quick Search record search failed: " + e.getMessage(), e));

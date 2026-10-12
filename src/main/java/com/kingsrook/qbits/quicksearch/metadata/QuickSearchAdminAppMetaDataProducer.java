@@ -17,9 +17,12 @@
 package com.kingsrook.qbits.quicksearch.metadata;
 
 
+import java.util.ArrayList;
+import java.util.List;
 import com.kingsrook.qqq.backend.core.exceptions.QException;
 import com.kingsrook.qqq.backend.core.model.metadata.MetaDataProducerMultiOutput;
 import com.kingsrook.qqq.backend.core.model.metadata.QInstance;
+import com.kingsrook.qqq.backend.core.model.metadata.dashboard.QWidgetMetaData;
 import com.kingsrook.qqq.backend.core.model.metadata.layout.QAppMetaData;
 import com.kingsrook.qqq.backend.core.model.metadata.layout.QIcon;
 import com.kingsrook.qqq.backend.core.model.metadata.processes.QProcessMetaData;
@@ -27,9 +30,11 @@ import com.kingsrook.qqq.backend.core.model.metadata.qbits.QBitComponentMetaData
 import com.kingsrook.qqq.backend.core.model.metadata.qbits.QBitProductionContext;
 import com.kingsrook.qqq.backend.core.model.metadata.tables.QTableMetaData;
 import com.kingsrook.qbits.quicksearch.QuickSearchQBitConfig;
+import com.kingsrook.qbits.quicksearch.model.QuickSearchDiagnosticEvent;
 import com.kingsrook.qbits.quicksearch.model.QuickSearchFailedEvent;
 import com.kingsrook.qbits.quicksearch.model.QuickSearchIndex;
 import com.kingsrook.qbits.quicksearch.model.QuickSearchIndexRun;
+import com.kingsrook.qbits.quicksearch.model.QuickSearchValidationRun;
 
 
 /*******************************************************************************
@@ -62,7 +67,14 @@ public class QuickSearchAdminAppMetaDataProducer extends QBitComponentMetaDataPr
          return (app);
       }
 
-      for(String tableName : new String[] { QuickSearchIndex.TABLE_NAME, QuickSearchIndexRun.TABLE_NAME, QuickSearchFailedEvent.TABLE_NAME })
+      QWidgetMetaData diagnosticsWidget = produced.get(QWidgetMetaData.class, config.applyPrefix(QuickSearchDiagnosticsWidgetMetaDataProducer.WIDGET_NAME));
+      if(diagnosticsWidget != null)
+      {
+         app.withWidgets(new ArrayList<>(List.of(diagnosticsWidget.getName())));
+      }
+
+      for(String tableName : new String[] { QuickSearchIndex.TABLE_NAME, QuickSearchIndexRun.TABLE_NAME, QuickSearchFailedEvent.TABLE_NAME,
+         QuickSearchValidationRun.TABLE_NAME, QuickSearchDiagnosticEvent.TABLE_NAME })
       {
          QTableMetaData table = produced.get(QTableMetaData.class, config.applyPrefix(tableName));
          if(table != null)

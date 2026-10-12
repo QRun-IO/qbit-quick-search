@@ -146,6 +146,23 @@ QQQ core has its own record search (`RecordSearchAction`, served at `POST /qqq/v
 
 Without `schedulerName` the processes exist but nothing runs them; the QBit logs a warning at startup.
 
+### Diagnostic tools
+
+With `enableDiagnosticTools` (default `true`) the QBit adds tools to validate the search and debug it from the admin UI. They are table and record actions (never left-nav entries), gated by permissions, recorded in `quickSearchDiagnosticEvent`, limited to `diagnosticRunsPerMinute` runs per user and tool, and read-only except Reindex in Search.
+
+| Tool | Where | What it does |
+|---|---|---|
+| Search Playground | Quick Search Index, Actions (select rows to pre-fill their tables) | Runs a term the way the global search does, as you: the path each table takes (OpenSearch provider, core database search, or not searched) and why; the provider's own request, timed; the global search results you would see; per indexed table, the production query with scores, highlights, matched fields, which hits you can read and which the global search shows, the query DSL and the raw response (hits you cannot read are redacted); the term's tokens; and `explain` for a hit (`table:id`). The form stays open, so you can change the term and run again. |
+| Validate Search Index | Quick Search Index, Actions; also scheduled by `validationCronExpression` | Cluster and index health, the alias, leftover physical indexes from interrupted rebuilds, the live mapping (version, field types, analyzers, the `fieldValues` template) and analysis settings, then per table: database rows vs documents, a sample of records checked present and current in the index, a random sample of documents checked to still have a record, the index row's status and last run, and waiting failed events. Each finding is OK, INFO, WARN or FAIL with what to do. The report is saved as a `quickSearchValidationRun` row (HTML for the record view, JSON for tools). Database reads run as the system user so counts compare like with like; the report holds counts, ids and field names, never record values. One validation runs at a time per server. |
+| Test Search Analyzer | Quick Search Index, Actions | `_analyze` on the live index: the tokens of a text as indexed (edge n-grams of 2 to 20 characters) and as a query, and, given a term, whether every term token is among the text's indexed tokens. |
+| Inspect Search Document | Every indexed table's records (Actions), and Quick Search Failed Event rows | The record's document in the index next to the document indexing would write from the database now, field by field (current, stale or missing), with versions and the raw document. Enter a term to see why the record does or does not match it: term length, table enabled, read permission, document present and current, each term token found or not (and why: one character, longer than 20, not in the text, or only in the database's newer values), `explain`, and the record's rank against the number of ids the global search takes. |
+| Reindex in Search | Every indexed table's records, and Quick Search Failed Event rows | Rebuild the selected records' documents from the database now (versioned writes, so a newer document is never overwritten); a record that no longer exists has its document removed; a record you cannot read is skipped. Asks to confirm. Needs the admin permission. |
+| Search Diagnostics widget | The Quick Search Admin app home (hosts with their own home add `quickSearchDiagnostics`) | Whether the global search is served by OpenSearch on this server or backing off (and why), failure and fallback counts, the latest search failures from every server, and the latest validation run. |
+
+Search failures are recorded too: when the provider's OpenSearch request fails or times out (and core falls back to its own search), or `QuickSearchAction`'s search fails, a `SEARCH_FAILED` event keeps the tables, duration, error class and message, and the server. The user's term is never stored, only its length. At most 120 events are written per server per minute.
+
+Permissions: the read-only tools and the widget use `debugPermissionRules` (default `quickSearchDebug.hasAccess`); Reindex in Search uses `adminPermissionRules` (`quickSearchAdmin.hasAccess`); the two history tables use `tablePermissionRules` (grant `.read` only: rows are written by the QBit). Impersonation ("search as user X") is deliberately not offered: a fabricated session would not carry the real user's security key values, so its results would mislead.
+
 ## Configuration reference
 
 | Field | Default | Description |
@@ -173,7 +190,13 @@ Without `schedulerName` the processes exist but nothing runs them; the QBit logs
 | `applyRecordSecurityLocks` | `true` | Re-read hits through `QueryAction` |
 | `serveCoreRecordSearch` | `true` | Register `QuickSearchRecordSearchProvider` so core `POST /qqq/v1/search` uses OpenSearch for indexed tables, and give those tables `searchFields` when they have none |
 | `recordSearchTimeoutMillis` | 2500 | Wall-clock limit on the OpenSearch request behind a core search; past it, core falls back to its own search |
-| `adminPermissionRules` | `HAS_ACCESS_PERMISSION`, base name `quickSearchAdmin` | Rules for the app and processes |
+| `enableDiagnosticTools` | `true` | Add the diagnostic tools, the `quickSearchDiagnosticEvent` and `quickSearchValidationRun` tables and the diagnostics widget |
+| `enableRecordDiagnosticActions` | `true` | With the tools on, add Inspect Search Document and Reindex in Search to every indexed table |
+| `validationCronExpression`, `validationCronTimeZoneId` | none | Schedule Validate Search Index (needs `schedulerName`) |
+| `validationSampleSize` | 50 | Records and documents sampled per table by validation (at most 1000) |
+| `diagnosticRunsPerMinute` | 30 | Per-user, per-tool limit on diagnostic runs |
+| `debugPermissionRules` | `HAS_ACCESS_PERMISSION`, base name `quickSearchDebug` | Rules for the read-only diagnostic tools and the widget |
+| `adminPermissionRules` | `HAS_ACCESS_PERMISSION`, base name `quickSearchAdmin` | Rules for the app, the maintenance processes and Reindex in Search |
 | `tablePermissionRules` | `READ_WRITE_PERMISSIONS` | Rules for the operational tables |
 | `tableMetaDataCustomizer` | | Applied to every produced table (backend details, for example) |
 | `searchableEntityClasses`, `searchableTables` | at least one | What to index |
@@ -185,6 +208,8 @@ Without `schedulerName` the processes exist but nothing runs them; the QBit logs
 
 - `quickSearchIndex`: one row per table with `enabled` (honoured by indexing and search, cached for one minute), `basepullIntervalMinutes`, `lastBasepullTime`, `lastReconcileTime`, `lastFullReindexTime`, `lastRunStatus`, `lastErrorMessage`, `recordCount`, `documentCount`, `realTimeErrorCount`, `status` (`ACTIVE`, `NEEDS_REINDEX` when the configured fields changed since the row was created, or `REBUILDING` while a full reindex of all tables runs). Unique on `tableName`.
 - `quickSearchIndexRun`: `runType` (`BASEPULL`, `RECONCILE`, `FULL_REINDEX`), `status`, counts, `errorMessage`.
+- `quickSearchDiagnosticEvent` (with `enableDiagnosticTools`): `eventType` (`SEARCH_FAILED`, `TOOL_RUN`, `REINDEX`, `RATE_LIMITED`), `source`, `outcome`, `userName`, `tableNames`, `searchTerm` (tool runs only), `durationMillis`, `errorClass`, `errorMessage` (text), `detail` (text), `hostName`, `createDate`. Purged after `runHistoryRetentionDays`.
+- `quickSearchValidationRun` (with `enableDiagnosticTools`): `status` (`PASS`, `WARN`, `FAIL`), `triggerType` (`MANUAL`, `SCHEDULED`), `userName`, `tableNames`, `sampleSize`, `tablesChecked`, `failCount`, `warnCount`, `summary`, `reportHtml` (HTML), `reportJson` (text), `startTime`, `endTime`, `createDate`. Purged after `runHistoryRetentionDays`.
 - `quickSearchFailedEvent`: real-time events that could not be applied; `status` `PENDING` or `EXHAUSTED` after 10 attempts. Deletes made while a full reindex of all tables runs are also recorded here with status `AWAITING_REINDEX`: the reindex applies them to the new index after the alias swap (basepull does not replay them). While a table is `REBUILDING`, drift detection is suspended for it. If a full reindex is killed mid-run, its tables stay `REBUILDING` and deletes keep collecting as `AWAITING_REINDEX`; no data is lost, and the recovery is to run a full reindex of all tables again, which applies the collected deletes and returns the tables to `ACTIVE`.
 
 ## Extending

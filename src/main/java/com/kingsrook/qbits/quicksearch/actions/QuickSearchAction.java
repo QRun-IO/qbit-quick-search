@@ -46,6 +46,8 @@ import com.kingsrook.qbits.quicksearch.QuickSearchQBitConfig;
 import com.kingsrook.qbits.quicksearch.QuickSearchQBitContext;
 import com.kingsrook.qbits.quicksearch.QuickSearchRuntime;
 import com.kingsrook.qbits.quicksearch.QuickSearchableTableConfig;
+import com.kingsrook.qbits.quicksearch.diagnostics.DiagnosticsSupport;
+import com.kingsrook.qbits.quicksearch.model.QuickSearchDiagnosticEvent;
 import com.kingsrook.qbits.quicksearch.opensearch.OpenSearchDocument;
 import com.kingsrook.qbits.quicksearch.opensearch.QuickSearchOpenSearchClient;
 import com.kingsrook.qbits.quicksearch.processes.IndexingUtils;
@@ -453,14 +455,34 @@ public class QuickSearchAction
     *******************************************************************************/
    private static SearchResponse<OpenSearchDocument> runSearch(QuickSearchOpenSearchClient client, String term, List<String> tables, int fetchSize, int offset, List<QuickSearchableTableConfig> tableConfigs, String preference) throws QException
    {
+      long start = System.currentTimeMillis();
       try
       {
          return (client.search(term, tables, fetchSize, offset, tableConfigs, preference));
       }
       catch(OpenSearchException e)
       {
-         throw (new QException("Quick search failed: " + (e.error() != null && e.error().reason() != null ? e.error().reason() : e.getMessage()), e));
+         QException wrapped = new QException("Quick search failed: " + (e.error() != null && e.error().reason() != null ? e.error().reason() : e.getMessage()), e);
+         recordFailure(tables, term, start, wrapped);
+         throw (wrapped);
       }
+      catch(QException e)
+      {
+         recordFailure(tables, term, start, e);
+         throw (e);
+      }
+   }
+
+
+
+   /*******************************************************************************
+    ** Record a failed search as a diagnostic event (the term's length only,
+    ** never the term).
+    *******************************************************************************/
+   private static void recordFailure(List<String> tables, String term, long start, Exception e)
+   {
+      DiagnosticsSupport.recordSearchFailure(QuickSearchRuntime.get(), QuickSearchDiagnosticEvent.SOURCE_QUICK_SEARCH_ACTION, tables, null,
+         System.currentTimeMillis() - start, e, "term length " + (term == null ? 0 : term.length()));
    }
 
 

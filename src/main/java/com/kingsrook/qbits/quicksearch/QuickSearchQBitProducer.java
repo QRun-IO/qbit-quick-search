@@ -32,6 +32,7 @@ import com.kingsrook.qqq.backend.core.model.metadata.QBackendMetaData;
 import com.kingsrook.qqq.backend.core.model.metadata.QInstance;
 import com.kingsrook.qqq.backend.core.model.metadata.code.QCodeReference;
 import com.kingsrook.qqq.backend.core.model.metadata.fields.QFieldMetaData;
+import com.kingsrook.qqq.backend.core.model.metadata.processes.QProcessMetaData;
 import com.kingsrook.qqq.backend.core.model.metadata.qbits.QBitMetaData;
 import com.kingsrook.qqq.backend.core.model.metadata.qbits.QBitMetaDataProducer;
 import com.kingsrook.qqq.backend.core.model.metadata.tables.QTableMetaData;
@@ -42,6 +43,7 @@ import com.kingsrook.qbits.quicksearch.annotations.QuickSearchField;
 import com.kingsrook.qbits.quicksearch.annotations.QuickSearchable;
 import com.kingsrook.qbits.quicksearch.listeners.QuickSearchRecordChangeListener;
 import com.kingsrook.qbits.quicksearch.metadata.QuickSearchAdminAppMetaDataProducer;
+import com.kingsrook.qbits.quicksearch.metadata.QuickSearchDiagnosticsProcessMetaDataHelper;
 import com.kingsrook.qbits.quicksearch.metadata.QuickSearchProcessMetaDataHelper;
 import static com.kingsrook.qqq.backend.core.logging.LogUtils.logPair;
 
@@ -260,6 +262,8 @@ public class QuickSearchQBitProducer implements QBitMetaDataProducer<QuickSearch
 
       qInstance.withRuntimeService(new QCodeReference(QuickSearchRuntimeService.class));
 
+      addRecordDiagnosticActions(output, qInstance, discoveredTables);
+
       if(Boolean.TRUE.equals(qBitConfig.getServeCoreRecordSearch()))
       {
          registerRecordSearchProvider(qInstance);
@@ -278,6 +282,40 @@ public class QuickSearchQBitProducer implements QBitMetaDataProducer<QuickSearch
 
       LOG.info("Quick Search QBit produced", logPair("version", VERSION), logPair("tables", discoveredTables.size()),
          logPair("indexName", qBitConfig.getOpensearchIndexName()), logPair("startupMode", qBitConfig.getStartupMode()));
+   }
+
+
+
+   /*******************************************************************************
+    ** Give every indexed table in the instance the Inspect Search Document and
+    ** Reindex in Search record actions (when enableDiagnosticTools and
+    ** enableRecordDiagnosticActions are on). A process the host already
+    ** defined with the same name is kept.
+    *******************************************************************************/
+   void addRecordDiagnosticActions(MetaDataProducerMultiOutput output, QInstance qInstance, List<QuickSearchableTableConfig> tableConfigs)
+   {
+      if(!Boolean.TRUE.equals(qBitConfig.getEnableDiagnosticTools()) || !Boolean.TRUE.equals(qBitConfig.getEnableRecordDiagnosticActions()))
+      {
+         return;
+      }
+
+      for(QuickSearchableTableConfig tableConfig : tableConfigs)
+      {
+         if(qInstance.getTable(tableConfig.getTableName()) == null)
+         {
+            continue;
+         }
+         for(QProcessMetaData process : List.of(
+            QuickSearchDiagnosticsProcessMetaDataHelper.buildInspectProcess(qBitConfig, tableConfig.getTableName()),
+            QuickSearchDiagnosticsProcessMetaDataHelper.buildReindexRecordsProcess(qBitConfig, tableConfig.getTableName())))
+         {
+            if(qInstance.getProcess(process.getName()) == null && output.get(QProcessMetaData.class, process.getName()) == null)
+            {
+               process.setSourceQBitName(getQBitMetaData().getName());
+               output.add(process);
+            }
+         }
+      }
    }
 
 
