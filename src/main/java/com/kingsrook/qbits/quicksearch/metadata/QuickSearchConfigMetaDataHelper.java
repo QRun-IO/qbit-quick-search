@@ -53,6 +53,7 @@ import com.kingsrook.qbits.quicksearch.model.QuickSearchFieldAnalyzer;
 import com.kingsrook.qbits.quicksearch.model.QuickSearchFieldRole;
 import com.kingsrook.qbits.quicksearch.model.QuickSearchIndex;
 import com.kingsrook.qbits.quicksearch.model.QuickSearchIndexField;
+import com.kingsrook.qbits.quicksearch.model.QuickSearchIndexRun;
 import com.kingsrook.qbits.quicksearch.model.QuickSearchSettings;
 
 
@@ -73,6 +74,12 @@ public class QuickSearchConfigMetaDataHelper
    public static final String INDEX_FIELDS_JOIN    = "quick_search_index_join_quick_search_index_field";
    public static final String INDEX_FIELDS_WIDGET  = "quickSearchIndexFields";
    public static final String FIELDS_ASSOCIATION   = "fields";
+   public static final String INDEX_RUNS_JOIN      = "quick_search_index_join_quick_search_index_run";
+   public static final String INDEX_RUNS_WIDGET    = "quickSearchIndexRuns";
+   public static final String RUN_TYPE_PVS         = "quick_search_run_type";
+   public static final String RUN_STATUS_PVS       = "quick_search_run_status";
+   public static final String EVENT_STATUS_PVS     = "quick_search_failed_event_status";
+   public static final String EVENT_ACTION_PVS     = "quick_search_failed_event_action";
 
 
 
@@ -215,10 +222,42 @@ public class QuickSearchConfigMetaDataHelper
          .withCanAddChildRecord(true)
          .withDisabledFieldsForNewChildRecords(Set.of("quickSearchIndexId"))
          .withDefaultValuesForNewChildRecordsFromParentFields(Map.of("quickSearchIndexId", "id"))
-         .withOmitFieldNames(List.of("quickSearchIndexId", "createDate", "modifyDate"))
+         .withOnlyIncludeFieldNames(List.of("fieldName", "weight", "role", "analyzer", "includeInSnippet", "includeLabel", "source"))
          .withMaxRows(100)
          .getWidgetMetaData();
       return (widget);
+   }
+
+
+
+   /*******************************************************************************
+    ** quick_search_index to its run history, newest first.
+    *******************************************************************************/
+   public static QJoinMetaData buildIndexRunsJoin(QuickSearchQBitConfig config)
+   {
+      return (new QJoinMetaData()
+         .withName(config.applyTablePrefix(INDEX_RUNS_JOIN))
+         .withType(JoinType.ONE_TO_MANY)
+         .withLeftTable(config.applyTablePrefix(QuickSearchIndex.TABLE_NAME))
+         .withRightTable(config.applyTablePrefix(QuickSearchIndexRun.TABLE_NAME))
+         .withJoinOn(new JoinOn("id", "quickSearchIndexId"))
+         .withOrderBy(new QFilterOrderBy("id", false)));
+   }
+
+
+
+   /*******************************************************************************
+    ** The index record's recent runs (read only).
+    *******************************************************************************/
+   public static QWidgetMetaData buildIndexRunsWidget(QuickSearchQBitConfig config)
+   {
+      return (ChildRecordListRenderer.widgetMetaDataBuilder(buildIndexRunsJoin(config))
+         .withName(config.applyPrefix(INDEX_RUNS_WIDGET))
+         .withLabel("Recent Runs")
+         .withCanAddChildRecord(false)
+         .withOnlyIncludeFieldNames(List.of("id", "runType", "status", "startTime", "endTime", "recordsProcessed", "recordsIndexed", "errorCount"))
+         .withMaxRows(10)
+         .getWidgetMetaData());
    }
 
 
@@ -246,6 +285,11 @@ public class QuickSearchConfigMetaDataHelper
          QPossibleValueSource.newForEnum(config.applyTablePrefix(FIELD_ROLE_PVS), QuickSearchFieldRole.values()),
          QPossibleValueSource.newForEnum(config.applyTablePrefix(FIELD_ANALYZER_PVS), QuickSearchFieldAnalyzer.values()),
          QPossibleValueSource.newForEnum(config.applyTablePrefix(DOCUMENTS_CHOICE_PVS), QuickSearchDocumentsChoice.values()),
+         stringEnum(config.applyTablePrefix(RUN_TYPE_PVS), "BASEPULL", "Update (basepull)", "RECONCILE", "Reconcile", "FULL_REINDEX", "Full reindex / build"),
+         stringEnum(config.applyTablePrefix(RUN_STATUS_PVS), "RUNNING", "Running", "COMPLETED", "Completed", "FAILED", "Failed", "CANCELLED", "Cancelled"),
+         stringEnum(config.applyTablePrefix(EVENT_STATUS_PVS), "PENDING", "Pending (retried by the next update)", "EXHAUSTED", "Exhausted (gave up)",
+            "AWAITING_REINDEX", "Awaiting full reindex", "DEFERRED", "Deferred (indexing paused)"),
+         stringEnum(config.applyTablePrefix(EVENT_ACTION_PVS), "INDEX", "Index", "DELETE", "Delete"),
          new QPossibleValueSource()
             .withName(config.applyTablePrefix(CONFIG_SOURCE_PVS))
             .withType(QPossibleValueSourceType.ENUM)
@@ -277,10 +321,19 @@ public class QuickSearchConfigMetaDataHelper
       {
          qInstance.addJoin(join);
       }
-      QWidgetMetaData widget = buildIndexFieldsWidget(config);
-      if(qInstance.getWidget(widget.getName()) == null)
+      for(QJoinMetaData extraJoin : List.of(buildIndexRunsJoin(config)))
       {
-         qInstance.addWidget(widget);
+         if(qInstance.getJoin(extraJoin.getName()) == null)
+         {
+            qInstance.addJoin(extraJoin);
+         }
+      }
+      for(QWidgetMetaData widget : List.of(buildIndexFieldsWidget(config), buildIndexRunsWidget(config)))
+      {
+         if(qInstance.getWidget(widget.getName()) == null)
+         {
+            qInstance.addWidget(widget);
+         }
       }
 
       List<QPossibleValueSource> sources = new ArrayList<>(buildCustomPossibleValueSources(config));
@@ -297,6 +350,21 @@ public class QuickSearchConfigMetaDataHelper
             qInstance.addPossibleValueSource(source);
          }
       }
+   }
+
+
+
+   /*******************************************************************************
+    ** An enum source of string ids and labels (id, label, id, label...).
+    *******************************************************************************/
+   private static QPossibleValueSource stringEnum(String name, String... idsAndLabels)
+   {
+      List<QPossibleValue<?>> values = new ArrayList<>();
+      for(int i = 0; i + 1 < idsAndLabels.length; i += 2)
+      {
+         values.add(new QPossibleValue<>(idsAndLabels[i], idsAndLabels[i + 1]));
+      }
+      return (new QPossibleValueSource().withName(name).withType(QPossibleValueSourceType.ENUM).withEnumValues(values));
    }
 
 

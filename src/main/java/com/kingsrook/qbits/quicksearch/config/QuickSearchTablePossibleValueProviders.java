@@ -263,8 +263,8 @@ public final class QuickSearchTablePossibleValueProviders
 
 
    /*******************************************************************************
-    ** The table a form is about: its tableName value, else the table of its
-    ** quickSearchIndexId row. Null when neither resolves.
+    ** The table a form is about: its searchTableName or tableName value, else
+    ** the table of its quickSearchIndexId row. Null when none resolves.
     *******************************************************************************/
    static QTableMetaData resolveTable(Map<String, Serializable> otherValues) throws QException
    {
@@ -274,7 +274,15 @@ public final class QuickSearchTablePossibleValueProviders
          return (null);
       }
 
-      String tableName = ValueUtils.getValueAsString(otherValues.get("tableName"));
+      ////////////////////////////////////////////////////////////////////////
+      // Add Search Index's searchTableName first: a process form also gets  //
+      // tableName, the table the process runs from                          //
+      ////////////////////////////////////////////////////////////////////////
+      String tableName = ValueUtils.getValueAsString(otherValues.get("searchTableName"));
+      if(!StringUtils.hasContent(tableName))
+      {
+         tableName = ValueUtils.getValueAsString(otherValues.get("tableName"));
+      }
       if(!StringUtils.hasContent(tableName) && otherValues.get("quickSearchIndexId") != null)
       {
          GetInput getInput = new GetInput(config().getQuickSearchIndexTableName());

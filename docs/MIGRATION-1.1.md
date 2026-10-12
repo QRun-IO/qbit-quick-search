@@ -224,6 +224,7 @@ MySQL: use `INT AUTO_INCREMENT` for the ids, `DATETIME` for the timestamps and `
 - Basepull builds queued tables (`PENDING_BUILD`) itself and recreates a missing index. `NEEDS_REINDEX` still waits for an admin (Apply Search Index Changes, or Rebuild).
 - With the config tables, a table that is not in the instance is not part of the effective config, and `ensureIndexRowExists` no longer creates rows (priming does, honouring tombstones).
 - Hidden and `isSensitive` fields are never indexed, whether declared in code or added as rows.
+- `quick_search_index_run` and `quick_search_failed_event` offer no Create or Edit (Delete stays). The Basepull, Full Reindex and Reconcile processes are table actions on Quick Search Index rather than app children; their table input is now `searchTableName` (API callers may keep sending `tableName`).
 - `quick_search_searchable_table` is now a custom possible-value source over the effective tables (it was an enum of the code-declared ones).
 - Tables added at runtime get core `searchFields` (for the global search) when they have none, but the per-table Inspect Search Document and Reindex in Search record actions appear only after the next restart.
 

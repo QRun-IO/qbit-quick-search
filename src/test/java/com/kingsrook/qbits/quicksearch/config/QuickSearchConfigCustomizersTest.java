@@ -281,4 +281,42 @@ class QuickSearchConfigCustomizersTest extends BaseDataDrivenTest
       });
    }
 
+
+   /*******************************************************************************
+    ** Tables the system writes offer no Create (and runs and failed events no
+    ** edit either); system fields use pickers; the index view lists its runs;
+    ** the validation report JSON uses a JSON code editor.
+    *******************************************************************************/
+   @Test
+   void testSystemTablesScreens()
+   {
+      var qInstance = QContext.getQInstance();
+      for(String tableName : List.of(QuickSearchIndex.TABLE_NAME, QuickSearchSettings.TABLE_NAME, com.kingsrook.qbits.quicksearch.model.QuickSearchConfigTombstone.TABLE_NAME,
+         com.kingsrook.qbits.quicksearch.model.QuickSearchIndexRun.TABLE_NAME, QuickSearchFailedEvent.TABLE_NAME))
+      {
+         var table = qInstance.getTable(tableName);
+         assertThat(table.isCapabilityEnabled(qInstance.getBackend(table.getBackendName()), com.kingsrook.qqq.backend.core.model.metadata.tables.Capability.TABLE_INSERT))
+            .as(tableName + " has no Create").isFalse();
+      }
+      for(String tableName : List.of(com.kingsrook.qbits.quicksearch.model.QuickSearchIndexRun.TABLE_NAME, QuickSearchFailedEvent.TABLE_NAME))
+      {
+         var table = qInstance.getTable(tableName);
+         assertThat(table.isCapabilityEnabled(qInstance.getBackend(table.getBackendName()), com.kingsrook.qqq.backend.core.model.metadata.tables.Capability.TABLE_UPDATE)).isFalse();
+         assertThat(table.isCapabilityEnabled(qInstance.getBackend(table.getBackendName()), com.kingsrook.qqq.backend.core.model.metadata.tables.Capability.TABLE_DELETE)).isTrue();
+         assertThat(table.getSections()).isNotEmpty();
+         assertThat(table.getField("status").getPossibleValueSourceName()).isNotNull();
+      }
+      assertThat(qInstance.getTable(QuickSearchFailedEvent.TABLE_NAME).getField("tableName").getPossibleValueSourceName()).isEqualTo("quick_search_searchable_table");
+      assertThat(qInstance.getTable(QuickSearchFailedEvent.TABLE_NAME).getRecordLabelFields()).containsExactly("tableName", "recordId");
+      assertThat(qInstance.getTable(QuickSearchIndex.TABLE_NAME).getSections()).anySatisfy(section -> assertThat(section.getWidgetName()).isEqualTo("quickSearchIndexRuns"));
+      assertThat(qInstance.getWidget("quickSearchIndexRuns")).isNotNull();
+
+      var validation = com.kingsrook.qbits.quicksearch.metadata.QuickSearchTableMetaDataHelper.buildValidationRunTable(config);
+      assertThat(validation.getField("reportJson").getAdornments()).anySatisfy(adornment ->
+      {
+         assertThat(adornment.getType()).isEqualTo(com.kingsrook.qqq.backend.core.model.metadata.fields.AdornmentType.CODE_EDITOR);
+         assertThat(adornment.getValues()).containsEntry("languageMode", "json");
+      });
+   }
+
 }

@@ -56,7 +56,12 @@ import com.kingsrook.qbits.quicksearch.processes.AbstractIndexingStep;
  *******************************************************************************/
 public final class AddSearchIndexSteps
 {
-   public static final String FIELD_TABLE_NAME = "tableName";
+   ////////////////////////////////////////////////////////////////////////
+   // the input is not "tableName": a process on a table gets that value  //
+   // (the table it runs from) from the frontend                          //
+   ////////////////////////////////////////////////////////////////////////
+   public static final String FIELD_TABLE_NAME = "searchTableName";
+   public static final String RECORD_TABLE     = "tableName";
    public static final String FIELD_INTERVAL   = "basepullIntervalMinutes";
    public static final String FIELD_TIMESTAMP  = "basepullTimestampField";
    public static final String FIELD_ENABLED    = "enabled";
@@ -84,7 +89,7 @@ public final class AddSearchIndexSteps
       public void run(RunBackendStepInput input, RunBackendStepOutput output) throws QException
       {
          getRecordPipe().addRecord(new QRecord()
-            .withValue(FIELD_TABLE_NAME, input.getValueString(FIELD_TABLE_NAME))
+            .withValue(RECORD_TABLE, input.getValueString(FIELD_TABLE_NAME))
             .withValue(FIELD_INTERVAL, input.getValueInteger(FIELD_INTERVAL))
             .withValue(FIELD_TIMESTAMP, input.getValueString(FIELD_TIMESTAMP))
             .withValue(FIELD_ENABLED, input.getValue(FIELD_ENABLED) == null || input.getValueBoolean(FIELD_ENABLED)));
@@ -122,7 +127,7 @@ public final class AddSearchIndexSteps
          QuickSearchQBitConfig config = ConfigProcessSupport.config();
          for(QRecord record : input.getRecords())
          {
-            String tableName = record.getValueString(FIELD_TABLE_NAME);
+            String tableName = record.getValueString(RECORD_TABLE);
             String problem   = validate(config, record);
             if(problem != null)
             {
@@ -184,7 +189,7 @@ public final class AddSearchIndexSteps
        *******************************************************************************/
       static String validate(QuickSearchQBitConfig config, QRecord record) throws QException
       {
-         String tableName = record.getValueString(FIELD_TABLE_NAME);
+         String tableName = record.getValueString(RECORD_TABLE);
          if(!StringUtils.hasContent(tableName))
          {
             return ("Choose a table to add.");
@@ -266,7 +271,7 @@ public final class AddSearchIndexSteps
          QuickSearchQBitConfig config = ConfigProcessSupport.config();
          for(QRecord record : input.getRecords())
          {
-            String  tableName = record.getValueString(FIELD_TABLE_NAME);
+            String  tableName = record.getValueString(RECORD_TABLE);
             boolean enabled   = !Boolean.FALSE.equals(record.getValueBoolean(FIELD_ENABLED));
             QRecord inserted  = QuickSearchConfigPrimer.insertOne(config.getQuickSearchIndexTableName(), new QRecord()
                .withValue("tableName", tableName)

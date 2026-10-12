@@ -85,7 +85,7 @@ class QuickSearchConfigProcessesTest extends BaseDataDrivenTest
          new QRecord().withValue("id", 1).withValue("title", "Blue Widget").withValue("body", "A fine widget").withValue("sku", "BW-1").withValue("internalNotes", "do not leak"),
          new QRecord().withValue("id", 2).withValue("title", "Red Gadget").withValue("body", "A handy gadget").withValue("sku", "RG-2"));
 
-      RunProcessOutput output = runProcess(QuickSearchConfigProcessMetaDataHelper.ADD_INDEX_PROCESS_NAME, Map.of("tableName", ARTICLE_TABLE), null);
+      RunProcessOutput output = runProcess(QuickSearchConfigProcessMetaDataHelper.ADD_INDEX_PROCESS_NAME, Map.of("searchTableName", ARTICLE_TABLE), null);
 
       assertThat(reviewMessages(output)).anySatisfy(m -> assertThat(m).contains("Article will be added").contains("about 2 records"));
       assertThat(reviewMessages(output)).anySatisfy(m -> assertThat(m).contains("starts with 3 fields").contains("title: Title, weight 3"));
@@ -109,11 +109,11 @@ class QuickSearchConfigProcessesTest extends BaseDataDrivenTest
       ////////////////////////////////////////////////////////////
       // adding it again, or a secret or unknown table, refuses //
       ////////////////////////////////////////////////////////////
-      RunProcessOutput again = runProcess(QuickSearchConfigProcessMetaDataHelper.ADD_INDEX_PROCESS_NAME, Map.of("tableName", ARTICLE_TABLE), null);
+      RunProcessOutput again = runProcess(QuickSearchConfigProcessMetaDataHelper.ADD_INDEX_PROCESS_NAME, Map.of("searchTableName", ARTICLE_TABLE), null);
       assertThat(reviewMessages(again)).anySatisfy(m -> assertThat(m).contains("already in Quick Search"));
       assertThat(rows(QuickSearchIndex.TABLE_NAME)).hasSize(2);
 
-      assertThat(reviewMessages(runProcess(QuickSearchConfigProcessMetaDataHelper.ADD_INDEX_PROCESS_NAME, Map.of("tableName", SECRET_TABLE), null)))
+      assertThat(reviewMessages(runProcess(QuickSearchConfigProcessMetaDataHelper.ADD_INDEX_PROCESS_NAME, Map.of("searchTableName", SECRET_TABLE), null)))
          .anySatisfy(m -> assertThat(m).contains("secrets"));
       assertThat(reviewMessages(runProcess(QuickSearchConfigProcessMetaDataHelper.ADD_INDEX_PROCESS_NAME, Map.of(), null)))
          .anySatisfy(m -> assertThat(m).contains("Choose a table"));
@@ -133,10 +133,10 @@ class QuickSearchConfigProcessesTest extends BaseDataDrivenTest
       runtime.getConfigStore().tryPrime();
       insert(ARTICLE_TABLE, new QRecord().withValue("id", 1).withValue("title", "Blue Widget").withValue("modifyDate", Instant.now()));
 
-      assertThat(reviewMessages(runProcess(QuickSearchConfigProcessMetaDataHelper.ADD_INDEX_PROCESS_NAME, Map.of("tableName", ARTICLE_TABLE, "basepullTimestampField", "title"), null)))
+      assertThat(reviewMessages(runProcess(QuickSearchConfigProcessMetaDataHelper.ADD_INDEX_PROCESS_NAME, Map.of("searchTableName", ARTICLE_TABLE, "basepullTimestampField", "title"), null)))
          .anySatisfy(m -> assertThat(m).contains("not a date-time field"));
 
-      RunProcessOutput output = runProcess(QuickSearchConfigProcessMetaDataHelper.ADD_INDEX_PROCESS_NAME, Map.of("tableName", ARTICLE_TABLE, "basepullIntervalMinutes", 10), null);
+      RunProcessOutput output = runProcess(QuickSearchConfigProcessMetaDataHelper.ADD_INDEX_PROCESS_NAME, Map.of("searchTableName", ARTICLE_TABLE, "basepullIntervalMinutes", 10), null);
       assertThat(resultMessages(output)).anySatisfy(m -> assertThat(m).contains("queued and starts with the next update"));
       assertThat(indexRow(ARTICLE_TABLE).getValueString("status")).isEqualTo(AbstractIndexingStep.STATUS_PENDING_BUILD);
       assertThat(indexRow(ARTICLE_TABLE).getValueInteger("basepullIntervalMinutes")).isEqualTo(10);

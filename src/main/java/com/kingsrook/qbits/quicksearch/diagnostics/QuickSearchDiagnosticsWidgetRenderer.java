@@ -107,7 +107,9 @@ public class QuickSearchDiagnosticsWidgetRenderer extends AbstractWidgetRenderer
       renderLastValidation(html, config);
 
       html.subheading("Tools");
-      html.paragraph("On Quick Search Index (Actions): Search Playground, Validate Search Index, Test Search Analyzer. "
+      html.paragraph("On Quick Search Index (Actions): Add Search Index, Apply Search Index Changes, Disable and Remove Search Index, "
+         + "Search Playground, Validate Search Index, Test Search Analyzer. Searchable fields are edited on each index record. "
+         + "On Quick Search Settings: Pause and Resume Indexing; on Quick Search Index Run: Cancel Index Run. "
          + "On any indexed record and on Quick Search Failed Event rows: Inspect Search Document and Reindex in Search. "
          + "Every run is recorded in Quick Search Diagnostic Event.");
       return (html.close().toString());
@@ -123,23 +125,19 @@ public class QuickSearchDiagnosticsWidgetRenderer extends AbstractWidgetRenderer
    {
       QuickSearchStatus status = QuickSearchStatus.read(runtime);
       html.subheading("Indexing");
+      String banner = status.bannerHtml();
+      if(!banner.isEmpty())
+      {
+         html.raw(banner);
+      }
       if(status.paused())
       {
-         html.status(Level.WARN, status.pausedText());
          html.raw("<p><a href=\"" + DiagnosticsHtml.escape(QuickSearchStatus.settingsPath(runtime)) + "\">Quick Search Settings</a>: Resume Indexing (Actions).</p>");
       }
       else
       {
          html.status(Level.OK, "Indexing is running (real-time and scheduled). Pause it from "
             + "Quick Search Settings (Actions: Pause Indexing); search keeps serving while paused.");
-      }
-      if(status.buildingText() != null)
-      {
-         html.status(Level.INFO, status.buildingText());
-      }
-      if(status.needsReindexText() != null)
-      {
-         html.status(Level.WARN, status.needsReindexText());
       }
       if(!status.recordsMode())
       {

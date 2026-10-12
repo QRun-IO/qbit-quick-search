@@ -28,6 +28,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import com.kingsrook.qqq.backend.core.actions.processes.BackendStep;
+import com.kingsrook.qqq.backend.core.model.actions.processes.RunBackendStepInput;
 import com.kingsrook.qqq.backend.core.model.actions.processes.RunBackendStepOutput;
 import com.kingsrook.qqq.backend.core.actions.tables.DeleteAction;
 import com.kingsrook.qqq.backend.core.actions.tables.InsertAction;
@@ -52,6 +53,7 @@ import com.kingsrook.qbits.quicksearch.QuickSearchQBitContext;
 import com.kingsrook.qbits.quicksearch.QuickSearchRuntime;
 import com.kingsrook.qbits.quicksearch.QuickSearchableTableConfig;
 import com.kingsrook.qbits.quicksearch.config.QuickSearchConfigWrites;
+import com.kingsrook.qbits.quicksearch.config.QuickSearchFieldRules;
 import com.kingsrook.qbits.quicksearch.model.QuickSearchDiagnosticEvent;
 import com.kingsrook.qbits.quicksearch.model.QuickSearchIndexRun;
 import com.kingsrook.qbits.quicksearch.model.QuickSearchValidationRun;
@@ -612,6 +614,29 @@ public abstract class AbstractIndexingStep implements BackendStep
       }
 
       return (new IndexCounts(processed, indexed, errors, skipped, firstError));
+   }
+
+
+
+   /*******************************************************************************
+    ** The table a reindex or reconcile is limited to, or null for all:
+    ** searchTableName (the input screen's field), else tableName (API
+    ** callers). A Quick Search table is never meant: a process run from the
+    ** Quick Search Index table gets that table as its tableName.
+    *******************************************************************************/
+   protected String tableNameInput(RunBackendStepInput input)
+   {
+      String tableName = input.getValueString("searchTableName");
+      if(tableName == null || tableName.isBlank())
+      {
+         tableName = input.getValueString("tableName");
+      }
+      QuickSearchQBitConfig config = QuickSearchQBitContext.getConfig();
+      if(tableName == null || tableName.isBlank() || (config != null && QuickSearchFieldRules.isQuickSearchTable(config, tableName)))
+      {
+         return (null);
+      }
+      return (tableName);
    }
 
 

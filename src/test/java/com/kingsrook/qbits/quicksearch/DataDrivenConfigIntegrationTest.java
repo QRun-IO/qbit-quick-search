@@ -202,7 +202,7 @@ class DataDrivenConfigIntegrationTest
          .withValue("sku", 4711).withValue("code", 990099).withValue("modifyDate", Instant.now()));
       assertThat(search("gadget")).isEmpty();
 
-      RunProcessOutput output = runProcess(QuickSearchConfigProcessMetaDataHelper.ADD_INDEX_PROCESS_NAME, Map.of("tableName", ARTICLE_TABLE), null);
+      RunProcessOutput output = runProcess(QuickSearchConfigProcessMetaDataHelper.ADD_INDEX_PROCESS_NAME, Map.of("searchTableName", ARTICLE_TABLE), null);
       assertThat(output.getException()).isEmpty();
       refresh();
 

@@ -77,7 +77,7 @@ public class ReconcileIndexStep extends AbstractIndexingStep
          return;
       }
 
-      String tableNameFilter = input.getValueString("tableName");
+      String tableNameFilter = tableNameInput(input);
       boolean allTables      = tableNameFilter == null || tableNameFilter.isBlank();
 
       Integer recordsIndexed   = 0;

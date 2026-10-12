@@ -21,6 +21,8 @@ import java.util.List;
 import com.kingsrook.qqq.backend.core.model.metadata.fields.QFieldMetaData;
 import com.kingsrook.qqq.backend.core.model.metadata.fields.QFieldType;
 import com.kingsrook.qqq.backend.core.model.metadata.layout.QIcon;
+import com.kingsrook.qqq.backend.core.model.metadata.processes.QComponentType;
+import com.kingsrook.qqq.backend.core.model.metadata.processes.QFrontendComponentMetaData;
 import com.kingsrook.qqq.backend.core.model.metadata.processes.QFrontendStepMetaData;
 import com.kingsrook.qqq.backend.core.model.metadata.processes.QProcessMetaData;
 import com.kingsrook.qqq.backend.core.processes.implementations.etl.streamedwithfrontend.AbstractExtractStep;
@@ -88,7 +90,7 @@ public class QuickSearchConfigProcessMetaDataHelper
       String indexTable = config.applyTablePrefix(QuickSearchIndex.TABLE_NAME);
       QProcessMetaData process = base(config, ADD_INDEX_PROCESS_NAME, "Add Search Index", "add_circle", indexTable,
          AddSearchIndexSteps.Extract.class, AddSearchIndexSteps.Transform.class, AddSearchIndexSteps.Load.class, 0, List.of(
-            new QFieldMetaData(AddSearchIndexSteps.FIELD_TABLE_NAME, QFieldType.STRING).withLabel("Table")
+            new QFieldMetaData(AddSearchIndexSteps.RECORD_TABLE, QFieldType.STRING).withLabel("Table")
                .withPossibleValueSourceName(config.applyTablePrefix(QuickSearchSearchableTablePossibleValueSourceProducer.NAME)),
             new QFieldMetaData("estimatedRecords", QFieldType.INTEGER).withLabel("Records to Index"),
             new QFieldMetaData("fieldCount", QFieldType.INTEGER).withLabel("Fields"),
@@ -99,16 +101,17 @@ public class QuickSearchConfigProcessMetaDataHelper
       process.withStep(0, new QFrontendStepMetaData()
          .withName("input")
          .withLabel("Choose a table")
+         .withComponent(new QFrontendComponentMetaData().withType(QComponentType.HELP_TEXT).withValue("text",
+            "Only tables you can read, that are not indexed yet and are not internal or secret are offered. The review step shows the fields the index starts with "
+               + "and how many records its first build indexes; change the fields afterwards under Searchable Fields on the index."))
+         .withComponent(new QFrontendComponentMetaData().withType(QComponentType.EDIT_FORM))
          .withFormField(new QFieldMetaData(AddSearchIndexSteps.FIELD_TABLE_NAME, QFieldType.STRING).withLabel("Table").withIsRequired(true)
             .withPossibleValueSourceName(config.applyTablePrefix(QuickSearchConfigMetaDataHelper.ELIGIBLE_TABLE_PVS)))
          .withFormField(new QFieldMetaData(AddSearchIndexSteps.FIELD_INTERVAL, QFieldType.INTEGER).withLabel("Update Interval (Minutes)")
             .withDefaultValue(config.getDefaultBasepullIntervalMinutes()))
          .withFormField(new QFieldMetaData(AddSearchIndexSteps.FIELD_TIMESTAMP, QFieldType.STRING).withLabel("Timestamp Field (blank: detect)")
             .withPossibleValueSourceName(config.applyTablePrefix(QuickSearchConfigMetaDataHelper.TIMESTAMP_FIELD_PVS)))
-         .withFormField(new QFieldMetaData(AddSearchIndexSteps.FIELD_ENABLED, QFieldType.BOOLEAN).withLabel("Enabled").withDefaultValue(true))
-         .withViewField(new QFieldMetaData("help", QFieldType.STRING).withLabel(" ").withDefaultValue(
-            "Only tables you can read, that are not indexed yet and are not internal or secret are offered. The review step shows the fields the index starts with "
-               + "and how many records its first build indexes; change the fields afterwards under Searchable Fields on the index.")));
+         .withFormField(new QFieldMetaData(AddSearchIndexSteps.FIELD_ENABLED, QFieldType.BOOLEAN).withLabel("Enabled").withDefaultValue(true)));
       return (process);
    }
 
@@ -142,13 +145,14 @@ public class QuickSearchConfigProcessMetaDataHelper
       process.withStep(0, new QFrontendStepMetaData()
          .withName("input")
          .withLabel("Search documents")
-         .withFormField(new QFieldMetaData(StopIndexingSteps.FIELD_DOCUMENTS, QFieldType.STRING).withLabel("Search Documents").withIsRequired(true)
-            .withDefaultValue(defaultChoice.name())
-            .withPossibleValueSourceName(config.applyTablePrefix(QuickSearchConfigMetaDataHelper.DOCUMENTS_CHOICE_PVS)))
-         .withViewField(new QFieldMetaData("help", QFieldType.STRING).withLabel(" ").withDefaultValue(
+         .withComponent(new QFrontendComponentMetaData().withType(QComponentType.HELP_TEXT).withValue("text",
             StopIndexingSteps.MODE_REMOVE.equals(mode)
                ? "Removing stops indexing the table and deletes its index and field rows. Code defaults never add it back (see Quick Search Removed Config)."
-               : "Disabling stops indexing the table and hides it from search; enabling it again rebuilds it.")));
+               : "Disabling stops indexing the table and hides it from search; enabling it again rebuilds it."))
+         .withComponent(new QFrontendComponentMetaData().withType(QComponentType.EDIT_FORM))
+         .withFormField(new QFieldMetaData(StopIndexingSteps.FIELD_DOCUMENTS, QFieldType.STRING).withLabel("Search Documents").withIsRequired(true)
+            .withDefaultValue(defaultChoice.name())
+            .withPossibleValueSourceName(config.applyTablePrefix(QuickSearchConfigMetaDataHelper.DOCUMENTS_CHOICE_PVS))));
       return (process);
    }
 
@@ -215,6 +219,7 @@ public class QuickSearchConfigProcessMetaDataHelper
       {
          process.withStep(0, new QFrontendStepMetaData()
             .withName("input")
+            .withComponent(new QFrontendComponentMetaData().withType(QComponentType.EDIT_FORM))
             .withLabel("Pause indexing")
             .withFormField(new QFieldMetaData(SetIndexingPausedSteps.FIELD_REASON, QFieldType.STRING).withLabel("Reason (optional)")));
       }

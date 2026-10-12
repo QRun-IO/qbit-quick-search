@@ -22,6 +22,8 @@ import com.kingsrook.qqq.backend.core.model.metadata.fields.QFieldMetaData;
 import com.kingsrook.qqq.backend.core.model.metadata.fields.QFieldType;
 import com.kingsrook.qqq.backend.core.model.metadata.layout.QIcon;
 import com.kingsrook.qqq.backend.core.model.metadata.processes.QBackendStepMetaData;
+import com.kingsrook.qqq.backend.core.model.metadata.processes.QComponentType;
+import com.kingsrook.qqq.backend.core.model.metadata.processes.QFrontendComponentMetaData;
 import com.kingsrook.qqq.backend.core.model.metadata.processes.QFrontendStepMetaData;
 import com.kingsrook.qqq.backend.core.model.metadata.processes.QProcessMetaData;
 import com.kingsrook.qqq.backend.core.model.metadata.scheduleing.QScheduleMetaData;
@@ -104,18 +106,21 @@ public class QuickSearchProcessMetaDataHelper
 
 
    /*******************************************************************************
-    ** Optional table picker shown before the backend step.
+    ** Optional table picker shown before the backend step. Its field is
+    ** searchTableName, not tableName, which a process run from a table gets
+    ** from the frontend (the table it runs from).
     *******************************************************************************/
    private static QFrontendStepMetaData inputStep(QuickSearchQBitConfig config, String help)
    {
       return (new QFrontendStepMetaData()
          .withName("input")
+         .withComponent(new QFrontendComponentMetaData().withType(QComponentType.HELP_TEXT).withValue("text", help))
+         .withComponent(new QFrontendComponentMetaData().withType(QComponentType.EDIT_FORM))
          .withLabel("Choose table")
-         .withFormField(new QFieldMetaData("tableName", QFieldType.STRING)
+         .withFormField(new QFieldMetaData("searchTableName", QFieldType.STRING)
             .withLabel("Table (optional)")
             .withPossibleValueSourceName(config.applyTablePrefix(QuickSearchSearchableTablePossibleValueSourceProducer.NAME))
-            .withIsRequired(false))
-         .withViewField(new QFieldMetaData("help", QFieldType.STRING).withLabel(" ").withDefaultValue(help)));
+            .withIsRequired(false)));
    }
 
 
@@ -140,10 +145,15 @@ public class QuickSearchProcessMetaDataHelper
     *******************************************************************************/
    private static QProcessMetaData buildProcess(QuickSearchQBitConfig config, String baseName, String label, String stepName, Class<?> stepClass, String icon)
    {
+      ///////////////////////////////////////////////////////////////////////
+      // run from Quick Search Index's Actions (processes are never in the //
+      // nav); the input screen's table picker is searchTableName          //
+      ///////////////////////////////////////////////////////////////////////
       return (new QProcessMetaData()
          .withName(config.applyPrefix(baseName))
          .withLabel(label)
          .withIcon(new QIcon(icon))
+         .withTableName(config.getQuickSearchIndexTableName())
          .withPermissionRules(config.getAdminPermissionRules() == null ? null : config.getAdminPermissionRules().clone())
          .withStep(new QBackendStepMetaData()
             .withName(stepName)

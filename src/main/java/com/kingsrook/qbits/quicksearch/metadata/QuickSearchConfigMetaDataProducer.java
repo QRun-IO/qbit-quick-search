@@ -42,6 +42,8 @@ public class QuickSearchConfigMetaDataProducer extends QBitComponentMetaDataProd
       MetaDataProducerMultiOutput output = new MetaDataProducerMultiOutput();
       output.add(QuickSearchConfigMetaDataHelper.buildIndexFieldsJoin(config));
       output.add(QuickSearchConfigMetaDataHelper.buildIndexFieldsWidget(config));
+      output.add(QuickSearchConfigMetaDataHelper.buildIndexRunsJoin(config));
+      output.add(QuickSearchConfigMetaDataHelper.buildIndexRunsWidget(config));
       for(QPossibleValueSource possibleValueSource : QuickSearchConfigMetaDataHelper.buildCustomPossibleValueSources(config))
       {
          output.add(possibleValueSource);

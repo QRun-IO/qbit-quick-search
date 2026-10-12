@@ -18,6 +18,8 @@ package com.kingsrook.qbits.quicksearch.config;
 
 
 import java.time.Instant;
+import java.time.ZoneOffset;
+import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
 import java.util.List;
 import com.kingsrook.qqq.backend.core.context.QContext;
@@ -52,6 +54,8 @@ public record QuickSearchStatus(boolean paused, Instant pausedAt, String pausedB
                                 List<String> building, List<String> needsReindex, boolean recordsMode)
 {
    private static final QLogger LOG = QLogger.getLogger(QuickSearchStatus.class);
+
+   private static final DateTimeFormatter WHEN = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm 'UTC'").withZone(ZoneOffset.UTC);
 
 
 
@@ -115,7 +119,7 @@ public record QuickSearchStatus(boolean paused, Instant pausedAt, String pausedB
     *******************************************************************************/
    public String pausedText()
    {
-      return ("Paused since " + (pausedAt == null ? "an unknown time" : pausedAt) + " by " + (pausedBy == null ? "an unknown user" : pausedBy)
+      return ("Paused since " + (pausedAt == null ? "an unknown time" : WHEN.format(pausedAt)) + " by " + (pausedBy == null ? "an unknown user" : pausedBy)
          + (StringUtils.hasContent(pauseReason) ? " (" + pauseReason + ")" : "")
          + ". Nothing is indexed; search keeps serving the current index, and changes are indexed when indexing resumes.");
    }

@@ -59,7 +59,7 @@ import static com.kingsrook.qqq.backend.core.logging.LogUtils.logPair;
 /*******************************************************************************
  ** Rebuild the index from source.
  **
- ** Without a "tableName" input, every enabled table is indexed into a fresh
+ ** Without a "searchTableName" (or "tableName") input, every enabled table is indexed into a fresh
  ** physical index with the current mapping; when all of them succeed the alias
  ** is swapped to it and the old index is deleted, so search keeps serving the
  ** old documents until the new set is complete. This is also how an index
@@ -82,7 +82,7 @@ import static com.kingsrook.qqq.backend.core.logging.LogUtils.logPair;
  ** (see recoverDeadRun); a full reindex then refuses to start while another
  ** one is alive.
  **
- ** With a "tableName" input, that table is rebuilt in place with the reconcile
+ ** With a "searchTableName" (or "tableName") input, that table is rebuilt in place with the reconcile
  ** algorithm (index everything, then delete what was not re-indexed).
  *******************************************************************************/
 public class FullReindexStep extends AbstractIndexingStep
@@ -109,7 +109,7 @@ public class FullReindexStep extends AbstractIndexingStep
          return;
       }
 
-      String  tableNameFilter = input.getValueString("tableName");
+      String  tableNameFilter = tableNameInput(input);
       boolean allTables       = tableNameFilter == null || tableNameFilter.isBlank();
 
       //////////////////////////////////////////////////////////////////////////////
