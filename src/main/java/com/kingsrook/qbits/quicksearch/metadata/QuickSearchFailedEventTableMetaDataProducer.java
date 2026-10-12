@@ -25,7 +25,7 @@ import com.kingsrook.qbits.quicksearch.QuickSearchQBitConfig;
 
 
 /*******************************************************************************
- ** Produces the quickSearchFailedEvent table.
+ ** Produces the quick_search_failed_event table.
  *******************************************************************************/
 public class QuickSearchFailedEventTableMetaDataProducer extends QBitComponentMetaDataProducer<QTableMetaData, QuickSearchQBitConfig>
 {

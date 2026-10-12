@@ -293,10 +293,10 @@ class DiagnosticsMetaDataTest
       QuickSearchQBitConfig config    = config().withTableNamePrefix("myApp_");
       new QuickSearchQBitProducer().withConfig(config).produce(qInstance);
 
-      assertThat(qInstance.getTable("myApp_" + QuickSearchDiagnosticEvent.TABLE_NAME)).isNotNull();
-      assertThat(qInstance.getTable("myApp_" + QuickSearchValidationRun.TABLE_NAME)).isNotNull();
+      assertThat(qInstance.getTable("my_app_" + QuickSearchDiagnosticEvent.TABLE_NAME)).isNotNull();
+      assertThat(qInstance.getTable("my_app_" + QuickSearchValidationRun.TABLE_NAME)).isNotNull();
       QProcessMetaData playground = qInstance.getProcess("myApp_" + QuickSearchDiagnosticsProcessMetaDataHelper.PLAYGROUND_PROCESS_NAME);
-      assertThat(playground.getTableName()).isEqualTo("myApp_" + QuickSearchIndex.TABLE_NAME);
+      assertThat(playground.getTableName()).isEqualTo("my_app_" + QuickSearchIndex.TABLE_NAME);
       assertThat(qInstance.getProcess("myApp_quickSearchInspect_" + SOURCE)).isNotNull();
    }
 

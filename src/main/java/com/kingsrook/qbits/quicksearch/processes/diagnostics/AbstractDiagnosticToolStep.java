@@ -145,7 +145,7 @@ public abstract class AbstractDiagnosticToolStep implements BackendStep
          throw (new QUserFacingException("Select at most " + max + " records (" + records.size() + "+ selected)."));
       }
 
-      boolean      failedEvents = tableName.equals(runtime.getConfig().applyPrefix(QuickSearchFailedEvent.TABLE_NAME));
+      boolean      failedEvents = tableName.equals(runtime.getConfig().applyTablePrefix(QuickSearchFailedEvent.TABLE_NAME));
       Set<Target>  targets      = new LinkedHashSet<>();
       for(QRecord record : records)
       {

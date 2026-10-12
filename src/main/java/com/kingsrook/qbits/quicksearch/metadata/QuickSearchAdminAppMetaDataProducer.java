@@ -76,7 +76,7 @@ public class QuickSearchAdminAppMetaDataProducer extends QBitComponentMetaDataPr
       for(String tableName : new String[] { QuickSearchIndex.TABLE_NAME, QuickSearchIndexRun.TABLE_NAME, QuickSearchFailedEvent.TABLE_NAME,
          QuickSearchValidationRun.TABLE_NAME, QuickSearchDiagnosticEvent.TABLE_NAME })
       {
-         QTableMetaData table = produced.get(QTableMetaData.class, config.applyPrefix(tableName));
+         QTableMetaData table = produced.get(QTableMetaData.class, config.applyTablePrefix(tableName));
          if(table != null)
          {
             app.withChild(table);

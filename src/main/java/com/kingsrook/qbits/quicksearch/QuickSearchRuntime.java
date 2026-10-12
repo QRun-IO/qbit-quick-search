@@ -284,7 +284,7 @@ public class QuickSearchRuntime
 
    /*******************************************************************************
     ** Whether a table is enabled for indexing and search, per its
-    ** quickSearchIndex row. A table with no row yet is enabled. Results are
+    ** quick_search_index row. A table with no row yet is enabled. Results are
     ** cached for one minute; a failed lookup is treated as enabled so indexing
     ** does not stop because the operational table is unreachable.
     *******************************************************************************/
@@ -493,7 +493,7 @@ public class QuickSearchRuntime
 
 
    /*******************************************************************************
-    ** Read the enabled flag from the quickSearchIndex row.
+    ** Read the enabled flag from the quick_search_index row.
     *******************************************************************************/
    private boolean readEnabledFlag(String tableName)
    {
