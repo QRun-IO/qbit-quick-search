@@ -28,12 +28,16 @@ import java.util.Properties;
 import com.kingsrook.qqq.backend.core.exceptions.QException;
 import com.kingsrook.qqq.backend.core.logging.QLogger;
 import com.kingsrook.qqq.backend.core.model.metadata.MetaDataProducerMultiOutput;
+import com.kingsrook.qqq.backend.core.model.metadata.QBackendMetaData;
 import com.kingsrook.qqq.backend.core.model.metadata.QInstance;
 import com.kingsrook.qqq.backend.core.model.metadata.code.QCodeReference;
+import com.kingsrook.qqq.backend.core.model.metadata.fields.QFieldMetaData;
 import com.kingsrook.qqq.backend.core.model.metadata.qbits.QBitMetaData;
 import com.kingsrook.qqq.backend.core.model.metadata.qbits.QBitMetaDataProducer;
 import com.kingsrook.qqq.backend.core.model.metadata.tables.QTableMetaData;
+import com.kingsrook.qqq.backend.core.utils.CollectionUtils;
 import com.kingsrook.qqq.backend.core.utils.StringUtils;
+import com.kingsrook.qbits.quicksearch.actions.QuickSearchRecordSearchProvider;
 import com.kingsrook.qbits.quicksearch.annotations.QuickSearchField;
 import com.kingsrook.qbits.quicksearch.annotations.QuickSearchable;
 import com.kingsrook.qbits.quicksearch.listeners.QuickSearchRecordChangeListener;
@@ -50,7 +54,9 @@ import static com.kingsrook.qqq.backend.core.logging.LogUtils.logPair;
  ** processes, admin app), applies the config's table customizer and default
  ** backend, stamps sourceQBitName, then calls {@link #postProduceActions}, which
  ** discovers searchable tables, builds the runtime, registers the record-change
- ** listener and runtime service, and (in FAIL_FAST mode) prepares the index.
+ ** listener and runtime service, registers the core record-search provider
+ ** (serveCoreRecordSearch) and gives indexed tables core searchFields, and (in
+ ** FAIL_FAST mode) prepares the index.
  **
  ** Host usage, unchanged from 0.x:
  **   new QuickSearchQBitProducer().withConfig(config).produce(qInstance);
@@ -254,6 +260,12 @@ public class QuickSearchQBitProducer implements QBitMetaDataProducer<QuickSearch
 
       qInstance.withRuntimeService(new QCodeReference(QuickSearchRuntimeService.class));
 
+      if(Boolean.TRUE.equals(qBitConfig.getServeCoreRecordSearch()))
+      {
+         registerRecordSearchProvider(qInstance);
+         defaultCoreSearchFields(qInstance, discoveredTables);
+      }
+
       if(!StringUtils.hasContent(qBitConfig.getSchedulerName()) && Boolean.TRUE.equals(qBitConfig.getEnableBasepullProcess()))
       {
          LOG.warn("Quick Search has no schedulerName; the basepull and reconcile processes are registered but will not run on a schedule");
@@ -266,6 +278,82 @@ public class QuickSearchQBitProducer implements QBitMetaDataProducer<QuickSearch
 
       LOG.info("Quick Search QBit produced", logPair("version", VERSION), logPair("tables", discoveredTables.size()),
          logPair("indexName", qBitConfig.getOpensearchIndexName()), logPair("startupMode", qBitConfig.getStartupMode()));
+   }
+
+
+
+   /*******************************************************************************
+    ** Register QuickSearchRecordSearchProvider as the instance's core record
+    ** search provider. An instance holds one provider; a different one the host
+    ** already registered is kept (with a warning).
+    *******************************************************************************/
+   static void registerRecordSearchProvider(QInstance qInstance)
+   {
+      QCodeReference existing = qInstance.getRecordSearchProvider();
+      if(existing != null && !QuickSearchRecordSearchProvider.class.getName().equals(existing.getName()))
+      {
+         LOG.warn("The instance already has a record search provider; Quick Search does not replace it, so core search does not use OpenSearch",
+            logPair("provider", existing.getName()));
+         return;
+      }
+
+      qInstance.withRecordSearchProvider(new QCodeReference(QuickSearchRecordSearchProvider.class));
+   }
+
+
+
+   /*******************************************************************************
+    ** Core record search only searches tables with searchFields, so give each
+    ** indexed table that has none the searchable fields core accepts (visible
+    ** string or integer fields; never password fields). Fields the host set are
+    ** never replaced. A table that is not in the instance yet, uses backend
+    ** variants, or has no such field is skipped with a warning.
+    *******************************************************************************/
+   static void defaultCoreSearchFields(QInstance qInstance, List<QuickSearchableTableConfig> tableConfigs)
+   {
+      for(QuickSearchableTableConfig tableConfig : tableConfigs)
+      {
+         QTableMetaData table = qInstance.getTable(tableConfig.getTableName());
+         if(table == null)
+         {
+            LOG.warn("Indexed table is not in the instance when Quick Search is produced, so it gets no core searchFields; set them on the table for core search to use it",
+               logPair("tableName", tableConfig.getTableName()));
+            continue;
+         }
+
+         if(table.getSearchFields() != null)
+         {
+            continue;
+         }
+
+         QBackendMetaData backend = qInstance.getBackend(table.getBackendName());
+         if(backend != null && Boolean.TRUE.equals(backend.getUsesVariants()))
+         {
+            LOG.warn("Indexed table uses backend variants, which core record search does not support; it gets no core searchFields", logPair("tableName", table.getName()));
+            continue;
+         }
+
+         List<String> searchFields = new ArrayList<>();
+         for(String fieldName : CollectionUtils.nonNullList(tableConfig.getSearchableFields()))
+         {
+            QFieldMetaData field = table.getFields() == null ? null : table.getFields().get(fieldName);
+            if(field != null && !Boolean.TRUE.equals(field.getIsHidden()) && field.getType() != null
+               && (field.getType().isStringLike() || field.getType().isIntegral()) && !field.getType().needsMasked()
+               && !searchFields.contains(fieldName))
+            {
+               searchFields.add(fieldName);
+            }
+         }
+
+         if(searchFields.isEmpty())
+         {
+            LOG.warn("Indexed table has no string or integer searchable field, so it gets no core searchFields; set them on the table for core search to use it",
+               logPair("tableName", table.getName()));
+            continue;
+         }
+
+         table.setSearchFields(searchFields);
+      }
    }
 
 
@@ -455,22 +543,23 @@ public class QuickSearchQBitProducer implements QBitMetaDataProducer<QuickSearch
 
 
    /*******************************************************************************
-    ** Hidden fields are never indexed: their values would leak through
-    ** searchable text and highlights.
+    ** Hidden and password fields are never indexed: their values would leak
+    ** through searchable text and highlights.
     *******************************************************************************/
    private static void removeHiddenFields(QTableMetaData table, List<String> searchableFields, Map<String, Integer> fieldWeights, Map<String, Boolean> fieldIncludeLabels)
    {
       List<String> hidden = new ArrayList<>();
       for(String fieldName : searchableFields)
       {
-         if(table.getFields().containsKey(fieldName) && Boolean.TRUE.equals(table.getField(fieldName).getIsHidden()))
+         QFieldMetaData field = table.getFields().get(fieldName);
+         if(field != null && (Boolean.TRUE.equals(field.getIsHidden()) || (field.getType() != null && field.getType().needsMasked())))
          {
             hidden.add(fieldName);
          }
       }
       if(!hidden.isEmpty())
       {
-         LOG.warn("Hidden fields are excluded from Quick Search indexing", logPair("tableName", table.getName()), logPair("fields", hidden));
+         LOG.warn("Hidden and password fields are excluded from Quick Search indexing", logPair("tableName", table.getName()), logPair("fields", hidden));
          searchableFields.removeAll(hidden);
          hidden.forEach(fieldWeights::remove);
          hidden.forEach(fieldIncludeLabels::remove);
