@@ -34,7 +34,7 @@ class QuickSearchIndexTest
    @Test
    void testTableNameConstant()
    {
-      assertThat(QuickSearchIndex.TABLE_NAME).isEqualTo("quickSearchIndex");
+      assertThat(QuickSearchIndex.TABLE_NAME).isEqualTo("quick_search_index");
    }
 
 

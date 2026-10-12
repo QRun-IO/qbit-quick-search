@@ -113,7 +113,7 @@ public class QuickSearchProcessMetaDataHelper
          .withLabel("Choose table")
          .withFormField(new QFieldMetaData("tableName", QFieldType.STRING)
             .withLabel("Table (optional)")
-            .withPossibleValueSourceName(config.applyPrefix(QuickSearchSearchableTablePossibleValueSourceProducer.NAME))
+            .withPossibleValueSourceName(config.applyTablePrefix(QuickSearchSearchableTablePossibleValueSourceProducer.NAME))
             .withIsRequired(false))
          .withViewField(new QFieldMetaData("help", QFieldType.STRING).withLabel(" ").withDefaultValue(help)));
    }

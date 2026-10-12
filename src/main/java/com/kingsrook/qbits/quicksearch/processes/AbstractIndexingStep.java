@@ -138,7 +138,7 @@ public abstract class AbstractIndexingStep implements BackendStep
 
 
    /*******************************************************************************
-    ** Make sure a quickSearchIndex row exists for the table. The table's unique
+    ** Make sure a quick_search_index row exists for the table. The table's unique
     ** key on tableName makes a concurrent first insert fail, which is handled by
     ** re-querying.
     *******************************************************************************/
@@ -183,7 +183,7 @@ public abstract class AbstractIndexingStep implements BackendStep
 
 
    /*******************************************************************************
-    ** The quickSearchIndex row for a table, or null.
+    ** The quick_search_index row for a table, or null.
     *******************************************************************************/
    protected QRecord queryIndexRow(String tableName) throws QException
    {
@@ -197,7 +197,7 @@ public abstract class AbstractIndexingStep implements BackendStep
 
 
    /*******************************************************************************
-    ** The id of the quickSearchIndex row for a table.
+    ** The id of the quick_search_index row for a table.
     *******************************************************************************/
    protected Integer queryIndexId(String tableName) throws QException
    {
@@ -329,7 +329,7 @@ public abstract class AbstractIndexingStep implements BackendStep
       InsertOutput insertOutput = new InsertAction().execute(insertInput);
       if(insertOutput.getRecords().isEmpty())
       {
-         throw new QException("Failed to create quickSearchIndexRun record: no record returned from insert");
+         throw new QException("Failed to create quick_search_index_run record: no record returned from insert");
       }
 
       QRecord inserted = insertOutput.getRecords().get(0);
@@ -440,7 +440,7 @@ public abstract class AbstractIndexingStep implements BackendStep
 
 
    /*******************************************************************************
-    ** Update fields on a quickSearchIndex row.
+    ** Update fields on a quick_search_index row.
     *******************************************************************************/
    protected void updateIndexRow(Integer indexId, Map<String, ? extends Serializable> values) throws QException
    {
@@ -577,8 +577,8 @@ public abstract class AbstractIndexingStep implements BackendStep
 
       Instant cutoff = Instant.now().minus(retentionDays, ChronoUnit.DAYS);
       purgeOlderThan(getConfigOrNull().getQuickSearchIndexRunTableName(), "startTime", cutoff, retentionDays);
-      purgeOlderThan(getConfigOrNull().applyPrefix(QuickSearchDiagnosticEvent.TABLE_NAME), "createDate", cutoff, retentionDays);
-      purgeOlderThan(getConfigOrNull().applyPrefix(QuickSearchValidationRun.TABLE_NAME), "createDate", cutoff, retentionDays);
+      purgeOlderThan(getConfigOrNull().applyTablePrefix(QuickSearchDiagnosticEvent.TABLE_NAME), "createDate", cutoff, retentionDays);
+      purgeOlderThan(getConfigOrNull().applyTablePrefix(QuickSearchValidationRun.TABLE_NAME), "createDate", cutoff, retentionDays);
    }
 
 

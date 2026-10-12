@@ -61,7 +61,7 @@ import static com.kingsrook.qqq.backend.core.logging.LogUtils.logPair;
  ** are replayed in the same run) and replays failed real-time events, and
  ** afterwards purges old run history.
  **
- ** The watermark stored on the quickSearchIndex row is the run's start time,
+ ** The watermark stored on the quick_search_index row is the run's start time,
  ** captured before the first query, so rows modified during the run are read
  ** again next time (re-indexing is idempotent). A table without a timestamp
  ** field is left to the reconcile process.
@@ -118,7 +118,7 @@ public class BasepullIndexStep extends AbstractIndexingStep
 
       if(CollectionUtils.nullSafeIsEmpty(indexRecords))
       {
-         LOG.info("No enabled quickSearchIndex rows found; nothing to basepull");
+         LOG.info("No enabled quick_search_index rows found; nothing to basepull");
          purgeOldRuns();
          return;
       }
@@ -196,7 +196,7 @@ public class BasepullIndexStep extends AbstractIndexingStep
 
       if(tableConfig == null)
       {
-         String message = "Table is no longer configured for Quick Search; disable or remove its quickSearchIndex row";
+         String message = "Table is no longer configured for Quick Search; disable or remove its quick_search_index row";
          completeRunRecord(run, RUN_FAILED, 0, 0, 1, message);
          throw (new QException(tableName + ": " + message));
       }
@@ -277,7 +277,7 @@ public class BasepullIndexStep extends AbstractIndexingStep
    void replayFailedEvents(RunBackendStepOutput output) throws QException
    {
       QuickSearchQBitConfig config          = getConfig();
-      String                failedEventTable = config.applyPrefix(QuickSearchFailedEvent.TABLE_NAME);
+      String                failedEventTable = config.applyTablePrefix(QuickSearchFailedEvent.TABLE_NAME);
 
       QueryInput queryInput = new QueryInput();
       queryInput.setTableName(failedEventTable);

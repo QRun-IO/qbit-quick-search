@@ -25,7 +25,7 @@ import com.kingsrook.qbits.quicksearch.QuickSearchQBitConfig;
 
 
 /*******************************************************************************
- ** Produces the quickSearchIndex table.
+ ** Produces the quick_search_index table.
  *******************************************************************************/
 public class QuickSearchIndexTableMetaDataProducer extends QBitComponentMetaDataProducer<QTableMetaData, QuickSearchQBitConfig>
 {

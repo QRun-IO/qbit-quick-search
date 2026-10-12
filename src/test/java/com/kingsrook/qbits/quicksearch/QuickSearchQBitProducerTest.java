@@ -200,13 +200,13 @@ class QuickSearchQBitProducerTest
 
       producer.produce(qInstance);
 
-      assertThat(qInstance.getTable("quickSearchIndex")).isNotNull();
-      assertThat(qInstance.getTable("quickSearchIndex").getBackendName()).isEqualTo(BACKEND_NAME);
-      assertThat(qInstance.getTable("quickSearchIndex").getPrimaryKeyField()).isEqualTo("id");
+      assertThat(qInstance.getTable("quick_search_index")).isNotNull();
+      assertThat(qInstance.getTable("quick_search_index").getBackendName()).isEqualTo(BACKEND_NAME);
+      assertThat(qInstance.getTable("quick_search_index").getPrimaryKeyField()).isEqualTo("id");
 
-      assertThat(qInstance.getTable("quickSearchIndexRun")).isNotNull();
-      assertThat(qInstance.getTable("quickSearchIndexRun").getBackendName()).isEqualTo(BACKEND_NAME);
-      assertThat(qInstance.getTable("quickSearchIndexRun").getPrimaryKeyField()).isEqualTo("id");
+      assertThat(qInstance.getTable("quick_search_index_run")).isNotNull();
+      assertThat(qInstance.getTable("quick_search_index_run").getBackendName()).isEqualTo(BACKEND_NAME);
+      assertThat(qInstance.getTable("quick_search_index_run").getPrimaryKeyField()).isEqualTo("id");
    }
 
 
@@ -228,8 +228,8 @@ class QuickSearchQBitProducerTest
 
       producer.produce(qInstance);
 
-      assertThat(qInstance.getTable("myApp_quickSearchIndex")).isNotNull();
-      assertThat(qInstance.getTable("myApp_quickSearchIndexRun")).isNotNull();
+      assertThat(qInstance.getTable("my_app_quick_search_index")).isNotNull();
+      assertThat(qInstance.getTable("my_app_quick_search_index_run")).isNotNull();
       assertThat(qInstance.getProcess("myApp_" + QuickSearchQBitProducer.BASEPULL_PROCESS_NAME)).isNotNull();
       assertThat(qInstance.getProcess("myApp_" + QuickSearchQBitProducer.FULL_REINDEX_PROCESS_NAME)).isNotNull();
       assertThat(qInstance.getProcess("myApp_" + QuickSearchQBitProducer.RECONCILE_PROCESS_NAME)).isNotNull();
@@ -612,7 +612,7 @@ class QuickSearchQBitProducerTest
 
       producer.produce(qInstance);
 
-      QTableMetaData indexTable = qInstance.getTable("quickSearchIndex");
+      QTableMetaData indexTable = qInstance.getTable("quick_search_index");
       assertThat(indexTable.getFields()).containsKey("id");
       assertThat(indexTable.getFields()).containsKey("tableName");
       assertThat(indexTable.getFields()).containsKey("enabled");
@@ -626,7 +626,7 @@ class QuickSearchQBitProducerTest
       assertThat(indexTable.getFields()).containsKey("createDate");
       assertThat(indexTable.getFields()).containsKey("modifyDate");
 
-      QTableMetaData indexRunTable = qInstance.getTable("quickSearchIndexRun");
+      QTableMetaData indexRunTable = qInstance.getTable("quick_search_index_run");
       assertThat(indexRunTable.getFields()).containsKey("id");
       assertThat(indexRunTable.getFields()).containsKey("quickSearchIndexId");
       assertThat(indexRunTable.getFields()).containsKey("runType");
@@ -697,9 +697,9 @@ class QuickSearchQBitProducerTest
       assertThat(config.getRuntime()).isNotNull();
       assertThat(QuickSearchRuntime.get()).isSameAs(config.getRuntime());
 
-      assertThat(qInstance.getTable("quickSearchIndex").getSourceQBitName()).isEqualTo(qBit.getName());
+      assertThat(qInstance.getTable("quick_search_index").getSourceQBitName()).isEqualTo(qBit.getName());
       assertThat(qInstance.getProcess(QuickSearchQBitProducer.BASEPULL_PROCESS_NAME).getSourceQBitName()).isEqualTo(qBit.getName());
-      assertThat(qInstance.getTable("quickSearchFailedEvent")).isNotNull();
+      assertThat(qInstance.getTable("quick_search_failed_event")).isNotNull();
    }
 
 
@@ -712,10 +712,10 @@ class QuickSearchQBitProducerTest
       new QuickSearchQBitProducer().withConfig(buildValidConfig()).produce(qInstance);
 
       assertThat(qInstance.getProcess(QuickSearchQBitProducer.FULL_REINDEX_PROCESS_NAME).getPermissionRules().getLevel()).isEqualTo(PermissionLevel.HAS_ACCESS_PERMISSION);
-      assertThat(qInstance.getProcess(QuickSearchQBitProducer.FULL_REINDEX_PROCESS_NAME).getPermissionRules().getPermissionBaseName()).isEqualTo("quickSearchAdmin");
+      assertThat(qInstance.getProcess(QuickSearchQBitProducer.FULL_REINDEX_PROCESS_NAME).getPermissionRules().getPermissionBaseName()).isEqualTo("quick_search_admin");
       assertThat(qInstance.getApp(QuickSearchQBitProducer.APP_NAME).getPermissionRules().getLevel()).isEqualTo(PermissionLevel.HAS_ACCESS_PERMISSION);
-      assertThat(qInstance.getTable("quickSearchIndex").getPermissionRules().getLevel()).isEqualTo(PermissionLevel.READ_WRITE_PERMISSIONS);
-      assertThat(qInstance.getTable("quickSearchIndex").getUniqueKeys()).anyMatch(uk -> uk.getFieldNames().equals(List.of("tableName")));
+      assertThat(qInstance.getTable("quick_search_index").getPermissionRules().getLevel()).isEqualTo(PermissionLevel.READ_WRITE_PERMISSIONS);
+      assertThat(qInstance.getTable("quick_search_index").getUniqueKeys()).anyMatch(uk -> uk.getFieldNames().equals(List.of("tableName")));
    }
 
 

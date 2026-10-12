@@ -43,12 +43,12 @@ public class QuickSearchTableMetaDataHelper
 {
 
    /*******************************************************************************
-    ** quickSearchIndex: one row per indexed table.
+    ** quick_search_index: one row per indexed table.
     *******************************************************************************/
    public static QTableMetaData buildIndexTable(QuickSearchQBitConfig config)
    {
       return (new QTableMetaData()
-         .withName(config.applyPrefix(QuickSearchIndex.TABLE_NAME))
+         .withName(config.applyTablePrefix(QuickSearchIndex.TABLE_NAME))
          .withLabel("Quick Search Index")
          .withIcon(new QIcon("manage_search"))
          .withBackendName(config.getBackendName())
@@ -78,12 +78,12 @@ public class QuickSearchTableMetaDataHelper
 
 
    /*******************************************************************************
-    ** quickSearchIndexRun: history of basepull, reindex and reconcile runs.
+    ** quick_search_index_run: history of basepull, reindex and reconcile runs.
     *******************************************************************************/
    public static QTableMetaData buildIndexRunTable(QuickSearchQBitConfig config)
    {
       return (new QTableMetaData()
-         .withName(config.applyPrefix(QuickSearchIndexRun.TABLE_NAME))
+         .withName(config.applyTablePrefix(QuickSearchIndexRun.TABLE_NAME))
          .withLabel("Quick Search Index Run")
          .withIcon(new QIcon("history"))
          .withBackendName(config.getBackendName())
@@ -91,7 +91,7 @@ public class QuickSearchTableMetaDataHelper
          .withPermissionRules(config.getTablePermissionRules() == null ? null : config.getTablePermissionRules().clone())
          .withField(new QFieldMetaData("id", QFieldType.INTEGER).withIsEditable(false))
          .withField(new QFieldMetaData("quickSearchIndexId", QFieldType.INTEGER).withIsEditable(false)
-            .withPossibleValueSourceName(config.applyPrefix(QuickSearchIndex.TABLE_NAME)))
+            .withPossibleValueSourceName(config.applyTablePrefix(QuickSearchIndex.TABLE_NAME)))
          .withField(new QFieldMetaData("runType", QFieldType.STRING).withIsEditable(false))
          .withField(new QFieldMetaData("status", QFieldType.STRING).withIsEditable(false))
          .withField(new QFieldMetaData("startTime", QFieldType.DATE_TIME).withIsEditable(false))
@@ -107,13 +107,13 @@ public class QuickSearchTableMetaDataHelper
 
 
    /*******************************************************************************
-    ** quickSearchFailedEvent: real-time index or delete events that could not
+    ** quick_search_failed_event: real-time index or delete events that could not
     ** reach OpenSearch, replayed by the scheduled basepull.
     *******************************************************************************/
    public static QTableMetaData buildFailedEventTable(QuickSearchQBitConfig config)
    {
       return (new QTableMetaData()
-         .withName(config.applyPrefix(QuickSearchFailedEvent.TABLE_NAME))
+         .withName(config.applyTablePrefix(QuickSearchFailedEvent.TABLE_NAME))
          .withLabel("Quick Search Failed Event")
          .withIcon(new QIcon("error_outline"))
          .withBackendName(config.getBackendName())
@@ -133,7 +133,7 @@ public class QuickSearchTableMetaDataHelper
 
 
    /*******************************************************************************
-    ** quickSearchDiagnosticEvent: failed searches, diagnostic tool runs (the
+    ** quick_search_diagnostic_event: failed searches, diagnostic tool runs (the
     ** audit trail) and refused runs. Written by the QBit only: insert, update
     ** and delete are disabled for users and the API (core actions, which the
     ** QBit uses, do not check capabilities).
@@ -141,7 +141,7 @@ public class QuickSearchTableMetaDataHelper
    public static QTableMetaData buildDiagnosticEventTable(QuickSearchQBitConfig config)
    {
       return (new QTableMetaData()
-         .withName(config.applyPrefix(QuickSearchDiagnosticEvent.TABLE_NAME))
+         .withName(config.applyTablePrefix(QuickSearchDiagnosticEvent.TABLE_NAME))
          .withLabel("Quick Search Diagnostic Event")
          .withoutCapabilities(Capability.TABLE_INSERT, Capability.TABLE_UPDATE, Capability.TABLE_DELETE)
          .withIcon(new QIcon("bug_report"))
@@ -171,7 +171,7 @@ public class QuickSearchTableMetaDataHelper
 
 
    /*******************************************************************************
-    ** quickSearchValidationRun: index validation reports (history). The
+    ** quick_search_validation_run: index validation reports (history). The
     ** report is an HTML field, shown in full on the record view; only the
     ** QBit writes rows (insert, update and delete are disabled for users and
     ** the API), so the HTML is always the QBit's escaped output.
@@ -179,7 +179,7 @@ public class QuickSearchTableMetaDataHelper
    public static QTableMetaData buildValidationRunTable(QuickSearchQBitConfig config)
    {
       return (new QTableMetaData()
-         .withName(config.applyPrefix(QuickSearchValidationRun.TABLE_NAME))
+         .withName(config.applyTablePrefix(QuickSearchValidationRun.TABLE_NAME))
          .withLabel("Quick Search Validation Run")
          .withoutCapabilities(Capability.TABLE_INSERT, Capability.TABLE_UPDATE, Capability.TABLE_DELETE)
          .withIcon(new QIcon("fact_check"))
@@ -212,12 +212,12 @@ public class QuickSearchTableMetaDataHelper
 
 
    /*******************************************************************************
-    ** Possible value source over quickSearchIndex, so run rows show the table
+    ** Possible value source over quick_search_index, so run rows show the table
     ** name instead of an id.
     *******************************************************************************/
    public static QPossibleValueSource buildIndexPossibleValueSource(QuickSearchQBitConfig config)
    {
-      return (QPossibleValueSource.newForTable(config.applyPrefix(QuickSearchIndex.TABLE_NAME)));
+      return (QPossibleValueSource.newForTable(config.applyTablePrefix(QuickSearchIndex.TABLE_NAME)));
    }
 
 }

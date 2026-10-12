@@ -31,7 +31,7 @@ import static com.kingsrook.qqq.backend.core.logging.LogUtils.logPair;
 /*******************************************************************************
  ** Shared pieces of the diagnostic tools: tool names, the current user, the
  ** per-user rate limit, and recording tool runs and search failures as
- ** quickSearchDiagnosticEvent rows (the audit trail).
+ ** quick_search_diagnostic_event rows (the audit trail).
  *******************************************************************************/
 public final class DiagnosticsSupport
 {

@@ -103,7 +103,7 @@ public class ValidateIndexStep extends AbstractDiagnosticToolStep
 
          String link = runId == null
             ? "<p><em>The report was not saved (the validation run table is not configured or the insert failed; see the log).</em></p>"
-            : "<p>Saved as <a href=\"/app/" + DiagnosticsHtml.escape(config.applyPrefix(QuickSearchValidationRun.TABLE_NAME)) + "/" + runId + "\">validation run #" + runId + "</a>.</p>";
+            : "<p>Saved as <a href=\"/app/" + DiagnosticsHtml.escape(config.applyTablePrefix(QuickSearchValidationRun.TABLE_NAME)) + "/" + runId + "\">validation run #" + runId + "</a>.</p>";
          setHtml(output, STEP_RESULT, IndexValidator.render(report) + link);
          output.addValue(FIELD_RUN_ID, runId);
          output.addValue("status", report.status());

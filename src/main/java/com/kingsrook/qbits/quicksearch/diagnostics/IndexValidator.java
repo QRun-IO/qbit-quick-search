@@ -72,11 +72,11 @@ import static com.kingsrook.qqq.backend.core.logging.LogUtils.logPair;
  ** - per table: database rows vs indexed documents, a sample of records
  **   (the lowest and highest primary keys) checked present and current in
  **   the index, a random sample of documents checked to still have a record,
- **   the quickSearchIndex row's status and last run, failed events waiting.
+ **   the quick_search_index row's status and last run, failed events waiting.
  ** Database reads run as the system user, so counts compare like with like
  ** (the index holds every row whatever the record locks). The report holds
  ** counts, ids and field names, never record values. Read-only, except that
- ** persist() saves the report as a quickSearchValidationRun row.
+ ** persist() saves the report as a quick_search_validation_run row.
  *******************************************************************************/
 public class IndexValidator
 {
@@ -622,7 +622,7 @@ public class IndexValidator
    {
       try
       {
-         String failedTable = runtime.getConfig().applyPrefix(QuickSearchFailedEvent.TABLE_NAME);
+         String failedTable = runtime.getConfig().applyTablePrefix(QuickSearchFailedEvent.TABLE_NAME);
          if(QContext.getQInstance().getTable(failedTable) == null)
          {
             return;
@@ -646,13 +646,13 @@ public class IndexValidator
 
 
    /*******************************************************************************
-    ** Save a report as a quickSearchValidationRun row (as the system user);
+    ** Save a report as a quick_search_validation_run row (as the system user);
     ** returns its id, or null when the table is not configured or the insert
     ** fails (logged).
     *******************************************************************************/
    public Integer persist(QuickSearchRuntime runtime, Report report, String triggerType, String userName)
    {
-      String tableName = runtime.getConfig().applyPrefix(QuickSearchValidationRun.TABLE_NAME);
+      String tableName = runtime.getConfig().applyTablePrefix(QuickSearchValidationRun.TABLE_NAME);
       if(QContext.getQInstance() == null || QContext.getQInstance().getTable(tableName) == null)
       {
          return (null);

@@ -116,7 +116,7 @@ public class QuickSearchDiagnosticsWidgetRenderer extends AbstractWidgetRenderer
     *******************************************************************************/
    private static void renderRecentFailures(DiagnosticsHtml html, QuickSearchQBitConfig config)
    {
-      String tableName = config.applyPrefix(QuickSearchDiagnosticEvent.TABLE_NAME);
+      String tableName = config.applyTablePrefix(QuickSearchDiagnosticEvent.TABLE_NAME);
       html.subheading("Recent search failures (all servers)");
       if(QContext.getQInstance().getTable(tableName) == null)
       {
@@ -161,7 +161,7 @@ public class QuickSearchDiagnosticsWidgetRenderer extends AbstractWidgetRenderer
     *******************************************************************************/
    private static void renderLastValidation(DiagnosticsHtml html, QuickSearchQBitConfig config)
    {
-      String tableName = config.applyPrefix(QuickSearchValidationRun.TABLE_NAME);
+      String tableName = config.applyTablePrefix(QuickSearchValidationRun.TABLE_NAME);
       html.subheading("Latest index validation");
       if(QContext.getQInstance().getTable(tableName) == null)
       {

@@ -23,7 +23,7 @@ import com.kingsrook.qqq.backend.core.model.data.QRecordEntity;
 
 
 /*******************************************************************************
- ** Entity bean for the quickSearchIndexRun table.
+ ** Entity bean for the quick_search_index_run table.
  **
  ** Records a single execution of the indexing process for a given
  ** QuickSearchIndex, capturing run type, timing, record counts, and any errors
@@ -31,7 +31,11 @@ import com.kingsrook.qqq.backend.core.model.data.QRecordEntity;
  *******************************************************************************/
 public class QuickSearchIndexRun extends QRecordEntity
 {
-   public static final String TABLE_NAME = "quickSearchIndexRun";
+   public static final String TABLE_NAME = "quick_search_index_run";
+
+   /** Table name before 1.1.0-RC.3 (camelCase). Kept only for upgrade scripts; see docs/MIGRATION-1.1.md. */
+   @Deprecated(since = "1.1.0-RC.3")
+   public static final String LEGACY_TABLE_NAME = "quickSearchIndexRun";
 
    @QField()
    private Integer id;

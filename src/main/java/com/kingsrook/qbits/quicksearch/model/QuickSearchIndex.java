@@ -23,7 +23,7 @@ import com.kingsrook.qqq.backend.core.model.data.QRecordEntity;
 
 
 /*******************************************************************************
- ** Entity bean for the quickSearchIndex table.
+ ** Entity bean for the quick_search_index table.
  **
  ** Tracks configuration for each table that participates in the quick search
  ** index, including basepull scheduling, searchable field definitions, and
@@ -31,7 +31,11 @@ import com.kingsrook.qqq.backend.core.model.data.QRecordEntity;
  *******************************************************************************/
 public class QuickSearchIndex extends QRecordEntity
 {
-   public static final String TABLE_NAME = "quickSearchIndex";
+   public static final String TABLE_NAME = "quick_search_index";
+
+   /** Table name before 1.1.0-RC.3 (camelCase). Kept only for upgrade scripts; see docs/MIGRATION-1.1.md. */
+   @Deprecated(since = "1.1.0-RC.3")
+   public static final String LEGACY_TABLE_NAME = "quickSearchIndex";
 
    @QField()
    private Integer id;

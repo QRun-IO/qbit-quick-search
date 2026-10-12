@@ -31,13 +31,13 @@ Integration tests use `@ExtendWith(RequiresDockerCondition.class)`: skipped with
 - `QuickSearchRuntime` - Instance-scoped live state (discovered tables, lazy client, publisher, enabled cache), held on the config and resolved via `QuickSearchRuntime.get()` from `QContext`. `QuickSearchQBitContext` is a deprecated static facade over it.
 - `opensearch/QuickSearchOpenSearchClient` - All OpenSearch operations; the configured index name is an alias over `{alias}-v2-{epoch}` physical indexes (mapping v2, `_meta.quickSearchMappingVersion`); versioned bulk writes (`external_gte`); alias swap; wraps every error in `QException`.
 - `opensearch/OpenSearchTransportFactory` - Builds the transport for `NONE`/`BASIC` (Apache HttpClient 5 with TLS, timeouts, customizer SPI) or `AWS_SIGV4` (`AwsSdk2Transport`); resolves `${env.X}` secrets.
-- `listeners/QuickSearchRecordChangeListener` - Real-time path: builds events in the write's transaction, publishes after commit, records failures in `quickSearchFailedEvent`.
+- `listeners/QuickSearchRecordChangeListener` - Real-time path: builds events in the write's transaction, publishes after commit, records failures in `quick_search_failed_event`.
 - `processes/AbstractIndexingStep` - Keyset paging by primary key with display values, run records, drift detection, run purge. `BasepullIndexStep` (replays failed events, start-anchored watermark with overlap), `ReconcileIndexStep` (in place, orphan sweep), `FullReindexStep` (all tables: new physical index plus alias swap; one table: reconcile algorithm).
 - `actions/QuickSearchAction` - Permission-aware search (table READ filter, `QueryAction` post-filter), bounds, `tableNames`, `limitPerTable`, `tableLabel`.
 - `actions/QuickSearchRecordSearchProvider` - QQQ core `RecordSearchProviderInterface` (`POST /qqq/v1/search`): claims indexed, enabled tables; one `_msearch` per call returning ordered record ids per table; bounded by `recordSearchTimeoutMillis`; failures make core fall back and start a 30 s backoff (`QuickSearchRuntime.markRecordSearchFailed`). Registered, with default table `searchFields`, when `serveCoreRecordSearch` is true.
 - `metadata/*` - Component producers and the table/process helpers.
 
-**Tables Produced:** `quickSearchIndex`, `quickSearchIndexRun`, `quickSearchFailedEvent` (plus a PVS over `quickSearchIndex`).
+**Tables Produced:** `quick_search_index`, `quick_search_index_run`, `quick_search_failed_event` (plus a PVS over `quick_search_index`).
 
 **Annotation Discovery:** `@QuickSearchable(tableName = "...")` on entity classes; `@QuickSearchField(weight, includeLabel)` on fields; hidden fields are excluded.
 

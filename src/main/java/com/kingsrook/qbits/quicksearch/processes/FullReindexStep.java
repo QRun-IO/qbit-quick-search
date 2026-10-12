@@ -69,7 +69,7 @@ import static com.kingsrook.qqq.backend.core.logging.LogUtils.logPair;
  ** While the new index is built, real-time writes still go through the alias
  ** to the old one. Updates are caught by the next basepull (lastBasepullTime
  ** is set to each table's start). Deletes are caught here: each table's
- ** quickSearchIndex row is REBUILDING for the whole rebuild, which makes the
+ ** quick_search_index row is REBUILDING for the whole rebuild, which makes the
  ** record change listener (on any node) also record each delete as an
  ** AWAITING_REINDEX failed event. Once the rebuild's own writes are done and
  ** the alias is swapped, those deletes are applied through the alias.
@@ -479,7 +479,7 @@ public class FullReindexStep extends AbstractIndexingStep
    private void handCapturedDeletesToBasepull(Serializable lastCapturedId) throws QException
    {
       QuickSearchQBitConfig config           = getConfig();
-      String                failedEventTable = config.applyPrefix(QuickSearchFailedEvent.TABLE_NAME);
+      String                failedEventTable = config.applyTablePrefix(QuickSearchFailedEvent.TABLE_NAME);
       Serializable          afterId          = null;
       Integer               handedOver       = 0;
 
@@ -646,7 +646,7 @@ public class FullReindexStep extends AbstractIndexingStep
 
 
    /*******************************************************************************
-    ** Every quickSearchIndex row that is REBUILDING.
+    ** Every quick_search_index row that is REBUILDING.
     *******************************************************************************/
    private List<QRecord> queryRebuildingIndexRows() throws QException
    {
@@ -665,7 +665,7 @@ public class FullReindexStep extends AbstractIndexingStep
    private Serializable queryLastCapturedDeleteId() throws QException
    {
       QueryInput queryInput = new QueryInput();
-      queryInput.setTableName(getConfig().applyPrefix(QuickSearchFailedEvent.TABLE_NAME));
+      queryInput.setTableName(getConfig().applyTablePrefix(QuickSearchFailedEvent.TABLE_NAME));
       queryInput.setFilter(new QQueryFilter(new QFilterCriteria("status", QCriteriaOperator.EQUALS, QuickSearchFailedEvent.STATUS_AWAITING_REINDEX))
          .withOrderBy(new QFilterOrderBy("id", false))
          .withLimit(1));
@@ -757,7 +757,7 @@ public class FullReindexStep extends AbstractIndexingStep
       try
       {
          QuickSearchQBitConfig config           = getConfig();
-         String                failedEventTable = config.applyPrefix(QuickSearchFailedEvent.TABLE_NAME);
+         String                failedEventTable = config.applyTablePrefix(QuickSearchFailedEvent.TABLE_NAME);
          Serializable          lastCapturedId   = queryLastCapturedDeleteId();
          Serializable          afterId          = null;
 

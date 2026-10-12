@@ -25,7 +25,7 @@ import com.kingsrook.qbits.quicksearch.QuickSearchQBitConfig;
 
 
 /*******************************************************************************
- ** Produces the quickSearchValidationRun table when enableDiagnosticTools is true.
+ ** Produces the quick_search_validation_run table when enableDiagnosticTools is true.
  *******************************************************************************/
 public class QuickSearchValidationRunTableMetaDataProducer extends QBitComponentMetaDataProducer<QTableMetaData, QuickSearchQBitConfig>
 {

@@ -25,7 +25,7 @@ import com.kingsrook.qbits.quicksearch.QuickSearchQBitConfig;
 
 
 /*******************************************************************************
- ** Produces the quickSearchDiagnosticEvent table when enableDiagnosticTools is true.
+ ** Produces the quick_search_diagnostic_event table when enableDiagnosticTools is true.
  *******************************************************************************/
 public class QuickSearchDiagnosticEventTableMetaDataProducer extends QBitComponentMetaDataProducer<QTableMetaData, QuickSearchQBitConfig>
 {

@@ -227,7 +227,7 @@ public class QuickSearchDeveloperPanelProvider implements DeveloperPanelProvider
       /////////////////////////////////
       // failed index events, if any //
       /////////////////////////////////
-      String failedTable = config.applyPrefix(QuickSearchFailedEvent.TABLE_NAME);
+      String failedTable = config.applyTablePrefix(QuickSearchFailedEvent.TABLE_NAME);
       if(recordId != null && mayRead(failedTable))
       {
          DeveloperPanelBlock failedBlock = failedEventsBlock(failedTable, tableName, recordId);
