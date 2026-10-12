@@ -249,6 +249,12 @@ See [docs/MIGRATION-1.1.md](docs/MIGRATION-1.1.md). In short: 1.1 needs the QQQ 
 
 See [docs/MIGRATION-1.0.md](docs/MIGRATION-1.0.md). In short: QQQ 4.1 is required, remove any manual `addQBit` for this QBit, set `schedulerName`, prefer `opensearchUrl` and `${env.}` secrets, grant `quickSearchAdmin.hasAccess` and the table permissions, add the new operational table columns and `quickSearchFailedEvent`, and run a full reindex once so the index gets the new mapping.
 
+## Adopting in another app
+
+Follow [Getting started](#getting-started), the [Configuration reference](#configuration-reference) and [Operational tables](#operational-tables) (the host application creates the three tables; this QBit ships no DDL), then run a full reindex. Hosts on 1.0 or 0.x should read the upgrade sections above.
+
+See also the [QQQ adoption checklist](https://github.com/QRun-IO/qqq/blob/develop/docs/migration/adoption-checklist.adoc) for the full per-feature list (QQQ upgrade, Next dashboard, QBits, migrations, permissions).
+
 ## License
 
 Apache License, Version 2.0. See [LICENSE](LICENSE).
