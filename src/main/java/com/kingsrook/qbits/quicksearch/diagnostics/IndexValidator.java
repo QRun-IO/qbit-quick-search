@@ -601,7 +601,7 @@ public class IndexValidator
          }
          else if(AbstractIndexingStep.STATUS_REBUILDING.equals(status))
          {
-            findings.add(new Finding(tableName, "Index row", Level.WARN, "Status REBUILDING: a full reindex is running, or one was killed (then run it again)."));
+            findings.add(new Finding(tableName, "Index row", Level.WARN, "Status REBUILDING: a full reindex is running. If it was killed, basepull returns the table to ACTIVE once its run records show no sign of life for fullReindexStaleMinutes."));
          }
          if(AbstractIndexingStep.RUN_FAILED.equals(lastRun))
          {
