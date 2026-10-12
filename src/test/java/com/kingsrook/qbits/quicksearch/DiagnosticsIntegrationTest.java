@@ -20,6 +20,9 @@ package com.kingsrook.qbits.quicksearch;
 import java.time.Instant;
 import java.util.List;
 import java.util.Map;
+import com.kingsrook.qqq.backend.core.actions.developer.DeveloperPanelsAction;
+import com.kingsrook.qqq.backend.core.actions.permissions.PermissionsHelper;
+import com.kingsrook.qqq.backend.core.actions.permissions.TablePermissionSubType;
 import com.kingsrook.qqq.backend.core.actions.processes.RunProcessAction;
 import com.kingsrook.qqq.backend.core.actions.tables.InsertAction;
 import com.kingsrook.qqq.backend.core.actions.tables.QueryAction;
@@ -33,6 +36,8 @@ import com.kingsrook.qqq.backend.core.model.actions.tables.insert.InsertInput;
 import com.kingsrook.qqq.backend.core.model.actions.tables.query.QueryInput;
 import com.kingsrook.qqq.backend.core.model.actions.tables.update.UpdateInput;
 import com.kingsrook.qqq.backend.core.model.data.QRecord;
+import com.kingsrook.qqq.backend.core.model.developer.DeveloperPanel;
+import com.kingsrook.qqq.backend.core.model.developer.DeveloperPanelContext;
 import com.kingsrook.qqq.backend.core.model.metadata.QAuthenticationType;
 import com.kingsrook.qqq.backend.core.model.metadata.QBackendMetaData;
 import com.kingsrook.qqq.backend.core.model.metadata.QInstance;
@@ -47,6 +52,7 @@ import com.kingsrook.qbits.quicksearch.diagnostics.AnalyzerTester;
 import com.kingsrook.qbits.quicksearch.diagnostics.DiagnosticsHtml.Check;
 import com.kingsrook.qbits.quicksearch.diagnostics.DiagnosticsHtml.Level;
 import com.kingsrook.qbits.quicksearch.diagnostics.IndexValidator;
+import com.kingsrook.qbits.quicksearch.diagnostics.QuickSearchDeveloperPanelProvider;
 import com.kingsrook.qbits.quicksearch.diagnostics.RecordInspector;
 import com.kingsrook.qbits.quicksearch.diagnostics.RecordReindexer;
 import com.kingsrook.qbits.quicksearch.diagnostics.SearchPathDiagnosis;
@@ -279,6 +285,35 @@ class DiagnosticsIntegrationTest
 
       RecordInspector.Inspection none = new RecordInspector().inspect(runtime, PRODUCT, "999", null, new QueryInput());
       assertThat(none.verdict()).isEqualTo(RecordInspector.VERDICT_NO_RECORD);
+   }
+
+
+
+   @Test
+   @Order(3)
+   void testDeveloperPanel_currentRecordIsIndexed() throws Exception
+   {
+      QSession previous = QContext.getQSession();
+      try
+      {
+         QContext.setQSession(new QSession()
+            .withPermission(PermissionsHelper.getTablePermissionName(runtime.getConfig().getQuickSearchIndexTableName(), TablePermissionSubType.READ))
+            .withPermission(QuickSearchQBitConfig.DEFAULT_DEBUG_PERMISSION_BASE_NAME + ".hasAccess"));
+
+         DeveloperPanelContext context = new DeveloperPanelContext()
+            .withTable(QContext.getQInstance().getTable(PRODUCT))
+            .withRecord(new QRecord().withValue("id", 1));
+         DeveloperPanel panel = new DeveloperPanelsAction().execute(context).stream()
+            .filter(p -> QuickSearchDeveloperPanelProvider.ID.equals(p.getId())).findFirst().orElseThrow();
+
+         assertThat(panel.getError()).isNull();
+         assertThat(panel.getStatusLabel()).isEqualTo(QuickSearchDeveloperPanelProvider.STATUS_INDEXED);
+         assertThat(panel.getBlocks()).anyMatch(block -> "Database vs index".equals(block.getLabel()) && block.getRows().stream().allMatch(row -> "yes".equals(row.get(3))));
+      }
+      finally
+      {
+         QContext.setQSession(previous);
+      }
    }
 
 

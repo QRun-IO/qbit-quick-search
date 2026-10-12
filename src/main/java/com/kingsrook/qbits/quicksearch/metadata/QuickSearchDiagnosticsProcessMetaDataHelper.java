@@ -217,8 +217,8 @@ public class QuickSearchDiagnosticsProcessMetaDataHelper
       processes.add(buildPlaygroundProcess(config));
       processes.add(buildValidateProcess(config));
       processes.add(buildAnalyzeProcess(config));
-      processes.add(buildInspectProcess(config, config.applyPrefix(QuickSearchFailedEvent.TABLE_NAME)));
-      processes.add(buildReindexRecordsProcess(config, config.applyPrefix(QuickSearchFailedEvent.TABLE_NAME)));
+      processes.add(buildInspectProcess(config, config.applyTablePrefix(QuickSearchFailedEvent.TABLE_NAME)));
+      processes.add(buildReindexRecordsProcess(config, config.applyTablePrefix(QuickSearchFailedEvent.TABLE_NAME)));
       return (processes);
    }
 

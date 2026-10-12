@@ -40,7 +40,11 @@ import com.kingsrook.qbits.quicksearch.annotations.QuickSearchable;
  *******************************************************************************/
 public class QuickSearchSearchableTablePossibleValueSourceProducer extends QBitComponentMetaDataProducer<QPossibleValueSource, QuickSearchQBitConfig>
 {
-   public static final String NAME = "quickSearchSearchableTable";
+   public static final String NAME = "quick_search_searchable_table";
+
+   /** Possible-value source name before 1.1.0-RC.3 (camelCase). */
+   @Deprecated(since = "1.1.0-RC.3")
+   public static final String LEGACY_NAME = "quickSearchSearchableTable";
 
 
 
@@ -78,7 +82,7 @@ public class QuickSearchSearchableTablePossibleValueSourceProducer extends QBitC
       }
 
       return (new QPossibleValueSource()
-         .withName(config.applyPrefix(NAME))
+         .withName(config.applyTablePrefix(NAME))
          .withType(QPossibleValueSourceType.ENUM)
          .withEnumValues(values));
    }

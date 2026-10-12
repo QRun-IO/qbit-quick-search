@@ -66,13 +66,13 @@ import static com.kingsrook.qqq.backend.core.logging.LogUtils.logPair;
  ** This listener never fails the host's write. When the re-read of inserted or
  ** updated records or publishing fails (including a LinkageError from a missing
  ** optional library while the client is built), each affected (table, record,
- ** action) is written to quickSearchFailedEvent for the scheduled basepull to
+ ** action) is written to quick_search_failed_event for the scheduled basepull to
  ** replay. A failed re-read is recorded after the commit too, so a rolled-back
  ** write leaves no row.
  **
  ** While a full reindex rebuilds into a new physical index, the alias still
  ** points at the old one, so a published delete never reaches the new index.
- ** Such deletes are also written to quickSearchFailedEvent with status
+ ** Such deletes are also written to quick_search_failed_event with status
  ** AWAITING_REINDEX; the reindex applies them after the alias swap.
  *******************************************************************************/
 public class QuickSearchRecordChangeListener implements RecordChangeListenerInterface
@@ -246,7 +246,7 @@ public class QuickSearchRecordChangeListener implements RecordChangeListenerInte
 
 
    /*******************************************************************************
-    ** Write one quickSearchFailedEvent row per event. Never throws.
+    ** Write one quick_search_failed_event row per event. Never throws.
     *******************************************************************************/
    static void recordFailures(QuickSearchRuntime runtime, List<IndexEvent> events, Throwable cause)
    {
@@ -261,9 +261,9 @@ public class QuickSearchRecordChangeListener implements RecordChangeListenerInte
 
       try
       {
-         if(!hasTable(runtime.getConfig().applyPrefix(QuickSearchFailedEvent.TABLE_NAME)))
+         if(!hasTable(runtime.getConfig().applyTablePrefix(QuickSearchFailedEvent.TABLE_NAME)))
          {
-            LOG.error("quickSearchFailedEvent table is not in the QInstance; failed events are lost", logPair("eventCount", events.size()));
+            LOG.error("quick_search_failed_event table is not in the QInstance; failed events are lost", logPair("eventCount", events.size()));
             return;
          }
 
@@ -292,7 +292,7 @@ public class QuickSearchRecordChangeListener implements RecordChangeListenerInte
       String tableName = deleteEvents.get(0).getTableName();
       try
       {
-         return (hasTable(runtime.getConfig().applyPrefix(QuickSearchFailedEvent.TABLE_NAME)) && isRebuilding(runtime, tableName));
+         return (hasTable(runtime.getConfig().applyTablePrefix(QuickSearchFailedEvent.TABLE_NAME)) && isRebuilding(runtime, tableName));
       }
       catch(Exception e)
       {
@@ -347,7 +347,7 @@ public class QuickSearchRecordChangeListener implements RecordChangeListenerInte
       }
 
       UpdateInput updateInput = new UpdateInput();
-      updateInput.setTableName(runtime.getConfig().applyPrefix(QuickSearchFailedEvent.TABLE_NAME));
+      updateInput.setTableName(runtime.getConfig().applyTablePrefix(QuickSearchFailedEvent.TABLE_NAME));
       updateInput.setRecords(updates);
       new UpdateAction().execute(updateInput);
    }
@@ -355,7 +355,7 @@ public class QuickSearchRecordChangeListener implements RecordChangeListenerInte
 
 
    /*******************************************************************************
-    ** Whether the table's quickSearchIndex row is REBUILDING.
+    ** Whether the table's quick_search_index row is REBUILDING.
     *******************************************************************************/
    private static boolean isRebuilding(QuickSearchRuntime runtime, String tableName) throws QException
    {
@@ -375,7 +375,7 @@ public class QuickSearchRecordChangeListener implements RecordChangeListenerInte
 
 
    /*******************************************************************************
-    ** Insert one quickSearchFailedEvent row per event; returns the inserted rows.
+    ** Insert one quick_search_failed_event row per event; returns the inserted rows.
     *******************************************************************************/
    static List<QRecord> insertFailedEventRows(QuickSearchRuntime runtime, List<IndexEvent> events, String message, String status) throws QException
    {
@@ -392,7 +392,7 @@ public class QuickSearchRecordChangeListener implements RecordChangeListenerInte
       }
 
       InsertInput insertInput = new InsertInput();
-      insertInput.setTableName(runtime.getConfig().applyPrefix(QuickSearchFailedEvent.TABLE_NAME));
+      insertInput.setTableName(runtime.getConfig().applyTablePrefix(QuickSearchFailedEvent.TABLE_NAME));
       insertInput.setRecords(rows);
       return (CollectionUtils.nonNullList(new InsertAction().execute(insertInput).getRecords()));
    }

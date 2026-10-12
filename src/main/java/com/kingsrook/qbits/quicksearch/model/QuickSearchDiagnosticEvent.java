@@ -32,7 +32,11 @@ import com.kingsrook.qqq.backend.core.exceptions.QException;
  *******************************************************************************/
 public class QuickSearchDiagnosticEvent extends QRecordEntity
 {
-   public static final String TABLE_NAME = "quickSearchDiagnosticEvent";
+   public static final String TABLE_NAME = "quick_search_diagnostic_event";
+
+   /** Table name before 1.1.0-RC.3 (camelCase). Kept only for upgrade scripts; see docs/MIGRATION-1.1.md. */
+   @Deprecated(since = "1.1.0-RC.3")
+   public static final String LEGACY_TABLE_NAME = "quickSearchDiagnosticEvent";
 
    public static final String TYPE_SEARCH_FAILED = "SEARCH_FAILED";
    public static final String TYPE_TOOL_RUN = "TOOL_RUN";

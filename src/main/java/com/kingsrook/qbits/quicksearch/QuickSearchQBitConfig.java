@@ -68,10 +68,16 @@ import org.quartz.CronExpression;
  *******************************************************************************/
 public class QuickSearchQBitConfig implements QBitConfig
 {
-   public static final String DEFAULT_ADMIN_PERMISSION_BASE_NAME   = "quickSearchAdmin";
+   public static final String DEFAULT_ADMIN_PERMISSION_BASE_NAME   = "quick_search_admin";
    public static final String DEFAULT_BASEPULL_TIMESTAMP_FIELD     = "modifyDate";
    public static final int    DEFAULT_RECORD_SEARCH_TIMEOUT_MILLIS = 2500;
-   public static final String DEFAULT_DEBUG_PERMISSION_BASE_NAME   = "quickSearchDebug";
+   public static final String DEFAULT_DEBUG_PERMISSION_BASE_NAME   = "quick_search_debug";
+   /** Admin permission base name before 1.1.0-RC.3 (camelCase). */
+   @Deprecated(since = "1.1.0-RC.3")
+   public static final String LEGACY_ADMIN_PERMISSION_BASE_NAME = "quickSearchAdmin";
+   /** Debug permission base name before 1.1.0-RC.3 (camelCase). */
+   @Deprecated(since = "1.1.0-RC.3")
+   public static final String LEGACY_DEBUG_PERMISSION_BASE_NAME = "quickSearchDebug";
    public static final int    DEFAULT_VALIDATION_SAMPLE_SIZE       = 50;
    public static final int    MAX_VALIDATION_SAMPLE_SIZE           = 1000;
    public static final int    DEFAULT_DIAGNOSTIC_RUNS_PER_MINUTE   = 30;
@@ -687,7 +693,35 @@ public class QuickSearchQBitConfig implements QBitConfig
 
 
    /*******************************************************************************
-    ** Apply the table-name prefix, if any.
+    ** Apply the table-name prefix to a table or possible-value source name.
+    ** Table names are lowercase snake_case (owner naming rule, 2026-10-12), so a
+    ** prefix is converted to snake_case and joined with "_": prefix "acme" and
+    ** quick_search_index give acme_quick_search_index.
+    *******************************************************************************/
+   public String applyTablePrefix(String name)
+   {
+      if(StringUtils.hasContent(tableNamePrefix))
+      {
+         String prefix = toSnakeCase(tableNamePrefix);
+         return (prefix.endsWith("_") ? prefix : prefix + "_") + name;
+      }
+      return name;
+   }
+
+
+
+   /*******************************************************************************
+    ** Convert a camelCase name to lowercase snake_case.
+    *******************************************************************************/
+   static String toSnakeCase(String name)
+   {
+      return name.replaceAll("([a-z0-9])([A-Z])", "$1_$2").replace('-', '_').toLowerCase();
+   }
+
+
+
+   /*******************************************************************************
+    ** Apply the name prefix, if any, to a process, widget or app name.
     *******************************************************************************/
    public String applyPrefix(String name)
    {
@@ -701,21 +735,21 @@ public class QuickSearchQBitConfig implements QBitConfig
 
 
    /*******************************************************************************
-    ** Name of the produced quickSearchIndex table.
+    ** Name of the produced quick_search_index table.
     *******************************************************************************/
    public String getQuickSearchIndexTableName()
    {
-      return applyPrefix(QuickSearchIndex.TABLE_NAME);
+      return applyTablePrefix(QuickSearchIndex.TABLE_NAME);
    }
 
 
 
    /*******************************************************************************
-    ** Name of the produced quickSearchIndexRun table.
+    ** Name of the produced quick_search_index_run table.
     *******************************************************************************/
    public String getQuickSearchIndexRunTableName()
    {
-      return applyPrefix(QuickSearchIndexRun.TABLE_NAME);
+      return applyTablePrefix(QuickSearchIndexRun.TABLE_NAME);
    }
 
 
@@ -1818,7 +1852,7 @@ public class QuickSearchQBitConfig implements QBitConfig
 
 
    /*******************************************************************************
-    ** Getter for runHistoryRetentionDays: delete quickSearchIndexRun rows older than this many days; null keeps them forever
+    ** Getter for runHistoryRetentionDays: delete quick_search_index_run rows older than this many days; null keeps them forever
     *******************************************************************************/
    public Integer getRunHistoryRetentionDays()
    {
@@ -2458,7 +2492,7 @@ public class QuickSearchQBitConfig implements QBitConfig
 
 
    /*******************************************************************************
-    ** Getter for debugPermissionRules: permission rules for the read-only diagnostic tools and the diagnostics widget (default: quickSearchDebug.hasAccess)
+    ** Getter for debugPermissionRules: permission rules for the read-only diagnostic tools and the diagnostics widget (default: quick_search_debug.hasAccess)
     *******************************************************************************/
    public QPermissionRules getDebugPermissionRules()
    {

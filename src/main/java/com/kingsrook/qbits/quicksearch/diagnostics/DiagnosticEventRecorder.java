@@ -36,7 +36,7 @@ import static com.kingsrook.qqq.backend.core.logging.LogUtils.logPair;
 
 
 /*******************************************************************************
- ** Writes quickSearchDiagnosticEvent rows: failed searches, diagnostic tool
+ ** Writes quick_search_diagnostic_event rows: failed searches, diagnostic tool
  ** runs (the audit trail) and refused runs.
  ** Best effort and off the caller's thread: events are queued (at most
  ** QUEUE_CAPACITY) and inserted by one daemon thread as the system user, so
@@ -87,7 +87,7 @@ public class DiagnosticEventRecorder implements AutoCloseable
    public void record(QuickSearchDiagnosticEvent event)
    {
       QInstance qInstance = QContext.getQInstance();
-      String    tableName = config.applyPrefix(QuickSearchDiagnosticEvent.TABLE_NAME);
+      String    tableName = config.applyTablePrefix(QuickSearchDiagnosticEvent.TABLE_NAME);
       if(event == null || qInstance == null || !Boolean.TRUE.equals(config.getEnableDiagnosticTools()) || qInstance.getTable(tableName) == null)
       {
          return;

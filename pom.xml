@@ -266,13 +266,15 @@
       <!-- activation when the parent moves to 4.1 (ADR-0007).                      -->
       <!-- 1.1: the record-search provider needs the core SPI                       -->
       <!-- (RecordSearchProviderInterface), first released in qqq 4.1.0-RC.2.       -->
+      <!-- The record developer panel provider needs the developer panel         -->
+      <!-- contract (DeveloperPanelProviderInterface), first in qqq 4.1.0-RC.4.   -->
       <profile>
          <id>qqq-snapshot</id>
          <activation>
             <activeByDefault>true</activeByDefault>
          </activation>
          <properties>
-            <qqq.snapshot.version>4.1.0-RC.2</qqq.snapshot.version>
+            <qqq.snapshot.version>4.1.0-RC.4</qqq.snapshot.version>
          </properties>
          <dependencyManagement>
             <dependencies>

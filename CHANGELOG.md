@@ -2,6 +2,16 @@
 
 All notable changes to this project are documented here. The format follows Keep a Changelog; versions follow semantic versioning.
 
+## [Unreleased]
+
+Requires QQQ 4.1.0-RC.4 or later (the developer panel contract, QRun-IO/qqq#1076).
+
+### Added
+- Record developer panel: `QuickSearchDeveloperPanelProvider` (id `quickSearch`) adds a "Quick Search" panel to the developer view of every record of an indexed table (`/app/{table}/{id}/dev` in the Next UI), for users who may read Quick Search Index. It shows the table's index row (enabled, status, record count, last basepull and full reindex, searchable fields), the latest index run, the record's indexed document compared field by field with the database (Inspect Search Document's comparison; needs `debugPermissionRules`), the record's failed index events, the Inspect Search Document and Reindex in Search actions the user may run, and links to the admin app and the index row. An unreachable OpenSearch shows a warning in the panel. Registered by `QuickSearchDeveloperPanelsMetaDataProducer`.
+
+### Changed
+- **Snake_case names (owner naming rule, 2026-10-12), for 1.1.0-RC.3.** The tables are now `quick_search_index`, `quick_search_index_run`, `quick_search_failed_event`, `quick_search_diagnostic_event` and `quick_search_validation_run` (they were camelCase). The possible-value sources are `quick_search_index` and `quick_search_searchable_table`. The permission bases are `quick_search_admin` and `quick_search_debug`, and table permissions follow the table names. A table-name prefix is now converted to snake_case and joined with `_`. The old names remain as `@Deprecated` `LEGACY_*` constants. This is metadata only: the QBit ships no DDL. Upgrade steps, with SQL for camelCase databases and for stored references (audit table names, saved views, permission grants), are in `docs/MIGRATION-1.1.md` under "Snake_case names (1.1.0-RC.3)".
+
 ## [1.1.0-RC.1] - 2026-10-11
 
 First release candidate of 1.1, published to Maven Central from `release/1.1`. It contains every change listed under 1.1.0 and 1.0.0 below (1.0.0 has not been released as GA). Requires QQQ 4.1.0-RC.2 or later. Upgrade notes: `docs/MIGRATION-1.1.md`.
