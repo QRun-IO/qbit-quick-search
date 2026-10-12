@@ -28,9 +28,14 @@ import com.kingsrook.qqq.backend.core.actions.tables.RecordSearchAction;
 import com.kingsrook.qqq.backend.core.context.QContext;
 import com.kingsrook.qqq.backend.core.exceptions.QException;
 import com.kingsrook.qqq.backend.core.model.actions.tables.insert.InsertInput;
+import com.kingsrook.qqq.backend.core.model.actions.tables.search.RecordSearchHighlight;
+import com.kingsrook.qqq.backend.core.model.actions.tables.search.RecordSearchHighlightMatch;
 import com.kingsrook.qqq.backend.core.model.actions.tables.search.RecordSearchInput;
 import com.kingsrook.qqq.backend.core.model.actions.tables.search.RecordSearchOutput;
+import com.kingsrook.qqq.backend.core.model.actions.tables.search.RecordSearchProviderState;
 import com.kingsrook.qqq.backend.core.model.actions.tables.search.RecordSearchResult;
+import com.kingsrook.qqq.backend.core.model.actions.tables.search.RecordSearchSource;
+import com.kingsrook.qqq.backend.core.model.actions.tables.search.RecordSearchTableSummary;
 import com.kingsrook.qqq.backend.core.model.data.QRecord;
 import com.kingsrook.qqq.backend.core.model.metadata.QInstance;
 import com.kingsrook.qqq.backend.core.model.metadata.code.QCodeReference;
@@ -43,12 +48,15 @@ import com.kingsrook.qbits.quicksearch.QuickSearchQBitConfig;
 import com.kingsrook.qbits.quicksearch.QuickSearchRuntime;
 import com.kingsrook.qbits.quicksearch.QuickSearchableTableConfig;
 import com.kingsrook.qbits.quicksearch.opensearch.QuickSearchOpenSearchClient;
+import com.kingsrook.qbits.quicksearch.opensearch.QuickSearchOpenSearchClient.RecordSearchHit;
+import com.kingsrook.qbits.quicksearch.opensearch.QuickSearchOpenSearchClient.RecordSearchTableHits;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.assertj.core.api.Assertions.tuple;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyBoolean;
 import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.anyList;
 import static org.mockito.ArgumentMatchers.anyString;
@@ -218,7 +226,7 @@ class QuickSearchRecordSearchProviderTest extends BaseQuickSearchTest
       Map<String, List<String>> ids = new LinkedHashMap<>();
       ids.put(OTHER_TABLE, List.of("7"));
       ids.put(TEST_ENTITY_TABLE, List.of("3", "1", "2"));
-      when(mockClient.searchRecordIdsPerTable(anyString(), anyList(), anyInt(), anyList(), anyInt())).thenReturn(ids);
+      when(mockClient.searchRecordsPerTable(anyString(), anyList(), anyInt(), anyInt(), anyBoolean(), anyList(), anyInt())).thenReturn(hits(ids));
 
       RecordSearchOutput output = provider.search(new RecordSearchInput()
          .withSearchTerm("  widget   blue ")
@@ -231,13 +239,13 @@ class QuickSearchRecordSearchProviderTest extends BaseQuickSearchTest
          tuple(TEST_ENTITY_TABLE, "2"),
          tuple(OTHER_TABLE, "7"));
 
-      verify(mockClient).searchRecordIdsPerTable(eq("widget blue"), eq(List.of(TEST_ENTITY_TABLE, OTHER_TABLE)), eq(5 * QuickSearchRecordSearchProvider.IDS_PER_LIMIT_MULTIPLIER), anyList(), eq(1234));
+      verify(mockClient).searchRecordsPerTable(eq("widget blue"), eq(List.of(TEST_ENTITY_TABLE, OTHER_TABLE)), eq(5 * QuickSearchRecordSearchProvider.IDS_PER_LIMIT_MULTIPLIER), eq(0), eq(true), anyList(), eq(1234));
 
       provider.search(new RecordSearchInput().withSearchTerm("widget").withTableNames(List.of(TEST_ENTITY_TABLE)).withLimitPerTable(25));
-      verify(mockClient).searchRecordIdsPerTable(eq("widget"), eq(List.of(TEST_ENTITY_TABLE)), eq(RecordSearchAction.MAX_PROVIDER_IDS_PER_TABLE), anyList(), eq(1234));
+      verify(mockClient).searchRecordsPerTable(eq("widget"), eq(List.of(TEST_ENTITY_TABLE)), eq(RecordSearchAction.MAX_PROVIDER_IDS_PER_TABLE), eq(0), eq(true), anyList(), eq(1234));
 
       provider.search(new RecordSearchInput().withSearchTerm("gadget").withTableNames(List.of(TEST_ENTITY_TABLE)));
-      verify(mockClient).searchRecordIdsPerTable(eq("gadget"), eq(List.of(TEST_ENTITY_TABLE)), eq(RecordSearchAction.DEFAULT_LIMIT_PER_TABLE * QuickSearchRecordSearchProvider.IDS_PER_LIMIT_MULTIPLIER), anyList(), eq(1234));
+      verify(mockClient).searchRecordsPerTable(eq("gadget"), eq(List.of(TEST_ENTITY_TABLE)), eq(RecordSearchAction.DEFAULT_LIMIT_PER_TABLE * QuickSearchRecordSearchProvider.IDS_PER_LIMIT_MULTIPLIER), eq(0), eq(true), anyList(), eq(1234));
    }
 
 
@@ -248,7 +256,7 @@ class QuickSearchRecordSearchProviderTest extends BaseQuickSearchTest
       assertThat(provider.search(new RecordSearchInput().withSearchTerm("x").withTableNames(List.of(TEST_ENTITY_TABLE))).getResults()).isEmpty();
       assertThat(provider.search(new RecordSearchInput().withSearchTerm("widget").withTableNames(List.of(UNINDEXED_TABLE))).getResults()).isEmpty();
       assertThat(provider.search(new RecordSearchInput().withSearchTerm("widget")).getResults()).isEmpty();
-      verify(mockClient, never()).searchRecordIdsPerTable(any(), any(), anyInt(), any(), anyInt());
+      verify(mockClient, never()).searchRecordsPerTable(any(), any(), anyInt(), anyInt(), anyBoolean(), any(), anyInt());
    }
 
 
@@ -256,7 +264,7 @@ class QuickSearchRecordSearchProviderTest extends BaseQuickSearchTest
    @Test
    void testSearch_clientFailure_throwsAndBacksOff() throws QException
    {
-      when(mockClient.searchRecordIdsPerTable(anyString(), anyList(), anyInt(), anyList(), anyInt())).thenThrow(new QException("boom"));
+      when(mockClient.searchRecordsPerTable(anyString(), anyList(), anyInt(), anyInt(), anyBoolean(), anyList(), anyInt())).thenThrow(new QException("boom"));
 
       assertThatThrownBy(() -> provider.search(new RecordSearchInput().withSearchTerm("widget").withTableNames(List.of(TEST_ENTITY_TABLE))))
          .isInstanceOf(QException.class).hasMessageContaining("boom");
@@ -268,11 +276,87 @@ class QuickSearchRecordSearchProviderTest extends BaseQuickSearchTest
    @Test
    void testSearch_uncheckedClientFailure_wrappedAsQException() throws QException
    {
-      when(mockClient.searchRecordIdsPerTable(anyString(), anyList(), anyInt(), anyList(), anyInt())).thenThrow(new IllegalStateException("closed"));
+      when(mockClient.searchRecordsPerTable(anyString(), anyList(), anyInt(), anyInt(), anyBoolean(), anyList(), anyInt())).thenThrow(new IllegalStateException("closed"));
 
       assertThatThrownBy(() -> provider.search(new RecordSearchInput().withSearchTerm("widget").withTableNames(List.of(TEST_ENTITY_TABLE))))
          .isInstanceOf(QException.class).hasMessageContaining("closed");
       assertThat(runtime.isRecordSearchBackingOff()).isTrue();
+   }
+
+
+   /*******************************************************************************
+    ** Client hits for these ids per table (no scores, highlights or totals).
+    *******************************************************************************/
+   private static Map<String, RecordSearchTableHits> hits(Map<String, List<String>> idsByTable)
+   {
+      Map<String, RecordSearchTableHits> hitsByTable = new LinkedHashMap<>();
+      idsByTable.forEach((tableName, ids) -> hitsByTable.put(tableName, new RecordSearchTableHits(ids.stream().map(id -> new RecordSearchHit(id, null, null)).toList(), null)));
+      return (hitsByTable);
+   }
+
+
+
+   /*******************************************************************************
+    ** A fragment with these words marked as matches, as the client returns it.
+    *******************************************************************************/
+   private static String marked(String word)
+   {
+      return (QuickSearchOpenSearchClient.HIGHLIGHT_PRE_TAG + word + QuickSearchOpenSearchClient.HIGHLIGHT_POST_TAG);
+   }
+
+
+
+   /*******************************************************************************
+    ** Scores, highlights (fieldValues.* only, as plain text and ranges) and
+    ** totals reach core; the offset reaches the client.
+    *******************************************************************************/
+   @Test
+   void testSearch_returnsScoresHighlightsAndTotals_andPassesOffset() throws QException
+   {
+      Map<String, RecordSearchTableHits> hitsByTable = new LinkedHashMap<>();
+      hitsByTable.put(TEST_ENTITY_TABLE, new RecordSearchTableHits(List.of(
+         new RecordSearchHit("3", 7.5, Map.of(
+            "fieldValues.name", List.of("big " + marked("Widget") + " for " + marked("blue") + marked("s")),
+            "searchableText", List.of(marked("Widget")))),
+         new RecordSearchHit("1", 2.25, Map.of("fieldValues.name", List.of("no match here")))), 42L));
+      when(mockClient.searchRecordsPerTable(anyString(), anyList(), anyInt(), anyInt(), anyBoolean(), anyList(), anyInt())).thenReturn(hitsByTable);
+
+      RecordSearchOutput output = provider.search(new RecordSearchInput().withSearchTerm("widget blue").withTableNames(List.of(TEST_ENTITY_TABLE)).withLimitPerTable(5).withOffset(10));
+
+      assertThat(output.getResults()).extracting(RecordSearchResult::getRecordId, RecordSearchResult::getScore).containsExactly(tuple("3", 7.5), tuple("1", 2.25));
+      assertThat(output.getTotalCountByTable()).containsEntry(TEST_ENTITY_TABLE, 42);
+
+      List<RecordSearchHighlight> highlights = output.getResults().get(0).getHighlights();
+      assertThat(highlights).hasSize(1);
+      assertThat(highlights.get(0).getFieldName()).isEqualTo("name");
+      assertThat(highlights.get(0).getText()).isEqualTo("big Widget for blues");
+      assertThat(highlights.get(0).getMatches()).extracting(RecordSearchHighlightMatch::getStart, RecordSearchHighlightMatch::getEnd).containsExactly(tuple(4, 10), tuple(15, 20));
+      assertThat(output.getResults().get(1).getHighlights()).isNull();
+
+      verify(mockClient).searchRecordsPerTable(eq("widget blue"), eq(List.of(TEST_ENTITY_TABLE)), eq(5 * QuickSearchRecordSearchProvider.IDS_PER_LIMIT_MULTIPLIER), eq(10), eq(true), anyList(), eq(1234));
+   }
+
+
+
+   /*******************************************************************************
+    ** Fragment conversion: markers removed, ranges kept; no match, blank or
+    ** unbalanced markers give no highlight; non-fieldValues fields are skipped.
+    *******************************************************************************/
+   @Test
+   void testHighlightConversion()
+   {
+      RecordSearchHighlight highlight = QuickSearchRecordSearchProvider.highlight("name", marked("ab") + "c" + marked("d"));
+      assertThat(highlight.getText()).isEqualTo("abcd");
+      assertThat(highlight.getMatches()).extracting(RecordSearchHighlightMatch::getStart, RecordSearchHighlightMatch::getEnd).containsExactly(tuple(0, 2), tuple(3, 4));
+
+      assertThat(QuickSearchRecordSearchProvider.highlight("name", "plain")).isNull();
+      assertThat(QuickSearchRecordSearchProvider.highlight("name", null)).isNull();
+      assertThat(QuickSearchRecordSearchProvider.highlight("name", marked(" "))).isNull();
+      assertThat(QuickSearchRecordSearchProvider.highlight("name", QuickSearchOpenSearchClient.HIGHLIGHT_POST_TAG + "x" + QuickSearchOpenSearchClient.HIGHLIGHT_PRE_TAG)).isNull();
+
+      assertThat(QuickSearchRecordSearchProvider.highlights(Map.of("searchableText", List.of(marked("x")), "fieldValues.", List.of(marked("x")), "fieldValues.other", List.of())))
+         .isEmpty();
+      assertThat(QuickSearchRecordSearchProvider.highlights(null)).isEmpty();
    }
 
 
@@ -323,13 +407,16 @@ class QuickSearchRecordSearchProviderTest extends BaseQuickSearchTest
       Map<String, List<String>> ids = new LinkedHashMap<>();
       ids.put(TEST_ENTITY_TABLE, List.of("5", "999", "2", "4"));
       ids.put(OTHER_TABLE, List.of());
-      when(mockClient.searchRecordIdsPerTable(anyString(), anyList(), anyInt(), anyList(), anyInt())).thenReturn(ids);
+      when(mockClient.searchRecordsPerTable(anyString(), anyList(), anyInt(), anyInt(), anyBoolean(), anyList(), anyInt())).thenReturn(hits(ids));
 
       RecordSearchOutput output = new RecordSearchAction().execute(new RecordSearchInput().withSearchTerm("widget").withLimitPerTable(2));
 
       assertThat(output.getResults()).filteredOn(r -> r.getTableName().equals(TEST_ENTITY_TABLE)).extracting(RecordSearchResult::getRecordId).containsExactly(5, 2);
       assertThat(output.getResults()).filteredOn(r -> r.getTableName().equals(UNINDEXED_TABLE)).extracting(RecordSearchResult::getRecordId).containsExactly(1);
       assertThat(output.getResults()).filteredOn(r -> r.getTableName().equals(OTHER_TABLE)).isEmpty();
+      assertThat(output.getProviderStatus().getStatus()).isEqualTo(RecordSearchProviderState.OK);
+      assertThat(output.getTables()).filteredOn(t -> t.getTableName().equals(TEST_ENTITY_TABLE)).extracting(RecordSearchTableSummary::getSource, RecordSearchTableSummary::getHasMore)
+         .containsExactly(tuple(RecordSearchSource.PROVIDER, true));
    }
 
 
@@ -341,11 +428,14 @@ class QuickSearchRecordSearchProviderTest extends BaseQuickSearchTest
    void testCoreRecordSearchAction_providerFailure_fallsBackToCoreSearch() throws QException
    {
       insertEntities("Widget", 3);
-      when(mockClient.searchRecordIdsPerTable(anyString(), anyList(), anyInt(), anyList(), anyInt())).thenThrow(new QException("OpenSearch is down"));
+      when(mockClient.searchRecordsPerTable(anyString(), anyList(), anyInt(), anyInt(), anyBoolean(), anyList(), anyInt())).thenThrow(new QException("OpenSearch is down"));
 
       RecordSearchOutput output = new RecordSearchAction().execute(new RecordSearchInput().withSearchTerm("widget").withTableNames(List.of(TEST_ENTITY_TABLE)));
 
       assertThat(output.getResults()).extracting(RecordSearchResult::getRecordId).containsExactly(1, 2, 3);
+      assertThat(output.getProviderStatus().getStatus()).isEqualTo(RecordSearchProviderState.FAILED);
+      assertThat(output.getProviderStatus().getFailureClass()).isEqualTo("QException");
+      assertThat(output.getTables()).extracting(RecordSearchTableSummary::getSource).containsExactly(RecordSearchSource.FALLBACK);
       assertThat(runtime.isRecordSearchBackingOff()).isTrue();
 
       //////////////////////////////////////////////////////////////////////
@@ -354,7 +444,7 @@ class QuickSearchRecordSearchProviderTest extends BaseQuickSearchTest
       //////////////////////////////////////////////////////////////////////
       RecordSearchOutput again = new RecordSearchAction().execute(new RecordSearchInput().withSearchTerm("widget").withTableNames(List.of(TEST_ENTITY_TABLE)));
       assertThat(again.getResults()).hasSize(3);
-      verify(mockClient, times(1)).searchRecordIdsPerTable(anyString(), anyList(), anyInt(), anyList(), anyInt());
+      verify(mockClient, times(1)).searchRecordsPerTable(anyString(), anyList(), anyInt(), anyInt(), anyBoolean(), anyList(), anyInt());
    }
 
 }

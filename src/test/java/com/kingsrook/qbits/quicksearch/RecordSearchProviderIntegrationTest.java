@@ -20,6 +20,7 @@ package com.kingsrook.qbits.quicksearch;
 import java.io.Serializable;
 import java.time.Instant;
 import java.util.List;
+import java.util.Map;
 import com.kingsrook.qqq.backend.core.actions.tables.DeleteAction;
 import com.kingsrook.qqq.backend.core.actions.tables.InsertAction;
 import com.kingsrook.qqq.backend.core.actions.tables.RecordSearchAction;
@@ -28,9 +29,14 @@ import com.kingsrook.qqq.backend.core.model.actions.processes.RunBackendStepInpu
 import com.kingsrook.qqq.backend.core.model.actions.processes.RunBackendStepOutput;
 import com.kingsrook.qqq.backend.core.model.actions.tables.delete.DeleteInput;
 import com.kingsrook.qqq.backend.core.model.actions.tables.insert.InsertInput;
+import com.kingsrook.qqq.backend.core.model.actions.tables.search.RecordSearchHighlight;
+import com.kingsrook.qqq.backend.core.model.actions.tables.search.RecordSearchHighlightMatch;
 import com.kingsrook.qqq.backend.core.model.actions.tables.search.RecordSearchInput;
 import com.kingsrook.qqq.backend.core.model.actions.tables.search.RecordSearchOutput;
+import com.kingsrook.qqq.backend.core.model.actions.tables.search.RecordSearchProviderState;
 import com.kingsrook.qqq.backend.core.model.actions.tables.search.RecordSearchResult;
+import com.kingsrook.qqq.backend.core.model.actions.tables.search.RecordSearchSource;
+import com.kingsrook.qqq.backend.core.model.actions.tables.search.RecordSearchTableSummary;
 import com.kingsrook.qqq.backend.core.model.data.QRecord;
 import com.kingsrook.qqq.backend.core.model.metadata.QAuthenticationType;
 import com.kingsrook.qqq.backend.core.model.metadata.QBackendMetaData;
@@ -46,6 +52,8 @@ import com.kingsrook.qbits.quicksearch.actions.QuickSearchAction;
 import com.kingsrook.qbits.quicksearch.actions.QuickSearchInput;
 import com.kingsrook.qbits.quicksearch.actions.QuickSearchRecordSearchProvider;
 import com.kingsrook.qbits.quicksearch.actions.QuickSearchResult;
+import com.kingsrook.qbits.quicksearch.opensearch.QuickSearchOpenSearchClient.RecordSearchHit;
+import com.kingsrook.qbits.quicksearch.opensearch.QuickSearchOpenSearchClient.RecordSearchTableHits;
 import com.kingsrook.qbits.quicksearch.processes.FullReindexStep;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeAll;
@@ -59,6 +67,7 @@ import org.testcontainers.containers.wait.strategy.Wait;
 import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.tuple;
 
 
 /*******************************************************************************
@@ -226,6 +235,43 @@ class RecordSearchProviderIntegrationTest
       ////////////////////////////////////////////////
       assertThat(idsFor(output, NOTE_TABLE)).containsExactly(1);
       assertThat(config.getRuntime().isRecordSearchBackingOff()).isFalse();
+   }
+
+
+
+   /*******************************************************************************
+    ** Scores, totals and paging come from OpenSearch; the client's highlight
+    ** fragments are marked on the fieldValues.* fields and convert to plain
+    ** text and ranges; core highlights the matching non-label field.
+    *******************************************************************************/
+   @Test
+   @Order(2)
+   void testScoresTotalsPagingAndHighlights() throws Exception
+   {
+      RecordSearchInput  input  = new RecordSearchInput().withSearchTerm("blue widget").withTableNames(List.of(PRODUCT_TABLE)).withLimitPerTable(1);
+      RecordSearchOutput page1  = new RecordSearchAction().execute(input);
+      assertThat(page1.getProviderStatus().getStatus()).isEqualTo(RecordSearchProviderState.OK);
+      RecordSearchTableSummary products = page1.getTables().get(0);
+      assertThat(products.getSource()).isEqualTo(RecordSearchSource.PROVIDER);
+      assertThat(products.getTotalCount()).isEqualTo(2);
+      assertThat(products.getHasMore()).isTrue();
+      assertThat(page1.getResults()).hasSize(1);
+      assertThat(page1.getResults().get(0).getScore()).isPositive();
+
+      RecordSearchOutput page2 = new RecordSearchAction().execute(input.withOffset(1));
+      assertThat(page2.getTables().get(0).getHasMore()).isFalse();
+      assertThat(List.of(page1.getResults().get(0).getRecordId(), page2.getResults().get(0).getRecordId())).containsExactlyInAnyOrder(1, 2);
+
+      RecordSearchResult widget = coreSearch("blue", 5).getResults().stream().filter(r -> Integer.valueOf(2).equals(r.getRecordId())).findFirst().orElseThrow();
+      assertThat(widget.getHighlights()).extracting(RecordSearchHighlight::getFieldName).containsExactly("description");
+      assertThat(widget.getHighlights().get(0).getText()).isEqualTo("comes in blue and green");
+
+      Map<String, RecordSearchTableHits> hits = config.getRuntime().getClient().searchRecordsPerTable("blue", List.of(PRODUCT_TABLE), 5, 0, true, config.getRuntime().getDiscoveredTables(), 10_000);
+      RecordSearchHit hit = hits.get(PRODUCT_TABLE).hits().stream().filter(h -> "2".equals(h.recordId())).findFirst().orElseThrow();
+      List<RecordSearchHighlight> highlights = QuickSearchRecordSearchProvider.highlights(hit.highlights());
+      assertThat(highlights).extracting(RecordSearchHighlight::getFieldName).containsExactly("description");
+      assertThat(highlights.get(0).getText()).isEqualTo("comes in blue and green");
+      assertThat(highlights.get(0).getMatches()).extracting(RecordSearchHighlightMatch::getStart, RecordSearchHighlightMatch::getEnd).containsExactly(tuple(9, 13));
    }
 
 

@@ -4,13 +4,14 @@ All notable changes to this project are documented here. The format follows Keep
 
 ## [1.1.0] - Unreleased
 
-Requires QQQ 4.1.0-RC.2 or later, the first release that carries the record-search provider SPI; built against 4.1.0-RC.2. See `docs/MIGRATION-1.1.md`.
+Requires QQQ 4.1.0-RC.4 or later (the record-search provider SPI arrived in 4.1.0-RC.2; its scores, highlights, totals and paging in 4.1.0-RC.4); built against 4.1.0-RC.4. See `docs/MIGRATION-1.1.md`.
 
 ### Added
 - `QuickSearchRecordSearchProvider`: serves QQQ core record search (`RecordSearchAction`, `POST /qqq/v1/search`, the Next UI global search) from OpenSearch for the tables Quick Search indexes. One `_msearch` request with a per-table top-N search (same query, AND semantics and field weights as `QuickSearchAction`); returns record ids only, which core re-reads through `QueryAction` (permissions, record locks, labels). Audit finding F-11, decision D1.
 - `serveCoreRecordSearch` (default `true`): registers the provider and gives indexed tables core `searchFields` (visible string and integer searchable fields) when they have none. Host `searchFields` and a host-registered provider are never replaced.
 - `recordSearchTimeoutMillis` (default 2500): wall-clock limit on the OpenSearch request; on timeout or any failure core falls back to its own search, and the provider claims no tables for 30 seconds.
 - `QuickSearchOpenSearchClient.searchRecordIdsPerTable`.
+- Record search details for QQQ 4.1.0-RC.4's record-search contract: the provider passes each hit's relevance `score`, a plain-text highlight (match ranges, from OpenSearch highlighting of `fieldValues.*` with private-use markers) and each table's total hits (`totalCountByTable`, counted to 10,000), and honors the request `offset` (`from`). `sort: RECENT` keeps relevance order (the index has no record modify dates). New `QuickSearchOpenSearchClient.searchRecordsPerTable`; `searchRecordIdsPerTable` now delegates to it. This requires QQQ 4.1.0-RC.4 or later.
 
 ### Security
 - Fields of type `PASSWORD` are no longer indexed (as hidden fields already were). Reconcile or fully reindex once to remove values a 1.0 index may hold.
