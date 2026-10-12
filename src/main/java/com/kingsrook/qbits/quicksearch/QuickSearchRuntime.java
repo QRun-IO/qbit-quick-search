@@ -17,12 +17,15 @@
 package com.kingsrook.qbits.quicksearch;
 
 
+import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicLong;
 import com.kingsrook.qqq.backend.core.actions.tables.QueryAction;
 import com.kingsrook.qqq.backend.core.context.QContext;
 import com.kingsrook.qqq.backend.core.exceptions.QException;
@@ -34,6 +37,8 @@ import com.kingsrook.qqq.backend.core.model.actions.tables.query.QueryInput;
 import com.kingsrook.qqq.backend.core.model.data.QRecord;
 import com.kingsrook.qqq.backend.core.model.metadata.QInstance;
 import com.kingsrook.qqq.backend.core.model.metadata.qbits.QBitMetaData;
+import com.kingsrook.qbits.quicksearch.diagnostics.DiagnosticEventRecorder;
+import com.kingsrook.qbits.quicksearch.diagnostics.DiagnosticsRateLimiter;
 import com.kingsrook.qbits.quicksearch.opensearch.QuickSearchOpenSearchClient;
 import com.kingsrook.qbits.quicksearch.publisher.IndexEventPublisher;
 import com.kingsrook.qbits.quicksearch.publisher.SynchronousIndexEventPublisher;
@@ -71,6 +76,15 @@ public class QuickSearchRuntime
    private volatile long                        recordSearchBackoffUntilMillis = 0L;
 
    private final Map<String, CachedFlag> enabledCache = new ConcurrentHashMap<>();
+
+   private volatile DiagnosticEventRecorder diagnosticEventRecorder;
+   private final DiagnosticsRateLimiter     diagnosticsRateLimiter = new DiagnosticsRateLimiter();
+   private final AtomicBoolean              validationRunning      = new AtomicBoolean(false);
+   private final AtomicLong                 recordSearchFailures   = new AtomicLong();
+   private final AtomicLong                 backoffDeclinedClaims  = new AtomicLong();
+   private final Instant                    startedAt              = Instant.now();
+   private volatile Instant                 lastRecordSearchFailureTime;
+   private volatile String                  lastRecordSearchFailureMessage;
 
 
 
@@ -313,7 +327,146 @@ public class QuickSearchRuntime
     *******************************************************************************/
    public void markRecordSearchFailed()
    {
+      markRecordSearchFailed(null);
+   }
+
+
+
+   /*******************************************************************************
+    ** As markRecordSearchFailed(), also counting the failure and keeping its
+    ** message and time for the diagnostics.
+    *******************************************************************************/
+   public void markRecordSearchFailed(String message)
+   {
       recordSearchBackoffUntilMillis = System.currentTimeMillis() + RECORD_SEARCH_BACKOFF_MILLIS;
+      recordSearchFailures.incrementAndGet();
+      lastRecordSearchFailureTime    = Instant.now();
+      lastRecordSearchFailureMessage = message;
+   }
+
+
+
+   /*******************************************************************************
+    ** Milliseconds left in the current record-search backoff (0 when none).
+    *******************************************************************************/
+   public long getRecordSearchBackoffRemainingMillis()
+   {
+      return (Math.max(0L, recordSearchBackoffUntilMillis - System.currentTimeMillis()));
+   }
+
+
+
+   /*******************************************************************************
+    ** Count a table the provider declined because of a backoff (core searched
+    ** it with its own search instead).
+    *******************************************************************************/
+   public void countBackoffDeclinedClaim()
+   {
+      backoffDeclinedClaims.incrementAndGet();
+   }
+
+
+
+   /*******************************************************************************
+    ** Record searches through OpenSearch that failed since this runtime started.
+    *******************************************************************************/
+   public long getRecordSearchFailureCount()
+   {
+      return (recordSearchFailures.get());
+   }
+
+
+
+   /*******************************************************************************
+    ** Table searches core ran itself because the provider was backing off,
+    ** since this runtime started.
+    *******************************************************************************/
+   public long getBackoffDeclinedClaimCount()
+   {
+      return (backoffDeclinedClaims.get());
+   }
+
+
+
+   /*******************************************************************************
+    ** When the last record search through OpenSearch failed (null when none).
+    *******************************************************************************/
+   public Instant getLastRecordSearchFailureTime()
+   {
+      return (lastRecordSearchFailureTime);
+   }
+
+
+
+   /*******************************************************************************
+    ** The last record-search failure's message (null when none).
+    *******************************************************************************/
+   public String getLastRecordSearchFailureMessage()
+   {
+      return (lastRecordSearchFailureMessage);
+   }
+
+
+
+   /*******************************************************************************
+    ** When this runtime was created.
+    *******************************************************************************/
+   public Instant getStartedAt()
+   {
+      return (startedAt);
+   }
+
+
+
+   /*******************************************************************************
+    ** The diagnostic event recorder, built on first use.
+    *******************************************************************************/
+   public DiagnosticEventRecorder getDiagnosticEventRecorder()
+   {
+      DiagnosticEventRecorder existing = diagnosticEventRecorder;
+      if(existing != null)
+      {
+         return (existing);
+      }
+      synchronized(this)
+      {
+         if(diagnosticEventRecorder == null)
+         {
+            diagnosticEventRecorder = new DiagnosticEventRecorder(config);
+         }
+         return (diagnosticEventRecorder);
+      }
+   }
+
+
+
+   /*******************************************************************************
+    ** The per-user rate limiter of the diagnostic tools.
+    *******************************************************************************/
+   public DiagnosticsRateLimiter getDiagnosticsRateLimiter()
+   {
+      return (diagnosticsRateLimiter);
+   }
+
+
+
+   /*******************************************************************************
+    ** Claim the single validation slot of this JVM; false when a validation is
+    ** already running. Release with endValidation().
+    *******************************************************************************/
+   public boolean beginValidation()
+   {
+      return (validationRunning.compareAndSet(false, true));
+   }
+
+
+
+   /*******************************************************************************
+    ** Release the validation slot.
+    *******************************************************************************/
+   public void endValidation()
+   {
+      validationRunning.set(false);
    }
 
 
@@ -435,6 +588,11 @@ public class QuickSearchRuntime
          {
             LOG.warn("Error closing Quick Search publisher", e);
          }
+      }
+
+      if(diagnosticEventRecorder != null)
+      {
+         diagnosticEventRecorder.close();
       }
 
       if(client != null)

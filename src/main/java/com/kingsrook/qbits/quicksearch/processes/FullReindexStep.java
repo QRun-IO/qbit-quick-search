@@ -19,12 +19,15 @@ package com.kingsrook.qbits.quicksearch.processes;
 
 import java.io.Serializable;
 import java.time.Instant;
+import java.time.temporal.ChronoUnit;
 import java.util.ArrayList;
+import java.util.Collection;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Set;
 import com.kingsrook.qqq.backend.core.actions.tables.DeleteAction;
 import com.kingsrook.qqq.backend.core.actions.tables.QueryAction;
@@ -71,6 +74,14 @@ import static com.kingsrook.qqq.backend.core.logging.LogUtils.logPair;
  ** AWAITING_REINDEX failed event. Once the rebuild's own writes are done and
  ** the alias is swapped, those deletes are applied through the alias.
  **
+ ** Only one full reindex runs at a time. Each table's run record is RUNNING
+ ** before any table is marked REBUILDING, and its modifyDate is refreshed
+ ** after every page; a run whose records show no sign of life for
+ ** fullReindexStaleMinutes has stopped (killed JVM, lost node). Every full
+ ** reindex, and every basepull, first recovers what such a run left behind
+ ** (see recoverDeadRun); a full reindex then refuses to start while another
+ ** one is alive.
+ **
  ** With a "tableName" input, that table is rebuilt in place with the reconcile
  ** algorithm (index everything, then delete what was not re-indexed).
  *******************************************************************************/
@@ -88,12 +99,18 @@ public class FullReindexStep extends AbstractIndexingStep
    @Override
    public void run(RunBackendStepInput input, RunBackendStepOutput output) throws QException
    {
-      String tableNameFilter = input.getValueString("tableName");
+      String  tableNameFilter = input.getValueString("tableName");
+      boolean allTables       = tableNameFilter == null || tableNameFilter.isBlank();
+
+      //////////////////////////////////////////////////////////////////////////////
+      // an all-tables rebuild applies the captured deletes itself after its swap //
+      //////////////////////////////////////////////////////////////////////////////
+      refuseIfAlive(recoverDeadRun(!allTables));
 
       List<QuickSearchableTableConfig> tables = new ArrayList<>();
       for(QuickSearchableTableConfig tableConfig : getDiscoveredTables())
       {
-         if(tableNameFilter != null && !tableNameFilter.isBlank() && !tableNameFilter.equals(tableConfig.getTableName()))
+         if(!allTables && !tableNameFilter.equals(tableConfig.getTableName()))
          {
             continue;
          }
@@ -108,7 +125,7 @@ public class FullReindexStep extends AbstractIndexingStep
          }
       }
 
-      if(tableNameFilter != null && !tableNameFilter.isBlank())
+      if(!allTables)
       {
          Integer recordsIndexed = 0;
          for(QuickSearchableTableConfig tableConfig : tables)
@@ -134,29 +151,42 @@ public class FullReindexStep extends AbstractIndexingStep
       QuickSearchOpenSearchClient client        = getClient();
       String                      physicalIndex = client.newPhysicalIndexName();
 
-      client.createPhysicalIndex(physicalIndex);
-      LOG.info("Rebuilding Quick Search index", logPair("physicalIndex", physicalIndex), logPair("tables", tables.size()));
-
       Map<QuickSearchableTableConfig, QuickSearchIndexRun> runs        = new LinkedHashMap<>();
       Map<String, IndexCounts>                              counts      = new LinkedHashMap<>();
       Map<String, Instant>                                  startTimes  = new LinkedHashMap<>();
       Map<String, String>                                   priorStatus = new LinkedHashMap<>();
       Integer                                               indexed     = 0;
 
+      boolean created = false;
+      boolean marked  = false;
       boolean swapped = false;
 
       try
       {
+         /////////////////////////////////////////////////////////////////////////
+         // the run records exist before any table is REBUILDING, so whoever    //
+         // sees a table REBUILDING also sees this run alive; then make sure no //
+         // other run started at the same moment                                //
+         /////////////////////////////////////////////////////////////////////////
+         for(QuickSearchableTableConfig tableConfig : tables)
+         {
+            runs.put(tableConfig, createRunRecord(queryIndexId(tableConfig.getTableName()), RUN_TYPE));
+         }
+         refuseIfAlive(queryLiveRunsOtherThan(runs.values()));
+
+         client.createPhysicalIndex(physicalIndex);
+         created = true;
+         LOG.info("Rebuilding Quick Search index", logPair("physicalIndex", physicalIndex), logPair("tables", tables.size()));
+
+         marked = true;
          markRebuilding(tables, priorStatus);
 
          for(QuickSearchableTableConfig tableConfig : tables)
          {
-            String              tableName = tableConfig.getTableName();
-            QuickSearchIndexRun run       = createRunRecord(queryIndexId(tableName), RUN_TYPE);
-            runs.put(tableConfig, run);
+            String tableName = tableConfig.getTableName();
             startTimes.put(tableName, Instant.now());
 
-            IndexCounts tableCounts = indexAllRecords(client, tableConfig, List.of(), physicalIndex);
+            IndexCounts tableCounts = indexAllRecords(client, tableConfig, List.of(), physicalIndex, runs.get(tableConfig));
             counts.put(tableName, tableCounts);
             indexed = indexed + tableCounts.indexed();
 
@@ -167,6 +197,8 @@ public class FullReindexStep extends AbstractIndexingStep
          }
 
          client.refreshIndex(physicalIndex);
+         keepAlive(runs.values());
+         verifyStillOwned(tables, runs.values());
          client.swapAliasTo(physicalIndex);
          swapped = true;
 
@@ -174,6 +206,7 @@ public class FullReindexStep extends AbstractIndexingStep
          {
             String      tableName   = tableConfig.getTableName();
             IndexCounts tableCounts = counts.get(tableName);
+            keepAlive(runs.values());
 
             Map<String, Serializable> values = new HashMap<>();
             values.put("lastFullReindexTime", Instant.now());
@@ -188,30 +221,31 @@ public class FullReindexStep extends AbstractIndexingStep
             values.put("status", STATUS_ACTIVE);
             updateIndexRow(runs.get(tableConfig).getQuickSearchIndexId(), values);
             priorStatus.remove(tableName);
-
-            completeRunRecord(runs.get(tableConfig), RUN_COMPLETED, tableCounts.processed(), tableCounts.indexed(), 0, null);
          }
 
-         applyCapturedDeletes(client, tables);
+         /////////////////////////////////////////////////////////////////////////////
+         // the run records stay RUNNING, refreshed per batch, until the captured   //
+         // deletes are applied; if a recovery takes the run over anyway, the drain //
+         // stops, and it never reads rows captured after it started, which belong  //
+         // to a newer run                                                          //
+         /////////////////////////////////////////////////////////////////////////////
+         applyCapturedDeletes(client, tables, runs.values());
+
+         for(QuickSearchableTableConfig tableConfig : tables)
+         {
+            IndexCounts tableCounts = counts.get(tableConfig.getTableName());
+            completeRunRecord(runs.get(tableConfig), RUN_COMPLETED, tableCounts.processed(), tableCounts.indexed(), 0, null);
+         }
 
          LOG.info("Full reindex complete", logPair("physicalIndex", physicalIndex), logPair("recordsIndexed", indexed));
          return (indexed);
       }
       catch(Exception e)
       {
+         boolean takenOver = marked && isTakenOverOrUnknown(runs.values());
          LOG.warn(swapped ? "Full reindex failed after the alias swap; the new index stays in service" : "Full reindex failed; the previous index stays in service", e, logPair("physicalIndex", physicalIndex));
 
-         for(Map.Entry<QuickSearchableTableConfig, QuickSearchIndexRun> entry : runs.entrySet())
-         {
-            IndexCounts tableCounts = counts.get(entry.getKey().getTableName());
-            completeRunRecord(entry.getValue(), RUN_FAILED,
-               tableCounts == null ? 0 : tableCounts.processed(),
-               tableCounts == null ? 0 : tableCounts.indexed(),
-               tableCounts == null ? 1 : Math.max(1, tableCounts.errors()),
-               e.getMessage());
-         }
-
-         if(!swapped)
+         if(created && !swapped)
          {
             try
             {
@@ -223,8 +257,29 @@ public class FullReindexStep extends AbstractIndexingStep
             }
          }
 
-         restoreStatus(priorStatus);
-         applyCapturedDeletes(client, tables);
+         ///////////////////////////////////////////////////////////////////////////
+         // a recovery that took this run over owns its tables, captured deletes  //
+         // and run records (a newer run may own the first two by now); when that //
+         // cannot be read, the run records stay RUNNING for the next recovery    //
+         ///////////////////////////////////////////////////////////////////////////
+         if(!takenOver)
+         {
+            if(marked)
+            {
+               restoreStatus(priorStatus);
+               applyCapturedDeletes(client, tables, runs.values());
+            }
+
+            for(Map.Entry<QuickSearchableTableConfig, QuickSearchIndexRun> entry : runs.entrySet())
+            {
+               IndexCounts tableCounts = counts.get(entry.getKey().getTableName());
+               completeRunRecord(entry.getValue(), RUN_FAILED,
+                  tableCounts == null ? 0 : tableCounts.processed(),
+                  tableCounts == null ? 0 : tableCounts.indexed(),
+                  tableCounts == null ? 1 : Math.max(1, tableCounts.errors()),
+                  e.getMessage());
+            }
+         }
 
          if(e instanceof QException qException)
          {
@@ -276,19 +331,420 @@ public class FullReindexStep extends AbstractIndexingStep
 
 
    /*******************************************************************************
+    ** Recover what a full reindex that stopped without finishing (killed JVM,
+    ** lost node) left behind, unless a full reindex is alive. Returns the live
+    ** RUNNING FULL_REINDEX run records, and changes nothing when there are any.
+    **
+    ** A run is alive while the startTime or modifyDate (its heartbeat) of one of
+    ** its RUNNING records is within fullReindexStaleMinutes. When none is
+    ** alive: each REBUILDING table goes back to ACTIVE (the status it had
+    ** before is not stored; drift detection marks NEEDS_REINDEX again where it
+    ** applies), with its lastBasepullTime moved back to the stopped run's
+    ** start, so basepull re-reads updates that a swap may have left out; with
+    ** handCapturedDeletesToBasepull, every AWAITING_REINDEX row up to the
+    ** newest one read here becomes PENDING; and only then is each stale RUNNING
+    ** record marked FAILED, so a recovery that fails partway leaves them for
+    ** the next one, run start included. Unlike completeRunRecord, that write
+    ** fails the recovery (and so the full reindex calling it) when any record
+    ** is not updated. Replaying those deletes is harmless
+    ** whether or not the stopped run swapped: before a swap the alias points at
+    ** the old index, which the listener already deleted from (a missing
+    ** document counts as success); after one, it removes the copy the run read
+    ** before the delete.
+    **
+    ** The REBUILDING rows and captured rows are read before the run records. A
+    ** run creates its records before it marks a table, and the listener
+    ** captures a delete only once it sees REBUILDING, so anything read here
+    ** that belongs to a live run comes with a live record, and nothing of a
+    ** live run is touched. A run that starts after the records are read, or a
+    ** live run misjudged as stopped, can have a table put back to ACTIVE or its
+    ** records marked FAILED; it checks both right after a heartbeat, before its
+    ** swap, and fails without swapping. A misjudged run that already swapped
+    ** stops applying its captured deletes once its records are FAILED, and
+    ** never reads rows captured after its drain started.
+    *******************************************************************************/
+   List<QRecord> recoverDeadRun(boolean handCapturedDeletesToBasepull) throws QException
+   {
+      List<QRecord> rebuildingRows = queryRebuildingIndexRows();
+      Serializable  lastCapturedId = handCapturedDeletesToBasepull ? queryLastCapturedDeleteId() : null;
+      List<QRecord> runningRuns    = queryRunningRuns();
+
+      Instant       cutoff = staleCutoff();
+      List<QRecord> alive  = runningRuns.stream().filter(run -> isAlive(run, cutoff)).toList();
+      if(!alive.isEmpty() || (rebuildingRows.isEmpty() && runningRuns.isEmpty() && lastCapturedId == null))
+      {
+         return (alive);
+      }
+
+      LOG.warn("Recovering what a full reindex that stopped without finishing left behind",
+         logPair("staleRunIds", runningRuns.stream().map(run -> run.getValue("id")).toList()),
+         logPair("tableNames", rebuildingRows.stream().map(row -> row.getValueString("tableName")).toList()));
+
+      for(QRecord row : rebuildingRows)
+      {
+         Map<String, Serializable> values = new HashMap<>();
+         values.put("status", STATUS_ACTIVE);
+
+         Instant runStart         = earliestStart(runningRuns, row.getValueInteger("id"));
+         Instant lastBasepullTime = row.getValueInstant("lastBasepullTime");
+         if(runStart != null && lastBasepullTime != null && runStart.isBefore(lastBasepullTime))
+         {
+            values.put("lastBasepullTime", runStart);
+         }
+         updateIndexRow(row.getValueInteger("id"), values);
+      }
+
+      if(lastCapturedId != null)
+      {
+         handCapturedDeletesToBasepull(lastCapturedId);
+      }
+
+      failDeadRuns(runningRuns);
+      return (alive);
+   }
+
+
+
+   /*******************************************************************************
+    ** Mark the stale run records FAILED, failing when any of them is not
+    ** updated: a live run misjudged as stopped learns it was taken over only
+    ** from these records, so recovery must not finish, and no new full reindex
+    ** may start, until they are written. The status is mirrored onto each
+    ** index row, as completeRunRecord does.
+    *******************************************************************************/
+   private void failDeadRuns(List<QRecord> runningRuns) throws QException
+   {
+      if(runningRuns.isEmpty())
+      {
+         return;
+      }
+
+      Instant       endTime = Instant.now();
+      List<QRecord> updates = new ArrayList<>();
+      for(QRecord runRecord : runningRuns)
+      {
+         updates.add(new QRecord()
+            .withValue("id", runRecord.getValue("id"))
+            .withValue("status", RUN_FAILED)
+            .withValue("endTime", endTime)
+            .withValue("recordsProcessed", 0)
+            .withValue("recordsIndexed", 0)
+            .withValue("errorCount", 1)
+            .withValue("errorMessage", truncate(staleRunMessage(runRecord), 4000)));
+      }
+
+      UpdateInput updateInput = new UpdateInput();
+      updateInput.setTableName(getConfig().getQuickSearchIndexRunTableName());
+      updateInput.setRecords(updates);
+      List<QRecord> results = CollectionUtils.nonNullList(new UpdateAction().execute(updateInput).getRecords());
+      List<QRecord> written = results.stream().filter(result -> CollectionUtils.nullSafeIsEmpty(result.getErrors())).toList();
+      if(written.size() < updates.size())
+      {
+         List<QRecord> notWritten = results.stream().filter(result -> CollectionUtils.nullSafeHasContents(result.getErrors())).toList();
+         throw (new QException("Could not mark " + (updates.size() - written.size()) + " stopped full reindex run record(s) FAILED"
+            + (notWritten.isEmpty() ? "" : " (first error: " + notWritten.get(0).getErrors() + ")")
+            + "; recovery did not finish, and no full reindex starts until it does"));
+      }
+
+      for(QRecord runRecord : runningRuns)
+      {
+         Integer indexId = runRecord.getValueInteger("quickSearchIndexId");
+         if(indexId != null)
+         {
+            Map<String, Serializable> values = new HashMap<>();
+            values.put("lastRunStatus", RUN_TYPE + " " + RUN_FAILED);
+            values.put("lastErrorMessage", truncate(staleRunMessage(runRecord), 4000));
+            updateIndexRow(indexId, values);
+         }
+      }
+   }
+
+
+
+   /*******************************************************************************
+    ** The error message recorded on a run that stopped without finishing.
+    *******************************************************************************/
+   private static String staleRunMessage(QRecord runRecord)
+   {
+      return ("Full reindex stopped without finishing (no heartbeat since " + lastSeen(runRecord) + "); recovered automatically");
+   }
+
+
+
+   /*******************************************************************************
+    ** Make the AWAITING_REINDEX rows up to lastCapturedId PENDING, for basepull
+    ** to replay. Rows are read in id order past the previous batch, so a row
+    ** that could not be updated is not read again.
+    *******************************************************************************/
+   private void handCapturedDeletesToBasepull(Serializable lastCapturedId) throws QException
+   {
+      QuickSearchQBitConfig config           = getConfig();
+      String                failedEventTable = config.applyPrefix(QuickSearchFailedEvent.TABLE_NAME);
+      Serializable          afterId          = null;
+      Integer               handedOver       = 0;
+
+      while(true)
+      {
+         QQueryFilter filter = new QQueryFilter(
+            new QFilterCriteria("status", QCriteriaOperator.EQUALS, QuickSearchFailedEvent.STATUS_AWAITING_REINDEX),
+            new QFilterCriteria("id", QCriteriaOperator.LESS_THAN_OR_EQUALS, lastCapturedId))
+            .withOrderBy(new QFilterOrderBy("id", true))
+            .withLimit(config.getSourceBatchSize());
+         if(afterId != null)
+         {
+            filter.addCriteria(new QFilterCriteria("id", QCriteriaOperator.GREATER_THAN, afterId));
+         }
+
+         QueryInput queryInput = new QueryInput();
+         queryInput.setTableName(failedEventTable);
+         queryInput.setFilter(filter);
+         List<QRecord> rows = new QueryAction().execute(queryInput).getRecords();
+         if(CollectionUtils.nullSafeIsEmpty(rows))
+         {
+            break;
+         }
+
+         afterId = rows.get(rows.size() - 1).getValue("id");
+         List<QRecord> updates = new ArrayList<>();
+         rows.forEach(row -> updates.add(new QRecord().withValue("id", row.getValue("id")).withValue("status", QuickSearchFailedEvent.STATUS_PENDING)));
+
+         UpdateInput updateInput = new UpdateInput();
+         updateInput.setTableName(failedEventTable);
+         updateInput.setRecords(updates);
+         new UpdateAction().execute(updateInput);
+         handedOver = handedOver + rows.size();
+      }
+
+      LOG.info("Handed deletes captured during a stopped full reindex to basepull", logPair("count", handedOver));
+   }
+
+
+
+   /*******************************************************************************
+    ** Fail when another full reindex is alive.
+    *******************************************************************************/
+   private void refuseIfAlive(List<QRecord> alive) throws QException
+   {
+      if(alive.isEmpty())
+      {
+         return;
+      }
+
+      QRecord run = alive.get(0);
+      throw (new QException("A full reindex is already running (run " + run.getValue("id") + ", last heartbeat " + lastSeen(run) + "); try again once it finishes. "
+         + "A run with no heartbeat for " + getConfig().getEffectiveFullReindexStaleMinutes() + " minutes is treated as stopped and recovered automatically."));
+   }
+
+
+
+   /*******************************************************************************
+    ** Just before the swap, fail unless this run still owns its tables: its
+    ** run records are still RUNNING (a recovery that judged it stopped marks
+    ** them FAILED) and every table is still REBUILDING (otherwise a delete
+    ** since then may have reached only the old index, uncaptured).
+    *******************************************************************************/
+   private void verifyStillOwned(List<QuickSearchableTableConfig> tables, Collection<QuickSearchIndexRun> runs) throws QException
+   {
+      if(isTakenOver(runs))
+      {
+         throw (new QException("Full reindex was recovered as stopped (no heartbeat for " + getConfig().getEffectiveFullReindexStaleMinutes() + " minutes) while still running; the alias was not swapped"));
+      }
+
+      for(QuickSearchableTableConfig tableConfig : tables)
+      {
+         String status = queryIndexRow(tableConfig.getTableName()).getValueString("status");
+         if(!STATUS_REBUILDING.equals(status))
+         {
+            throw (new QException("Table [" + tableConfig.getTableName() + "] is no longer REBUILDING (now " + status + "), so a delete since then may not have been captured; the alias was not swapped"));
+         }
+      }
+   }
+
+
+
+   /*******************************************************************************
+    ** Refresh one of the run's records, which keeps the whole run alive.
+    *******************************************************************************/
+   private void keepAlive(Collection<QuickSearchIndexRun> runs)
+   {
+      runs.stream().findFirst().ifPresent(this::heartbeat);
+   }
+
+
+
+   /*******************************************************************************
+    ** Whether a recovery has marked any of the run records finished.
+    *******************************************************************************/
+   private boolean isTakenOver(Collection<QuickSearchIndexRun> runs) throws QException
+   {
+      if(runs.isEmpty())
+      {
+         return (false);
+      }
+
+      List<Serializable> ids = new ArrayList<>();
+      runs.forEach(run -> ids.add(run.getId()));
+
+      QueryInput queryInput = new QueryInput();
+      queryInput.setTableName(getConfig().getQuickSearchIndexRunTableName());
+      queryInput.setFilter(new QQueryFilter(new QFilterCriteria("id", QCriteriaOperator.IN, ids)));
+      return (CollectionUtils.nonNullList(new QueryAction().execute(queryInput).getRecords()).stream()
+         .anyMatch(run -> !RUN_RUNNING.equals(run.getValueString("status"))));
+   }
+
+
+
+   /*******************************************************************************
+    ** isTakenOver for the failure path: never throws, and answers true when it
+    ** cannot tell, which leaves the tables to the next recovery.
+    *******************************************************************************/
+   private boolean isTakenOverOrUnknown(Collection<QuickSearchIndexRun> runs)
+   {
+      try
+      {
+         return (isTakenOver(runs));
+      }
+      catch(Exception e)
+      {
+         LOG.warn("Could not read whether a recovery took over the failed full reindex; leaving its tables to the next recovery", e);
+         return (true);
+      }
+   }
+
+
+
+   /*******************************************************************************
+    ** The live RUNNING FULL_REINDEX run records other than the given ones.
+    *******************************************************************************/
+   private List<QRecord> queryLiveRunsOtherThan(Collection<QuickSearchIndexRun> own) throws QException
+   {
+      Set<Integer> ownIds = new HashSet<>();
+      own.forEach(run -> ownIds.add(run.getId()));
+
+      Instant cutoff = staleCutoff();
+      return (queryRunningRuns().stream()
+         .filter(run -> !ownIds.contains(run.getValueInteger("id")) && isAlive(run, cutoff))
+         .toList());
+   }
+
+
+
+   /*******************************************************************************
+    ** Every RUNNING FULL_REINDEX run record, oldest first.
+    *******************************************************************************/
+   private List<QRecord> queryRunningRuns() throws QException
+   {
+      QueryInput queryInput = new QueryInput();
+      queryInput.setTableName(getConfig().getQuickSearchIndexRunTableName());
+      queryInput.setFilter(new QQueryFilter(
+         new QFilterCriteria("runType", QCriteriaOperator.EQUALS, RUN_TYPE),
+         new QFilterCriteria("status", QCriteriaOperator.EQUALS, RUN_RUNNING))
+         .withOrderBy(new QFilterOrderBy("id", true)));
+      return (CollectionUtils.nonNullList(new QueryAction().execute(queryInput).getRecords()));
+   }
+
+
+
+   /*******************************************************************************
+    ** Every quickSearchIndex row that is REBUILDING.
+    *******************************************************************************/
+   private List<QRecord> queryRebuildingIndexRows() throws QException
+   {
+      QueryInput queryInput = new QueryInput();
+      queryInput.setTableName(getConfig().getQuickSearchIndexTableName());
+      queryInput.setFilter(new QQueryFilter(new QFilterCriteria("status", QCriteriaOperator.EQUALS, STATUS_REBUILDING)));
+      return (CollectionUtils.nonNullList(new QueryAction().execute(queryInput).getRecords()));
+   }
+
+
+
+   /*******************************************************************************
+    ** The id of the newest AWAITING_REINDEX row, or null. Ids grow in insert
+    ** order, so a row captured after this read is beyond it.
+    *******************************************************************************/
+   private Serializable queryLastCapturedDeleteId() throws QException
+   {
+      QueryInput queryInput = new QueryInput();
+      queryInput.setTableName(getConfig().applyPrefix(QuickSearchFailedEvent.TABLE_NAME));
+      queryInput.setFilter(new QQueryFilter(new QFilterCriteria("status", QCriteriaOperator.EQUALS, QuickSearchFailedEvent.STATUS_AWAITING_REINDEX))
+         .withOrderBy(new QFilterOrderBy("id", false))
+         .withLimit(1));
+      List<QRecord> rows = new QueryAction().execute(queryInput).getRecords();
+      return (CollectionUtils.nullSafeIsEmpty(rows) ? null : rows.get(0).getValue("id"));
+   }
+
+
+
+   /*******************************************************************************
+    ** Run records last seen before this are stale.
+    *******************************************************************************/
+   private Instant staleCutoff() throws QException
+   {
+      return (Instant.now().minus(getConfig().getEffectiveFullReindexStaleMinutes(), ChronoUnit.MINUTES));
+   }
+
+
+
+   /*******************************************************************************
+    ** Whether a run record was last seen after the cutoff.
+    *******************************************************************************/
+   private static boolean isAlive(QRecord run, Instant cutoff)
+   {
+      Instant lastSeen = lastSeen(run);
+      return (lastSeen != null && lastSeen.isAfter(cutoff));
+   }
+
+
+
+   /*******************************************************************************
+    ** A run record's latest sign of life: its startTime or its heartbeat
+    ** (modifyDate), whichever is later; null when it has neither.
+    *******************************************************************************/
+   private static Instant lastSeen(QRecord run)
+   {
+      Instant startTime  = run.getValueInstant("startTime");
+      Instant modifyDate = run.getValueInstant("modifyDate");
+      if(startTime == null || modifyDate == null)
+      {
+         return (startTime == null ? modifyDate : startTime);
+      }
+      return (startTime.isAfter(modifyDate) ? startTime : modifyDate);
+   }
+
+
+
+   /*******************************************************************************
+    ** The earliest startTime among the run records of an index row, or null.
+    *******************************************************************************/
+   private static Instant earliestStart(List<QRecord> runs, Integer indexId)
+   {
+      return (runs.stream()
+         .filter(run -> Objects.equals(indexId, run.getValueInteger("quickSearchIndexId")))
+         .map(run -> run.getValueInstant("startTime"))
+         .filter(Objects::nonNull)
+         .min(Instant::compareTo)
+         .orElse(null));
+   }
+
+
+
+   /*******************************************************************************
     ** Apply the deletes the listener captured during the rebuild (failed-event
     ** rows with status AWAITING_REINDEX) through the alias, after the rebuild's
     ** own writes, so an in-flight page cannot bring a deleted record back.
     ** Called once the tables are no longer REBUILDING, so the listener stops
     ** adding rows (one that races the status change hands its own rows to
-    ** basepull).
+    ** basepull). Only rows up to the newest one read at the start are applied,
+    ** since a later row belongs to a newer run. The run is kept alive before
+    ** every batch, and the drain stops once a recovery has taken it over.
     **
     ** Rows are read in id order, past the previous batch, so a batch whose rows
     ** could not be removed or updated (QQQ reports those as per-row errors, not
-    ** exceptions) is not read again; such rows stay AWAITING_REINDEX for the next
-    ** full reindex. Never throws.
+    ** exceptions) is not read again; such rows stay AWAITING_REINDEX until the
+    ** next full reindex, or a basepull that finds none running, picks them up.
+    ** Never throws.
     *******************************************************************************/
-   void applyCapturedDeletes(QuickSearchOpenSearchClient client, List<QuickSearchableTableConfig> tables)
+   void applyCapturedDeletes(QuickSearchOpenSearchClient client, List<QuickSearchableTableConfig> tables, Collection<QuickSearchIndexRun> runs)
    {
       List<Serializable> tableNames = new ArrayList<>();
       tables.forEach(tableConfig -> tableNames.add(tableConfig.getTableName()));
@@ -302,13 +758,22 @@ public class FullReindexStep extends AbstractIndexingStep
       {
          QuickSearchQBitConfig config           = getConfig();
          String                failedEventTable = config.applyPrefix(QuickSearchFailedEvent.TABLE_NAME);
+         Serializable          lastCapturedId   = queryLastCapturedDeleteId();
          Serializable          afterId          = null;
 
-         while(true)
+         while(lastCapturedId != null)
          {
+            if(isTakenOver(runs))
+            {
+               LOG.warn("A recovery took this full reindex over while it applied its captured deletes; leaving the rest to the recovery", logPair("applied", applied));
+               break;
+            }
+            keepAlive(runs);
+
             QQueryFilter filter = new QQueryFilter(
                new QFilterCriteria("status", QCriteriaOperator.EQUALS, QuickSearchFailedEvent.STATUS_AWAITING_REINDEX),
-               new QFilterCriteria("tableName", QCriteriaOperator.IN, tableNames))
+               new QFilterCriteria("tableName", QCriteriaOperator.IN, tableNames),
+               new QFilterCriteria("id", QCriteriaOperator.LESS_THAN_OR_EQUALS, lastCapturedId))
                .withOrderBy(new QFilterOrderBy("id", true))
                .withLimit(config.getSourceBatchSize());
             if(afterId != null)
@@ -445,35 +910,6 @@ public class FullReindexStep extends AbstractIndexingStep
       }
 
       return (toApply.size());
-   }
-
-
-
-   /*******************************************************************************
-    ** The record IDs, among the rows' recordIds, that exist in the source table.
-    *******************************************************************************/
-   Set<String> queryExistingRecordIds(String tableName, List<QRecord> rows) throws QException
-   {
-      QuickSearchableTableConfig tableConfig = getTableConfig(tableName);
-      if(tableConfig == null)
-      {
-         return (Set.of());
-      }
-
-      String             primaryKeyField = tableConfig.getPrimaryKeyField() == null ? "id" : tableConfig.getPrimaryKeyField();
-      List<Serializable> recordIds       = new ArrayList<>();
-      rows.forEach(row -> recordIds.add(row.getValueString("recordId")));
-
-      QueryInput queryInput = new QueryInput();
-      queryInput.setTableName(tableName);
-      queryInput.setFilter(new QQueryFilter(new QFilterCriteria(primaryKeyField, QCriteriaOperator.IN, recordIds)));
-
-      Set<String> existingIds = new HashSet<>();
-      for(QRecord record : CollectionUtils.nonNullList(new QueryAction().execute(queryInput).getRecords()))
-      {
-         existingIds.add(record.getValueString(primaryKeyField));
-      }
-      return (existingIds);
    }
 
 

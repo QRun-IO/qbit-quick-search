@@ -132,7 +132,7 @@ public class ReconcileIndexStep extends AbstractIndexingStep
       try
       {
          Instant     reconcileStart = Instant.now();
-         IndexCounts counts         = indexAllRecords(client, tableConfig, List.of(), null);
+         IndexCounts counts         = indexAllRecords(client, tableConfig, List.of(), null, run);
 
          Long documentsRemoved = 0L;
          if(counts.errors() == 0)

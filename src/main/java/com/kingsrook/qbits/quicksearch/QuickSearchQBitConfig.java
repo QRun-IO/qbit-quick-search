@@ -18,10 +18,13 @@ package com.kingsrook.qbits.quicksearch;
 
 
 import java.net.URI;
+import java.text.ParseException;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Set;
+import java.util.TimeZone;
 import java.util.regex.Pattern;
 import com.fasterxml.jackson.annotation.JsonIgnore;
 import com.kingsrook.qqq.backend.core.model.metadata.QInstance;
@@ -30,12 +33,14 @@ import com.kingsrook.qqq.backend.core.model.metadata.permissions.PermissionLevel
 import com.kingsrook.qqq.backend.core.model.metadata.permissions.QPermissionRules;
 import com.kingsrook.qqq.backend.core.model.metadata.producers.MetaDataCustomizerInterface;
 import com.kingsrook.qqq.backend.core.model.metadata.qbits.QBitConfig;
+import com.kingsrook.qqq.backend.core.model.metadata.scheduleing.QSchedulerMetaData;
 import com.kingsrook.qqq.backend.core.model.metadata.tables.QTableMetaData;
 import com.kingsrook.qqq.backend.core.utils.CollectionUtils;
 import com.kingsrook.qqq.backend.core.utils.StringUtils;
 import com.kingsrook.qbits.quicksearch.model.QuickSearchIndex;
 import com.kingsrook.qbits.quicksearch.model.QuickSearchIndexRun;
 import com.kingsrook.qbits.quicksearch.publisher.IndexEventPublisher;
+import org.quartz.CronExpression;
 
 
 /*******************************************************************************
@@ -66,6 +71,19 @@ public class QuickSearchQBitConfig implements QBitConfig
    public static final String DEFAULT_ADMIN_PERMISSION_BASE_NAME   = "quickSearchAdmin";
    public static final String DEFAULT_BASEPULL_TIMESTAMP_FIELD     = "modifyDate";
    public static final int    DEFAULT_RECORD_SEARCH_TIMEOUT_MILLIS = 2500;
+   public static final String DEFAULT_DEBUG_PERMISSION_BASE_NAME   = "quickSearchDebug";
+   public static final int    DEFAULT_VALIDATION_SAMPLE_SIZE       = 50;
+   public static final int    MAX_VALIDATION_SAMPLE_SIZE           = 1000;
+   public static final int    DEFAULT_DIAGNOSTIC_RUNS_PER_MINUTE   = 30;
+
+   ///////////////////////////////////////////////////////////////////////////////
+   // a live full reindex refreshes its run record after every page; a page is  //
+   // one source query plus sourceBatchSize / bulkBatchSize bulk requests, each //
+   // bounded by the transport timeouts (a few minutes at most by default),     //
+   // so 30 minutes leaves a wide margin before a slow run is judged dead, and  //
+   // basepull (every 5 minutes by default) recovers a dead one soon after      //
+   ///////////////////////////////////////////////////////////////////////////////
+   public static final Integer DEFAULT_FULL_REINDEX_STALE_MINUTES = 30;
 
    private static final Pattern INDEX_NAME_PATTERN = Pattern.compile("^[a-z0-9][a-z0-9_+.-]*$");
    private static final Set<String> AWS_SERVICE_NAMES = Set.of("es", "aoss");
@@ -101,6 +119,7 @@ public class QuickSearchQBitConfig implements QBitConfig
    private Integer basepullOverlapSeconds = 300;
    private Integer defaultBasepullIntervalMinutes = 5;
    private Integer runHistoryRetentionDays = 30;
+   private Integer fullReindexStaleMinutes = DEFAULT_FULL_REINDEX_STALE_MINUTES;
    private Integer bulkBatchSize = 500;
    private Integer sourceBatchSize = 1000;
    private Integer maxFieldLength = 10000;
@@ -108,12 +127,19 @@ public class QuickSearchQBitConfig implements QBitConfig
    private Boolean applyRecordSecurityLocks = true;
    private Boolean serveCoreRecordSearch = true;
    private Integer recordSearchTimeoutMillis = DEFAULT_RECORD_SEARCH_TIMEOUT_MILLIS;
+   private Boolean enableDiagnosticTools = true;
+   private Boolean enableRecordDiagnosticActions = true;
+   private String validationCronExpression;
+   private String validationCronTimeZoneId;
+   private Integer validationSampleSize = DEFAULT_VALIDATION_SAMPLE_SIZE;
+   private Integer diagnosticRunsPerMinute = DEFAULT_DIAGNOSTIC_RUNS_PER_MINUTE;
    private List<Class<?>> searchableEntityClasses;
    private List<SearchableTableConfig> searchableTables;
 
    private transient IndexEventPublisher indexEventPublisher;
    private transient QPermissionRules adminPermissionRules = new QPermissionRules().withLevel(PermissionLevel.HAS_ACCESS_PERMISSION).withPermissionBaseName(DEFAULT_ADMIN_PERMISSION_BASE_NAME);
    private transient QPermissionRules tablePermissionRules = new QPermissionRules().withLevel(PermissionLevel.READ_WRITE_PERMISSIONS);
+   private transient QPermissionRules debugPermissionRules = new QPermissionRules().withLevel(PermissionLevel.HAS_ACCESS_PERMISSION).withPermissionBaseName(DEFAULT_DEBUG_PERMISSION_BASE_NAME);
    private transient MetaDataCustomizerInterface<QTableMetaData> tableMetaDataCustomizer;
    private transient QuickSearchRuntime runtime;
 
@@ -398,6 +424,14 @@ public class QuickSearchQBitConfig implements QBitConfig
       requirePositive(recordSearchTimeoutMillis, "recordSearchTimeoutMillis", errors);
       requirePositive(maxFieldLength, "maxFieldLength", errors);
       requirePositive(runHistoryRetentionDays, "runHistoryRetentionDays", errors);
+      requirePositive(fullReindexStaleMinutes, "fullReindexStaleMinutes", errors);
+      requirePositive(validationSampleSize, "validationSampleSize", errors);
+      requirePositive(diagnosticRunsPerMinute, "diagnosticRunsPerMinute", errors);
+
+      if(validationSampleSize != null && validationSampleSize > MAX_VALIDATION_SAMPLE_SIZE)
+      {
+         errors.add("validationSampleSize must be at most " + MAX_VALIDATION_SAMPLE_SIZE + " for QuickSearchQBit");
+      }
 
       if(basepullOverlapSeconds != null && basepullOverlapSeconds < 0)
       {
@@ -421,18 +455,71 @@ public class QuickSearchQBitConfig implements QBitConfig
 
 
    /*******************************************************************************
-    **
+    ** The scheduler must exist when the instance already has schedulers. A
+    ** reconcile cron gets the checks QQQ's instance validator applies to every
+    ** cron schedule (Quartz syntax, a required and known time zone, which QQQ
+    ** never defaults), plus a scheduler that supports cron, so a bad schedule
+    ** fails produce() naming these fields instead of failing at startup.
     *******************************************************************************/
    private void validateScheduling(QInstance qInstance, List<String> errors)
    {
-      if(StringUtils.hasContent(schedulerName) && qInstance != null && !CollectionUtils.nullSafeIsEmpty(qInstance.getSchedulers()) && qInstance.getScheduler(schedulerName) == null)
+      QSchedulerMetaData scheduler = null;
+      if(StringUtils.hasContent(schedulerName) && qInstance != null && !CollectionUtils.nullSafeIsEmpty(qInstance.getSchedulers()))
       {
-         errors.add("Scheduler not found: " + schedulerName);
+         scheduler = qInstance.getScheduler(schedulerName);
+         if(scheduler == null)
+         {
+            errors.add("Scheduler not found: " + schedulerName);
+         }
       }
 
-      if(StringUtils.hasContent(reconcileCronExpression) && !StringUtils.hasContent(schedulerName))
+      validateCron("reconcile", reconcileCronExpression, reconcileCronTimeZoneId, scheduler, errors);
+      validateCron("validation", validationCronExpression, validationCronTimeZoneId, scheduler, errors);
+
+      if(StringUtils.hasContent(validationCronExpression) && !Boolean.TRUE.equals(enableDiagnosticTools))
       {
-         errors.add("reconcileCronExpression requires schedulerName");
+         errors.add("validationCronExpression requires enableDiagnosticTools");
+      }
+   }
+
+
+
+   /*******************************************************************************
+    ** A cron schedule (prefix "reconcile" or "validation"): needs schedulerName
+    ** on a scheduler that supports cron, a valid Quartz expression and a
+    ** recognized time zone ID.
+    *******************************************************************************/
+   private void validateCron(String prefix, String cronExpression, String cronTimeZoneId, QSchedulerMetaData scheduler, List<String> errors)
+   {
+      if(StringUtils.hasContent(cronExpression))
+      {
+         if(!StringUtils.hasContent(schedulerName))
+         {
+            errors.add(prefix + "CronExpression requires schedulerName");
+         }
+         else if(scheduler != null && !scheduler.supportsCronSchedules())
+         {
+            errors.add(prefix + "CronExpression requires a scheduler that supports cron schedules, such as a QuartzSchedulerMetaData; scheduler [" + schedulerName + "] is of type " + scheduler.getType());
+         }
+
+         try
+         {
+            CronExpression.validateExpression(cronExpression);
+         }
+         catch(ParseException e)
+         {
+            errors.add(prefix + "CronExpression [" + cronExpression + "] is not a valid Quartz cron expression: " + e.getMessage());
+         }
+
+         if(!StringUtils.hasContent(cronTimeZoneId))
+         {
+            errors.add(prefix + "CronExpression requires " + prefix + "CronTimeZoneId (a time zone ID such as UTC or America/Chicago)");
+         }
+      }
+
+      if(StringUtils.hasContent(cronTimeZoneId) && !Arrays.asList(TimeZone.getAvailableIDs()).contains(cronTimeZoneId))
+      {
+         errors.add(prefix + "CronTimeZoneId [" + cronTimeZoneId + "] is not a recognized time zone ID");
       }
    }
 
@@ -563,6 +650,17 @@ public class QuickSearchQBitConfig implements QBitConfig
    public String getEffectiveAwsServiceName()
    {
       return (StringUtils.hasContent(awsServiceName) ? awsServiceName.toLowerCase() : "es");
+   }
+
+
+
+   /*******************************************************************************
+    ** fullReindexStaleMinutes, defaulting to DEFAULT_FULL_REINDEX_STALE_MINUTES.
+    *******************************************************************************/
+   @JsonIgnore
+   public Integer getEffectiveFullReindexStaleMinutes()
+   {
+      return (fullReindexStaleMinutes == null ? DEFAULT_FULL_REINDEX_STALE_MINUTES : fullReindexStaleMinutes);
    }
 
 
@@ -1588,7 +1686,9 @@ public class QuickSearchQBitConfig implements QBitConfig
 
 
    /*******************************************************************************
-    ** Getter for reconcileCronExpression: optional cron schedule for reconcile (needs a scheduler that supports cron)
+    ** Getter for reconcileCronExpression: optional Quartz cron schedule for
+    ** reconcile; needs reconcileCronTimeZoneId and a scheduler that supports
+    ** cron (Quartz)
     *******************************************************************************/
    public String getReconcileCronExpression()
    {
@@ -1620,7 +1720,9 @@ public class QuickSearchQBitConfig implements QBitConfig
 
 
    /*******************************************************************************
-    ** Getter for reconcileCronTimeZoneId: time zone for reconcileCronExpression
+    ** Getter for reconcileCronTimeZoneId: time zone ID for
+    ** reconcileCronExpression (UTC, America/Chicago); required with it, since
+    ** QQQ has no default zone for cron schedules
     *******************************************************************************/
    public String getReconcileCronTimeZoneId()
    {
@@ -1744,6 +1846,36 @@ public class QuickSearchQBitConfig implements QBitConfig
       return (this);
    }
 
+
+
+   /*******************************************************************************
+    ** Getter for fullReindexStaleMinutes: a RUNNING full reindex whose run record shows no sign of life (start or heartbeat) for this many minutes is treated as stopped; null means the default
+    *******************************************************************************/
+   public Integer getFullReindexStaleMinutes()
+   {
+      return (this.fullReindexStaleMinutes);
+   }
+
+
+
+   /*******************************************************************************
+    ** Setter for fullReindexStaleMinutes
+    *******************************************************************************/
+   public void setFullReindexStaleMinutes(Integer fullReindexStaleMinutes)
+   {
+      this.fullReindexStaleMinutes = fullReindexStaleMinutes;
+   }
+
+
+
+   /*******************************************************************************
+    ** Fluent setter for fullReindexStaleMinutes
+    *******************************************************************************/
+   public QuickSearchQBitConfig withFullReindexStaleMinutes(Integer fullReindexStaleMinutes)
+   {
+      this.fullReindexStaleMinutes = fullReindexStaleMinutes;
+      return (this);
+   }
 
 
 
@@ -2130,6 +2262,229 @@ public class QuickSearchQBitConfig implements QBitConfig
       return (this);
    }
 
+
+
+
+   /*******************************************************************************
+    ** Getter for enableDiagnosticTools: add the admin diagnostic tools (search playground, index validation, analyzer tester, diagnostic event and validation run tables, diagnostics widget); default true
+    *******************************************************************************/
+   public Boolean getEnableDiagnosticTools()
+   {
+      return (this.enableDiagnosticTools);
+   }
+
+
+
+   /*******************************************************************************
+    ** Setter for enableDiagnosticTools
+    *******************************************************************************/
+   public void setEnableDiagnosticTools(Boolean enableDiagnosticTools)
+   {
+      this.enableDiagnosticTools = enableDiagnosticTools;
+   }
+
+
+
+   /*******************************************************************************
+    ** Fluent setter for enableDiagnosticTools
+    *******************************************************************************/
+   public QuickSearchQBitConfig withEnableDiagnosticTools(Boolean enableDiagnosticTools)
+   {
+      this.enableDiagnosticTools = enableDiagnosticTools;
+      return (this);
+   }
+
+
+
+
+   /*******************************************************************************
+    ** Getter for enableRecordDiagnosticActions: with enableDiagnosticTools, also add the per-table record actions (inspect search document, reindex records) to every indexed table; default true
+    *******************************************************************************/
+   public Boolean getEnableRecordDiagnosticActions()
+   {
+      return (this.enableRecordDiagnosticActions);
+   }
+
+
+
+   /*******************************************************************************
+    ** Setter for enableRecordDiagnosticActions
+    *******************************************************************************/
+   public void setEnableRecordDiagnosticActions(Boolean enableRecordDiagnosticActions)
+   {
+      this.enableRecordDiagnosticActions = enableRecordDiagnosticActions;
+   }
+
+
+
+   /*******************************************************************************
+    ** Fluent setter for enableRecordDiagnosticActions
+    *******************************************************************************/
+   public QuickSearchQBitConfig withEnableRecordDiagnosticActions(Boolean enableRecordDiagnosticActions)
+   {
+      this.enableRecordDiagnosticActions = enableRecordDiagnosticActions;
+      return (this);
+   }
+
+
+
+
+   /*******************************************************************************
+    ** Getter for validationCronExpression: cron schedule for the index validation process (needs schedulerName); none by default
+    *******************************************************************************/
+   public String getValidationCronExpression()
+   {
+      return (this.validationCronExpression);
+   }
+
+
+
+   /*******************************************************************************
+    ** Setter for validationCronExpression
+    *******************************************************************************/
+   public void setValidationCronExpression(String validationCronExpression)
+   {
+      this.validationCronExpression = validationCronExpression;
+   }
+
+
+
+   /*******************************************************************************
+    ** Fluent setter for validationCronExpression
+    *******************************************************************************/
+   public QuickSearchQBitConfig withValidationCronExpression(String validationCronExpression)
+   {
+      this.validationCronExpression = validationCronExpression;
+      return (this);
+   }
+
+
+
+
+   /*******************************************************************************
+    ** Getter for validationCronTimeZoneId: time zone for validationCronExpression
+    *******************************************************************************/
+   public String getValidationCronTimeZoneId()
+   {
+      return (this.validationCronTimeZoneId);
+   }
+
+
+
+   /*******************************************************************************
+    ** Setter for validationCronTimeZoneId
+    *******************************************************************************/
+   public void setValidationCronTimeZoneId(String validationCronTimeZoneId)
+   {
+      this.validationCronTimeZoneId = validationCronTimeZoneId;
+   }
+
+
+
+   /*******************************************************************************
+    ** Fluent setter for validationCronTimeZoneId
+    *******************************************************************************/
+   public QuickSearchQBitConfig withValidationCronTimeZoneId(String validationCronTimeZoneId)
+   {
+      this.validationCronTimeZoneId = validationCronTimeZoneId;
+      return (this);
+   }
+
+
+
+
+   /*******************************************************************************
+    ** Getter for validationSampleSize: records sampled per table by index validation (default 50, at most 1000)
+    *******************************************************************************/
+   public Integer getValidationSampleSize()
+   {
+      return (this.validationSampleSize);
+   }
+
+
+
+   /*******************************************************************************
+    ** Setter for validationSampleSize
+    *******************************************************************************/
+   public void setValidationSampleSize(Integer validationSampleSize)
+   {
+      this.validationSampleSize = validationSampleSize;
+   }
+
+
+
+   /*******************************************************************************
+    ** Fluent setter for validationSampleSize
+    *******************************************************************************/
+   public QuickSearchQBitConfig withValidationSampleSize(Integer validationSampleSize)
+   {
+      this.validationSampleSize = validationSampleSize;
+      return (this);
+   }
+
+
+
+
+   /*******************************************************************************
+    ** Getter for diagnosticRunsPerMinute: per-user limit on diagnostic tool runs per minute (default 30)
+    *******************************************************************************/
+   public Integer getDiagnosticRunsPerMinute()
+   {
+      return (this.diagnosticRunsPerMinute);
+   }
+
+
+
+   /*******************************************************************************
+    ** Setter for diagnosticRunsPerMinute
+    *******************************************************************************/
+   public void setDiagnosticRunsPerMinute(Integer diagnosticRunsPerMinute)
+   {
+      this.diagnosticRunsPerMinute = diagnosticRunsPerMinute;
+   }
+
+
+
+   /*******************************************************************************
+    ** Fluent setter for diagnosticRunsPerMinute
+    *******************************************************************************/
+   public QuickSearchQBitConfig withDiagnosticRunsPerMinute(Integer diagnosticRunsPerMinute)
+   {
+      this.diagnosticRunsPerMinute = diagnosticRunsPerMinute;
+      return (this);
+   }
+
+
+
+
+   /*******************************************************************************
+    ** Getter for debugPermissionRules: permission rules for the read-only diagnostic tools and the diagnostics widget (default: quickSearchDebug.hasAccess)
+    *******************************************************************************/
+   public QPermissionRules getDebugPermissionRules()
+   {
+      return (this.debugPermissionRules);
+   }
+
+
+
+   /*******************************************************************************
+    ** Setter for debugPermissionRules
+    *******************************************************************************/
+   public void setDebugPermissionRules(QPermissionRules debugPermissionRules)
+   {
+      this.debugPermissionRules = debugPermissionRules;
+   }
+
+
+
+   /*******************************************************************************
+    ** Fluent setter for debugPermissionRules
+    *******************************************************************************/
+   public QuickSearchQBitConfig withDebugPermissionRules(QPermissionRules debugPermissionRules)
+   {
+      this.debugPermissionRules = debugPermissionRules;
+      return (this);
+   }
 
 
 

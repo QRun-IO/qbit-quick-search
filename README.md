@@ -1,6 +1,6 @@
 # QBit: Quick Search
 
-[![Version](https://img.shields.io/badge/version-1.0.0--RC.1-blue.svg)](https://github.com/QRun-IO/qbit-quick-search)
+[![Version](https://img.shields.io/badge/version-1.1.0--RC.1-blue.svg)](https://github.com/QRun-IO/qbit-quick-search)
 [![License](https://img.shields.io/badge/license-Apache%202.0-green.svg)](https://www.apache.org/licenses/LICENSE-2.0)
 [![Java](https://img.shields.io/badge/java-21+-blue.svg)](https://adoptium.net/)
 
@@ -49,11 +49,11 @@ For `AWS_SIGV4` add these optional dependencies to your host (the QBit declares 
 <dependency>
     <groupId>com.kingsrook.qbits</groupId>
     <artifactId>qbit-quick-search</artifactId>
-    <version>1.0.0-RC.1</version>
+    <version>1.1.0-RC.1</version>
 </dependency>
 ```
 
-`1.0.0-RC.1` is the current release candidate; `1.0.0` follows once host applications have adopted it (#12).
+`1.1.0-RC.1` is the current release candidate (the 1.1 line, published from `release/1.1`; it needs QQQ 4.1.0-RC.2 or later, see [Upgrading from 1.0](#upgrading-from-10)). Hosts staying on the 1.0 line use `1.0.0-RC.2`; `1.0.0` follows once host applications have adopted it (#12).
 
 Annotate entity classes:
 
@@ -100,7 +100,7 @@ config.withSearchableTable(new SearchableTableConfig("crmContact", List.of(
    .withRecordLabelFormat("%s %s", "firstName", "lastName"));
 ```
 
-Annotation and config-driven tables can be mixed; a table may appear in only one of them. Hidden and password fields are never indexed. A table without the change-detection field (`modifyDate` by default) is covered by reconcile instead of incremental basepull.
+Annotation and config-driven tables can be mixed; a table may appear in only one of them. Hidden and password fields are never indexed. A table without the change-detection field (`modifyDate` by default) is covered by reconcile instead of incremental basepull, and the QBit logs a warning for it at startup. Set `basepullTimestampField` to null on a config-driven table to opt out without the warning.
 
 ### Searching
 
@@ -140,11 +140,42 @@ QQQ core has its own record search (`RecordSearchAction`, served at `POST /qqq/v
 
 | Process | Trigger | What it does |
 |---|---|---|
-| Quick Search Basepull Index | Scheduled every `basepullRepeatSeconds` when `schedulerName` is set; also on demand | Replays failed real-time events, re-indexes rows changed since the last run start minus `basepullOverlapSeconds`, purges old run history |
+| Quick Search Basepull Index | Scheduled every `basepullRepeatSeconds` when `schedulerName` is set; also on demand | Recovers a full reindex that stopped without finishing, replays failed real-time events, re-indexes rows changed since the last run start minus `basepullOverlapSeconds`, purges old run history |
 | Quick Search Reconcile Index | Cron via `reconcileCronExpression` when `schedulerName` is set; also on demand (optional `tableName` input) | Re-indexes everything in place, removes documents without a source row and documents of unconfigured tables |
-| Quick Search Full Reindex | On demand (optional `tableName` input) | All tables: build a fresh physical index and swap the alias. One table: reconcile algorithm in place |
+| Quick Search Full Reindex | On demand (optional `tableName` input) | All tables: build a fresh physical index and swap the alias. One table: reconcile algorithm in place. Fails to start while another full reindex is running |
 
 Without `schedulerName` the processes exist but nothing runs them; the QBit logs a warning at startup.
+
+### Scheduling
+
+The schedules run only when the host starts through QQQ's `QApplicationLauncher` (`com.kingsrook.qqq.middleware.javalin.QApplicationLauncher`, in `qqq-middleware-javalin`). `QApplicationLauncher.run(new MyApplication(), new QApplicationLauncherConfig())` starts the Javalin server, then the `QScheduleManager` (because the QBit's processes are scheduled), then the instance's runtime services. A host that starts only a server, or builds the `QInstance` itself, gets the processes but nothing runs them on a schedule, unless it calls `QScheduleManager.initInstance(qInstance, systemSessionSupplier).start()` itself. `qqq.scheduleManager.enabled=false` (or `QQQ_SCHEDULE_MANAGER_ENABLED=false`) turns schedules off on a node.
+
+Basepull's fixed interval runs on any QQQ scheduler. `reconcileCronExpression` needs a scheduler that supports cron, which in QQQ 4.1 means a `QuartzSchedulerMetaData`; a `SimpleSchedulerMetaData` runs fixed intervals only. The expression uses Quartz syntax, seconds first (`0 0 3 * * ?` is 03:00 every day), and needs `reconcileCronTimeZoneId`, a Java time zone ID such as `UTC` or `America/Chicago`; QQQ has no default zone. `produce()` rejects a cron without a zone, an invalid expression or zone, and a cron on a scheduler in the instance that does not support cron.
+
+```java
+qInstance.addScheduler(new QuartzSchedulerMetaData().withName("quartz").withProperties(quartzProperties));
+
+config.withSchedulerName("quartz")
+   .withReconcileCronExpression("0 0 3 * * ?")
+   .withReconcileCronTimeZoneId("America/Chicago");
+```
+
+### Diagnostic tools
+
+With `enableDiagnosticTools` (default `true`) the QBit adds tools to validate the search and debug it from the admin UI. They are table and record actions (never left-nav entries), gated by permissions, recorded in `quickSearchDiagnosticEvent`, limited to `diagnosticRunsPerMinute` runs per user and tool, and read-only except Reindex in Search.
+
+| Tool | Where | What it does |
+|---|---|---|
+| Search Playground | Quick Search Index, Actions (select rows to pre-fill their tables) | Runs a term the way the global search does, as you: the path each table takes (OpenSearch provider, core database search, or not searched) and why; the provider's own request, timed; the global search results you would see; per indexed table, the production query with scores, highlights, matched fields, which hits you can read and which the global search shows, the query DSL and the raw response (hits you cannot read are redacted); the term's tokens; and `explain` for a hit (`table:id`). The form stays open, so you can change the term and run again. |
+| Validate Search Index | Quick Search Index, Actions; also scheduled by `validationCronExpression` | Cluster and index health, the alias, leftover physical indexes from interrupted rebuilds, the live mapping (version, field types, analyzers, the `fieldValues` template) and analysis settings, then per table: database rows vs documents, a sample of records checked present and current in the index, a random sample of documents checked to still have a record, the index row's status and last run, and waiting failed events. Each finding is OK, INFO, WARN or FAIL with what to do. The report is saved as a `quickSearchValidationRun` row (HTML for the record view, JSON for tools). Database reads run as the system user so counts compare like with like; the report holds counts, ids and field names, never record values. One validation runs at a time per server. |
+| Test Search Analyzer | Quick Search Index, Actions | `_analyze` on the live index: the tokens of a text as indexed (edge n-grams of 2 to 20 characters) and as a query, and, given a term, whether every term token is among the text's indexed tokens. |
+| Inspect Search Document | Every indexed table's records (Actions), and Quick Search Failed Event rows | The record's document in the index next to the document indexing would write from the database now, field by field (current, stale or missing), with versions and the raw document. Enter a term to see why the record does or does not match it: term length, table enabled, read permission, document present and current, each term token found or not (and why: one character, longer than 20, not in the text, or only in the database's newer values), `explain`, and the record's rank against the number of ids the global search takes. |
+| Reindex in Search | Every indexed table's records, and Quick Search Failed Event rows | Rebuild the selected records' documents from the database now (versioned writes, so a newer document is never overwritten); a record that no longer exists has its document removed; a record you cannot read is skipped. Asks to confirm. Needs the admin permission. |
+| Search Diagnostics widget | The Quick Search Admin app home (hosts with their own home add `quickSearchDiagnostics`) | Whether the global search is served by OpenSearch on this server or backing off (and why), failure and fallback counts, the latest search failures from every server, and the latest validation run. |
+
+Search failures are recorded too: when the provider's OpenSearch request fails or times out (and core falls back to its own search), or `QuickSearchAction`'s search fails, a `SEARCH_FAILED` event keeps the tables, duration, error class and message, and the server. The user's term is never stored, only its length. At most 120 events are written per server per minute.
+
+Permissions: the read-only tools and the widget use `debugPermissionRules` (default `quickSearchDebug.hasAccess`); Reindex in Search uses `adminPermissionRules` (`quickSearchAdmin.hasAccess`); the two history tables use `tablePermissionRules` (grant `.read` only: rows are written by the QBit). Impersonation ("search as user X") is deliberately not offered: a fabricated session would not carry the real user's security key values, so its results would mislead.
 
 ## Configuration reference
 
@@ -163,17 +194,24 @@ Without `schedulerName` the processes exist but nothing runs them; the QBit logs
 | `startupMode` | `FAIL_FAST` | `FAIL_FAST` fails `produce()` when the cluster is unreachable; `DEGRADED` boots and retries on first use |
 | `enableRealTimeIndexing` | `true` | Register the record-change listener |
 | `enableBasepullProcess`, `enableMaintenanceProcesses` | `true` | Register basepull; register full reindex and reconcile. `enableScheduledProcesses` is a deprecated alias for both |
-| `schedulerName`, `basepullRepeatSeconds`, `reconcileCronExpression`, `reconcileCronTimeZoneId` | none, 300, none | Scheduling |
+| `schedulerName`, `basepullRepeatSeconds`, `reconcileCronExpression`, `reconcileCronTimeZoneId` | none, 300, none, none | Scheduling; a cron needs the time zone ID and a Quartz scheduler, and nothing runs without `QApplicationLauncher` (see [Scheduling](#scheduling)) |
 | `basepullOverlapSeconds` | 300 | Re-read window before the previous run start |
 | `defaultBasepullIntervalMinutes` | 5 | Per-table due interval for config-driven tables |
 | `runHistoryRetentionDays` | 30 | Purge run records older than this; null keeps them |
+| `fullReindexStaleMinutes` | 30 | A running full reindex that shows no sign of life for this long is treated as stopped: it no longer blocks a new one, and basepull recovers its tables. Keep it well above the time one page of `sourceBatchSize` records takes; null means the default |
 | `bulkBatchSize`, `maxBulkRequestBytes`, `sourceBatchSize` | 500, 5 MiB, 1000 | Batch sizes |
 | `maxFieldLength` | 10000 | Truncate each indexed value |
 | `maxSearchLimit` | 100 | Largest page size |
 | `applyRecordSecurityLocks` | `true` | Re-read hits through `QueryAction` |
 | `serveCoreRecordSearch` | `true` | Register `QuickSearchRecordSearchProvider` so core `POST /qqq/v1/search` uses OpenSearch for indexed tables, and give those tables `searchFields` when they have none |
 | `recordSearchTimeoutMillis` | 2500 | Wall-clock limit on the OpenSearch request behind a core search; past it, core falls back to its own search |
-| `adminPermissionRules` | `HAS_ACCESS_PERMISSION`, base name `quickSearchAdmin` | Rules for the app and processes |
+| `enableDiagnosticTools` | `true` | Add the diagnostic tools, the `quickSearchDiagnosticEvent` and `quickSearchValidationRun` tables and the diagnostics widget |
+| `enableRecordDiagnosticActions` | `true` | With the tools on, add Inspect Search Document and Reindex in Search to every indexed table |
+| `validationCronExpression`, `validationCronTimeZoneId` | none | Schedule Validate Search Index; same rules as the reconcile schedule (a cron-capable scheduler such as Quartz, a valid Quartz expression, a time zone ID) |
+| `validationSampleSize` | 50 | Records and documents sampled per table by validation (at most 1000) |
+| `diagnosticRunsPerMinute` | 30 | Per-user, per-tool limit on diagnostic runs |
+| `debugPermissionRules` | `HAS_ACCESS_PERMISSION`, base name `quickSearchDebug` | Rules for the read-only diagnostic tools and the widget |
+| `adminPermissionRules` | `HAS_ACCESS_PERMISSION`, base name `quickSearchAdmin` | Rules for the app, the maintenance processes and Reindex in Search |
 | `tablePermissionRules` | `READ_WRITE_PERMISSIONS` | Rules for the operational tables |
 | `tableMetaDataCustomizer` | | Applied to every produced table (backend details, for example) |
 | `searchableEntityClasses`, `searchableTables` | at least one | What to index |
@@ -185,7 +223,9 @@ Without `schedulerName` the processes exist but nothing runs them; the QBit logs
 
 - `quickSearchIndex`: one row per table with `enabled` (honoured by indexing and search, cached for one minute), `basepullIntervalMinutes`, `lastBasepullTime`, `lastReconcileTime`, `lastFullReindexTime`, `lastRunStatus`, `lastErrorMessage`, `recordCount`, `documentCount`, `realTimeErrorCount`, `status` (`ACTIVE`, `NEEDS_REINDEX` when the configured fields changed since the row was created, or `REBUILDING` while a full reindex of all tables runs). Unique on `tableName`.
 - `quickSearchIndexRun`: `runType` (`BASEPULL`, `RECONCILE`, `FULL_REINDEX`), `status`, counts, `errorMessage`.
-- `quickSearchFailedEvent`: real-time events that could not be applied; `status` `PENDING` or `EXHAUSTED` after 10 attempts. Deletes made while a full reindex of all tables runs are also recorded here with status `AWAITING_REINDEX`: the reindex applies them to the new index after the alias swap (basepull does not replay them). While a table is `REBUILDING`, drift detection is suspended for it. If a full reindex is killed mid-run, its tables stay `REBUILDING` and deletes keep collecting as `AWAITING_REINDEX`; no data is lost, and the recovery is to run a full reindex of all tables again, which applies the collected deletes and returns the tables to `ACTIVE`.
+- `quickSearchDiagnosticEvent` (with `enableDiagnosticTools`): `eventType` (`SEARCH_FAILED`, `TOOL_RUN`, `REINDEX`, `RATE_LIMITED`), `source`, `outcome`, `userName`, `tableNames`, `searchTerm` (tool runs only), `durationMillis`, `errorClass`, `errorMessage` (text), `detail` (text), `hostName`, `createDate`. Purged after `runHistoryRetentionDays`.
+- `quickSearchValidationRun` (with `enableDiagnosticTools`): `status` (`PASS`, `WARN`, `FAIL`), `triggerType` (`MANUAL`, `SCHEDULED`), `userName`, `tableNames`, `sampleSize`, `tablesChecked`, `failCount`, `warnCount`, `summary`, `reportHtml` (HTML), `reportJson` (text), `startTime`, `endTime`, `createDate`. Purged after `runHistoryRetentionDays`.
+- `quickSearchFailedEvent`: real-time events that could not be applied; `status` `PENDING` or `EXHAUSTED` after 10 attempts. Deletes made while a full reindex of all tables runs are also recorded here with status `AWAITING_REINDEX`: the reindex applies them to the new index after the alias swap (basepull does not replay them). While a table is `REBUILDING`, drift detection is suspended for it. Only one full reindex runs at a time: starting one while another is running fails. A full reindex shows it is running through its `FULL_REINDEX` run records, which stay `RUNNING` with `modifyDate` refreshed after every page. If it is killed mid-run (pod restart, OOM, deploy), recovery is automatic once its run records have shown no sign of life for `fullReindexStaleMinutes` (30 by default): the next basepull, or the next full reindex, marks those run records `FAILED`, returns the tables to `ACTIVE` with `lastBasepullTime` moved back to the run's start, and turns the `AWAITING_REINDEX` rows `PENDING` so basepull replays the deletes. No data is lost. A run that was only slow and is judged stopped notices before its alias swap and fails without swapping, or, after its swap, stops applying its captured deletes; basepull skips a replayed delete whose record exists again.
 
 ## Extending
 
@@ -207,7 +247,13 @@ See [docs/MIGRATION-1.1.md](docs/MIGRATION-1.1.md). In short: 1.1 needs the QQQ 
 
 ## Upgrading from 0.x
 
-See [docs/MIGRATION-1.0.md](docs/MIGRATION-1.0.md). In short: QQQ 4.1 is required, remove any manual `addQBit` for this QBit, set `schedulerName`, prefer `opensearchUrl` and `${env.}` secrets, and run a full reindex once so the index gets the new mapping.
+See [docs/MIGRATION-1.0.md](docs/MIGRATION-1.0.md). In short: QQQ 4.1 is required, remove any manual `addQBit` for this QBit, set `schedulerName`, prefer `opensearchUrl` and `${env.}` secrets, grant `quickSearchAdmin.hasAccess` and the table permissions, add the new operational table columns and `quickSearchFailedEvent`, and run a full reindex once so the index gets the new mapping.
+
+## Adopting in another app
+
+Follow [Getting started](#getting-started), the [Configuration reference](#configuration-reference) and [Operational tables](#operational-tables) (the host application creates the three tables; this QBit ships no DDL), then run a full reindex. Hosts on 1.0 or 0.x should read the upgrade sections above.
+
+See also the [QQQ adoption checklist](https://github.com/QRun-IO/qqq/blob/develop/docs/migration/adoption-checklist.adoc) for the full per-feature list (QQQ upgrade, Next dashboard, QBits, migrations, permissions).
 
 ## License
 

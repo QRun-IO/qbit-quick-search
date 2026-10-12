@@ -102,6 +102,8 @@ public class QuickSearchOpenSearchClient implements Closeable
    public static final String INDEX_ANALYZER       = "quick_search_analyzer";
    public static final String SEARCH_ANALYZER      = "quick_search_search_analyzer";
    public static final int    MAX_RESULT_WINDOW    = 10_000;
+   public static final String MATCH_CLAUSE_NAME    = "searchableText";
+   public static final String FIELD_CLAUSE_PREFIX  = "field:";
 
    private final OpenSearchClient      client;
    private final OpenSearchAsyncClient asyncClient;
@@ -786,12 +788,29 @@ public class QuickSearchOpenSearchClient implements Closeable
     *******************************************************************************/
    private Query buildSearchQuery(String searchTerm, Collection<String> allowedTables, List<QuickSearchableTableConfig> tableConfigs)
    {
+      return (buildSearchQuery(searchTerm, allowedTables, tableConfigs, false));
+   }
+
+
+
+   /*******************************************************************************
+    ** The search query; with named true each clause carries a query name
+    ** (MATCH_CLAUSE_NAME for the required searchableText match, the field name
+    ** for each boost clause) so a hit reports which clauses matched. Names do
+    ** not change matching or scoring.
+    *******************************************************************************/
+   Query buildSearchQuery(String searchTerm, Collection<String> allowedTables, List<QuickSearchableTableConfig> tableConfigs, boolean named)
+   {
       List<FieldValue> allowed = allowedTables.stream().map(FieldValue::of).toList();
 
       BoolQuery.Builder boolBuilder = new BoolQuery.Builder()
-         .must(Query.of(q -> q.multiMatch(MultiMatchQuery.of(mm -> mm.query(searchTerm).fields("searchableText").operator(Operator.And)))))
+         .must(Query.of(q -> q.multiMatch(MultiMatchQuery.of(mm ->
+         {
+            mm.query(searchTerm).fields("searchableText").operator(Operator.And);
+            return (named ? mm.queryName(MATCH_CLAUSE_NAME) : mm);
+         }))))
          .filter(Query.of(q -> q.terms(t -> t.field("sourceTable").terms(tv -> tv.value(allowed)))))
-         .should(buildFieldBoostQueries(searchTerm, tableConfigs, allowedTables));
+         .should(buildFieldBoostQueries(searchTerm, tableConfigs, allowedTables, named));
 
       return (Query.of(q -> q.bool(boolBuilder.build())));
    }
@@ -801,7 +820,7 @@ public class QuickSearchOpenSearchClient implements Closeable
    /*******************************************************************************
     **
     *******************************************************************************/
-   private List<Query> buildFieldBoostQueries(String searchTerm, List<QuickSearchableTableConfig> tableConfigs, Collection<String> allowedTables)
+   private List<Query> buildFieldBoostQueries(String searchTerm, List<QuickSearchableTableConfig> tableConfigs, Collection<String> allowedTables, boolean named)
    {
       List<Query> queries = new ArrayList<>();
       if(tableConfigs == null)
@@ -821,12 +840,15 @@ public class QuickSearchOpenSearchClient implements Closeable
          for(String field : fields)
          {
             float boost = (weights == null || weights.get(field) == null) ? 1f : weights.get(field).floatValue();
-            queries.add(Query.of(q -> q.multiMatch(MultiMatchQuery.of(mm -> mm
-               .query(searchTerm)
-               .fields("fieldValues." + field)
-               .operator(Operator.And)
-               .lenient(true)
-               .boost(boost)))));
+            queries.add(Query.of(q -> q.multiMatch(MultiMatchQuery.of(mm ->
+            {
+               mm.query(searchTerm)
+                  .fields("fieldValues." + field)
+                  .operator(Operator.And)
+                  .lenient(true)
+                  .boost(boost);
+               return (named ? mm.queryName(FIELD_CLAUSE_PREFIX + field) : mm);
+            }))));
          }
       }
 
@@ -865,6 +887,17 @@ public class QuickSearchOpenSearchClient implements Closeable
       {
          throw wrap("Failed to refresh index [" + physicalIndex + "]", e);
       }
+   }
+
+
+
+   /*******************************************************************************
+    ** The underlying OpenSearch client, for the read-only diagnostics
+    ** (QuickSearchDiagnosticsOperations).
+    *******************************************************************************/
+   OpenSearchClient getOpenSearchClient()
+   {
+      return (client);
    }
 
 

@@ -2,6 +2,10 @@
 
 All notable changes to this project are documented here. The format follows Keep a Changelog; versions follow semantic versioning.
 
+## [1.1.0-RC.1] - 2026-10-11
+
+First release candidate of 1.1, published to Maven Central from `release/1.1`. It contains every change listed under 1.1.0 and 1.0.0 below (1.0.0 has not been released as GA). Requires QQQ 4.1.0-RC.2 or later. Upgrade notes: `docs/MIGRATION-1.1.md`.
+
 ## [1.1.0] - Unreleased
 
 Requires QQQ 4.1.0-RC.2 or later, the first release that carries the record-search provider SPI; built against 4.1.0-RC.2. See `docs/MIGRATION-1.1.md`.
@@ -11,6 +15,12 @@ Requires QQQ 4.1.0-RC.2 or later, the first release that carries the record-sear
 - `serveCoreRecordSearch` (default `true`): registers the provider and gives indexed tables core `searchFields` (visible string and integer searchable fields) when they have none. Host `searchFields` and a host-registered provider are never replaced.
 - `recordSearchTimeoutMillis` (default 2500): wall-clock limit on the OpenSearch request; on timeout or any failure core falls back to its own search, and the provider claims no tables for 30 seconds.
 - `QuickSearchOpenSearchClient.searchRecordIdsPerTable`.
+- Diagnostic tools (#35), on by default (`enableDiagnosticTools`): Search Playground, Validate Search Index (schedulable with `validationCronExpression`; reports kept in the new `quickSearchValidationRun` table), Test Search Analyzer, and on every indexed table and on `quickSearchFailedEvent` rows the record actions Inspect Search Document (database vs index, and why a record does or does not match a term) and Reindex in Search. All are table or record actions, gated by the new `debugPermissionRules` (`quickSearchDebug.hasAccess`; Reindex in Search uses `adminPermissionRules`), rate-limited per user (`diagnosticRunsPerMinute`), and recorded in the new `quickSearchDiagnosticEvent` table. Settings: `enableRecordDiagnosticActions`, `validationCronExpression`, `validationCronTimeZoneId`, `validationSampleSize`.
+- Search failure diagnostics: a failed or timed-out OpenSearch request behind core record search or `QuickSearchAction` is recorded as a `SEARCH_FAILED` diagnostic event (tables, duration, error, server; never the term); the runtime counts failures and backoff fallbacks. The Search Diagnostics widget (`quickSearchDiagnostics`, on the admin app home) shows the provider's state, recent failures and the latest validation.
+- `QuickSearchDiagnosticsOperations`: read-only probe search (named clauses, field highlights, request and response JSON), explain, document reads, `_analyze`, document sampling, and raw cluster, mapping and settings reads.
+
+### Changed
+- Run history purging also purges `quickSearchDiagnosticEvent` and `quickSearchValidationRun` rows older than `runHistoryRetentionDays`.
 
 ### Security
 - Fields of type `PASSWORD` are no longer indexed (as hidden fields already were). Reconcile or fully reindex once to remove values a 1.0 index may hold.
