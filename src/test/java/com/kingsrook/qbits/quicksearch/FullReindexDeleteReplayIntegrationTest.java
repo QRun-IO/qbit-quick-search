@@ -47,6 +47,7 @@ import com.kingsrook.qbits.quicksearch.actions.QuickSearchResult;
 import com.kingsrook.qbits.quicksearch.annotations.QuickSearchField;
 import com.kingsrook.qbits.quicksearch.annotations.QuickSearchable;
 import com.kingsrook.qbits.quicksearch.model.QuickSearchFailedEvent;
+import com.kingsrook.qbits.quicksearch.model.QuickSearchIndexRun;
 import com.kingsrook.qbits.quicksearch.opensearch.QuickSearchOpenSearchClient;
 import com.kingsrook.qbits.quicksearch.processes.FullReindexStep;
 import org.junit.jupiter.api.AfterAll;
@@ -176,9 +177,9 @@ class FullReindexDeleteReplayIntegrationTest
          // while the alias still points at the old one                       //
          ///////////////////////////////////////////////////////////////////////
          @Override
-         protected IndexCounts indexAllRecords(QuickSearchOpenSearchClient client, QuickSearchableTableConfig tableConfig, List<QFilterCriteria> extraCriteria, String targetIndex) throws QException
+         protected IndexCounts indexAllRecords(QuickSearchOpenSearchClient client, QuickSearchableTableConfig tableConfig, List<QFilterCriteria> extraCriteria, String targetIndex, QuickSearchIndexRun run) throws QException
          {
-            IndexCounts counts = super.indexAllRecords(client, tableConfig, extraCriteria, targetIndex);
+            IndexCounts counts = super.indexAllRecords(client, tableConfig, extraCriteria, targetIndex, run);
 
             DeleteInput deleteInput = new DeleteInput();
             deleteInput.setTableName(TABLE_NAME);
