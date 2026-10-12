@@ -21,6 +21,7 @@ import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.function.Function;
 import com.kingsrook.qqq.backend.core.exceptions.QException;
 import com.kingsrook.qqq.backend.core.logging.QLogger;
 import com.kingsrook.qbits.quicksearch.QuickSearchableTableConfig;
@@ -46,7 +47,7 @@ public class SynchronousIndexEventPublisher implements IndexEventPublisher
    private static final Integer MAX_ERRORS_IN_MESSAGE = 10;
 
    private final QuickSearchOpenSearchClient        client;
-   private final Map<String, QuickSearchableTableConfig> tableConfigsByName;
+   private final Function<String, QuickSearchableTableConfig> tableConfigLookup;
    private final Integer                             bulkBatchSize;
 
 
@@ -60,17 +61,30 @@ public class SynchronousIndexEventPublisher implements IndexEventPublisher
     *******************************************************************************/
    public SynchronousIndexEventPublisher(QuickSearchOpenSearchClient client, List<QuickSearchableTableConfig> tableConfigs, Integer bulkBatchSize)
    {
-      this.client = client;
-      this.bulkBatchSize = bulkBatchSize;
-      this.tableConfigsByName = new HashMap<>();
-
+      Map<String, QuickSearchableTableConfig> byName = new HashMap<>();
       if(tableConfigs != null)
       {
          for(QuickSearchableTableConfig config : tableConfigs)
          {
-            tableConfigsByName.put(config.getTableName(), config);
+            byName.put(config.getTableName(), config);
          }
       }
+      this.client            = client;
+      this.bulkBatchSize     = bulkBatchSize;
+      this.tableConfigLookup = byName::get;
+   }
+
+
+
+   /*******************************************************************************
+    ** Constructor that looks each table's config up when it publishes, so it
+    ** follows config changes (the runtime passes its getTableConfig).
+    *******************************************************************************/
+   public SynchronousIndexEventPublisher(QuickSearchOpenSearchClient client, Function<String, QuickSearchableTableConfig> tableConfigLookup, Integer bulkBatchSize)
+   {
+      this.client            = client;
+      this.bulkBatchSize     = bulkBatchSize;
+      this.tableConfigLookup = tableConfigLookup;
    }
 
 
@@ -103,7 +117,7 @@ public class SynchronousIndexEventPublisher implements IndexEventPublisher
          String tableName = entry.getKey();
          List<IndexEvent> tableEvents = entry.getValue();
 
-         QuickSearchableTableConfig tableConfig = tableConfigsByName.get(tableName);
+         QuickSearchableTableConfig tableConfig = tableConfigLookup.apply(tableName);
          if(tableConfig == null)
          {
             LOG.warn("No QuickSearchableTableConfig found for table, skipping", logPair("tableName", tableName));

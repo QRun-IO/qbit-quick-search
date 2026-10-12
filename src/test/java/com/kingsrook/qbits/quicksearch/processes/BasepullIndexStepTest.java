@@ -107,6 +107,13 @@ class BasepullIndexStepTest extends BaseQuickSearchTest
          return (new BulkIndexResult().withSuccessCount(ids.size()));
       });
       when(mockClient.countDocumentsForTable(anyString())).thenReturn(0L);
+
+      //////////////////////////////////////////////////////////////////////
+      // the index exists and is not empty, so self-priming of the index   //
+      // (queueBuildsIfIndexMissingOrEmpty) leaves these tests alone       //
+      //////////////////////////////////////////////////////////////////////
+      when(mockClient.indexExists()).thenReturn(true);
+      when(mockClient.countAllDocuments()).thenReturn(1_000L);
       QuickSearchQBitContext.setClient(mockClient);
    }
 

@@ -17,6 +17,9 @@
 package com.kingsrook.qbits.quicksearch.actions;
 
 
+import java.util.Map;
+
+
 /*******************************************************************************
  ** A single search hit returned by a QuickSearch query, representing one
  ** matching record with its relevance score and optional highlight snippet.
@@ -30,6 +33,8 @@ public class QuickSearchResult
    private String recordLabel;
    private Float  score;
    private String highlightSnippet;
+   private String subtitle;
+   private Map<String, String> displayValues;
 
 
    /*******************************************************************************
@@ -200,6 +205,68 @@ public class QuickSearchResult
    {
       this.tableLabel = tableLabel;
       return this;
+   }
+
+
+
+   /*******************************************************************************
+    ** Getter for subtitle
+    *******************************************************************************/
+   public String getSubtitle()
+   {
+      return (this.subtitle);
+   }
+
+
+
+   /*******************************************************************************
+    ** Setter for subtitle
+    *******************************************************************************/
+   public void setSubtitle(String subtitle)
+   {
+      this.subtitle = subtitle;
+   }
+
+
+
+   /*******************************************************************************
+    ** Fluent setter for subtitle
+    *******************************************************************************/
+   public QuickSearchResult withSubtitle(String subtitle)
+   {
+      this.subtitle = subtitle;
+      return (this);
+   }
+
+
+
+   /*******************************************************************************
+    ** Getter for displayValues
+    *******************************************************************************/
+   public Map<String, String> getDisplayValues()
+   {
+      return (this.displayValues);
+   }
+
+
+
+   /*******************************************************************************
+    ** Setter for displayValues
+    *******************************************************************************/
+   public void setDisplayValues(Map<String, String> displayValues)
+   {
+      this.displayValues = displayValues;
+   }
+
+
+
+   /*******************************************************************************
+    ** Fluent setter for displayValues
+    *******************************************************************************/
+   public QuickSearchResult withDisplayValues(Map<String, String> displayValues)
+   {
+      this.displayValues = displayValues;
+      return (this);
    }
 
 }

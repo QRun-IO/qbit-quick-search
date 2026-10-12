@@ -36,6 +36,7 @@ import com.kingsrook.qqq.backend.core.model.data.QRecord;
 import com.kingsrook.qqq.backend.core.utils.CollectionUtils;
 import com.kingsrook.qbits.quicksearch.QuickSearchQBitConfig;
 import com.kingsrook.qbits.quicksearch.QuickSearchRuntime;
+import com.kingsrook.qbits.quicksearch.config.QuickSearchStatus;
 import com.kingsrook.qbits.quicksearch.diagnostics.DiagnosticsHtml.Level;
 import com.kingsrook.qbits.quicksearch.model.QuickSearchDiagnosticEvent;
 import com.kingsrook.qbits.quicksearch.model.QuickSearchValidationRun;
@@ -79,6 +80,8 @@ public class QuickSearchDiagnosticsWidgetRenderer extends AbstractWidgetRenderer
       QuickSearchQBitConfig config = runtime.getConfig();
       DiagnosticsHtml       html   = new DiagnosticsHtml().open();
 
+      renderIndexingStatus(html, runtime);
+
       SearchPathDiagnosis.ProviderState state = SearchPathDiagnosis.providerState(QContext.getQInstance(), runtime);
       html.subheading("Global search on this server");
       if(!Boolean.TRUE.equals(state.quickSearchProvider()) || !Boolean.TRUE.equals(state.serveCoreRecordSearch()))
@@ -104,10 +107,47 @@ public class QuickSearchDiagnosticsWidgetRenderer extends AbstractWidgetRenderer
       renderLastValidation(html, config);
 
       html.subheading("Tools");
-      html.paragraph("On Quick Search Index (Actions): Search Playground, Validate Search Index, Test Search Analyzer. "
+      html.paragraph("On Quick Search Index (Actions): Add Search Index, Apply Search Index Changes, Disable and Remove Search Index, "
+         + "Search Playground, Validate Search Index, Test Search Analyzer. Searchable fields are edited on each index record. "
+         + "On Quick Search Settings: Pause and Resume Indexing; on Quick Search Index Run: Cancel Index Run. "
          + "On any indexed record and on Quick Search Failed Event rows: Inspect Search Document and Reindex in Search. "
          + "Every run is recorded in Quick Search Diagnostic Event.");
       return (html.close().toString());
+   }
+
+
+
+   /*******************************************************************************
+    ** Indexing: paused (since when, by whom), what self-priming added and is
+    ** building, and field changes waiting to be applied.
+    *******************************************************************************/
+   static void renderIndexingStatus(DiagnosticsHtml html, QuickSearchRuntime runtime)
+   {
+      QuickSearchStatus status = QuickSearchStatus.read(runtime);
+      html.subheading("Indexing");
+      String banner = status.bannerHtml();
+      if(!banner.isEmpty())
+      {
+         html.raw(banner);
+      }
+      if(status.paused())
+      {
+         html.raw("<p><a href=\"" + DiagnosticsHtml.escape(QuickSearchStatus.settingsPath(runtime)) + "\">Quick Search Settings</a>: Resume Indexing (Actions).</p>");
+      }
+      else
+      {
+         html.status(Level.OK, "Indexing is running (real-time and scheduled). Pause it from "
+            + "Quick Search Settings (Actions: Pause Indexing); search keeps serving while paused.");
+      }
+      if(!status.recordsMode())
+      {
+         html.status(Level.INFO, "The searchable tables come from code: the Quick Search config tables are not in this application yet, or not primed. "
+            + "See docs/MIGRATION-1.1.md (data-driven config).");
+      }
+      else if(status.lastPrimedAt() != null)
+      {
+         html.paragraph("Self-priming ran " + status.lastPrimedAt() + ": " + (status.lastPrimingSummary() == null ? "no changes." : status.lastPrimingSummary()));
+      }
    }
 
 

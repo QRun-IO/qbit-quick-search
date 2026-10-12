@@ -37,7 +37,9 @@ Integration tests use `@ExtendWith(RequiresDockerCondition.class)`: skipped with
 - `actions/QuickSearchRecordSearchProvider` - QQQ core `RecordSearchProviderInterface` (`POST /qqq/v1/search`): claims indexed, enabled tables; one `_msearch` per call returning ordered record ids per table; bounded by `recordSearchTimeoutMillis`; failures make core fall back and start a 30 s backoff (`QuickSearchRuntime.markRecordSearchFailed`). Registered, with default table `searchFields`, when `serveCoreRecordSearch` is true.
 - `metadata/*` - Component producers and the table/process helpers.
 
-**Tables Produced:** `quick_search_index`, `quick_search_index_run`, `quick_search_failed_event` (plus a PVS over `quick_search_index`).
+**Tables Produced:** `quick_search_index`, `quick_search_index_field`, `quick_search_settings`, `quick_search_config_tombstone`, `quick_search_index_run`, `quick_search_failed_event`, `quick_search_diagnostic_event`, `quick_search_validation_run` (plus PVSs).
+
+**Data-driven config (`config/`):** the records are the source of truth. `QuickSearchConfigStore` builds the effective `QuickSearchableTableConfig`s from `quick_search_index` + `quick_search_index_field` (30 s cache, dropped by the tables' customizers); `QuickSearchRuntime.getDiscoveredTables()/getTableConfig()` return them, `getCodeTables()` the code defaults. `QuickSearchConfigPrimer` seeds records from code (never over `ownerEdited` rows or tombstones). QBit writes to config tables go through `QuickSearchConfigWrites.asSystem` so customizers do not treat them as owner edits. Admin processes live in `processes/config/` (streamed ETL with review steps).
 
 **Annotation Discovery:** `@QuickSearchable(tableName = "...")` on entity classes; `@QuickSearchField(weight, includeLabel)` on fields; hidden fields are excluded.
 

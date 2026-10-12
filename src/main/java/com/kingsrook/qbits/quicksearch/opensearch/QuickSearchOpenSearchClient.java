@@ -36,6 +36,8 @@ import com.kingsrook.qqq.backend.core.exceptions.QException;
 import com.kingsrook.qqq.backend.core.logging.QLogger;
 import com.kingsrook.qbits.quicksearch.QuickSearchQBitConfig;
 import com.kingsrook.qbits.quicksearch.QuickSearchableTableConfig;
+import com.kingsrook.qbits.quicksearch.model.QuickSearchFieldAnalyzer;
+import com.kingsrook.qbits.quicksearch.processes.IndexingUtils;
 import org.opensearch.client.json.JsonData;
 import org.opensearch.client.opensearch.OpenSearchAsyncClient;
 import org.opensearch.client.opensearch.OpenSearchClient;
@@ -104,6 +106,10 @@ public class QuickSearchOpenSearchClient implements Closeable
    public static final int    MAX_RESULT_WINDOW    = 10_000;
    public static final String MATCH_CLAUSE_NAME    = "searchableText";
    public static final String FIELD_CLAUSE_PREFIX  = "field:";
+   public static final String PATH_PREFIX          = "fieldValues";
+   public static final String PATH_WORD            = "fieldValuesWord";
+   public static final String PATH_ENGLISH         = "fieldValuesEnglish";
+   public static final String PATH_EXACT           = "fieldValuesExact";
 
    private final OpenSearchClient      client;
    private final OpenSearchAsyncClient asyncClient;
@@ -113,6 +119,8 @@ public class QuickSearchOpenSearchClient implements Closeable
    private final ObjectMapper          sizingMapper;
 
    private volatile Boolean mappingOutdated = false;
+   private volatile Boolean indexCreated    = false;
+   private volatile Instant indexCreatedAt;
    private          Boolean closed          = false;
 
 
@@ -152,6 +160,7 @@ public class QuickSearchOpenSearchClient implements Closeable
             else
             {
                LOG.info("OpenSearch index already exists", logPair("indexName", indexName));
+               extendMapping();
             }
             return;
          }
@@ -160,11 +169,108 @@ public class QuickSearchOpenSearchClient implements Closeable
          createPhysicalIndex(physicalIndex);
          client.indices().updateAliases(u -> u.actions(a -> a.add(ad -> ad.index(physicalIndex).alias(indexName))));
          mappingOutdated = false;
+         indexCreated    = true;
+         indexCreatedAt  = Instant.now();
          LOG.info("Created OpenSearch index", logPair("indexName", indexName), logPair("physicalIndex", physicalIndex));
       }
       catch(OpenSearchException | java.io.IOException e)
       {
          throw wrap("Failed to ensure index exists [" + indexName + "]", e);
+      }
+   }
+
+
+
+   /*******************************************************************************
+    ** Whether ensureIndexExists found no index and created an empty one (a new
+    ** install, or the index was deleted). Self-priming then queues a build of
+    ** every enabled table. Cleared by clearIndexCreated().
+    *******************************************************************************/
+   public boolean wasIndexCreated()
+   {
+      return (Boolean.TRUE.equals(indexCreated));
+   }
+
+
+
+   /*******************************************************************************
+    ** When ensureIndexExists last created the index (null when it has not).
+    *******************************************************************************/
+   public Instant getIndexCreatedAt()
+   {
+      return (indexCreatedAt);
+   }
+
+
+
+   /*******************************************************************************
+    ** Forget that the index was created (its builds have been queued).
+    *******************************************************************************/
+   public void clearIndexCreated()
+   {
+      indexCreated = false;
+   }
+
+
+
+   /*******************************************************************************
+    ** Whether the alias (or a legacy concrete index) exists. Throws when the
+    ** cluster cannot be asked.
+    *******************************************************************************/
+   public boolean indexExists() throws QException
+   {
+      try
+      {
+         return (client.indices().exists(ExistsRequest.of(r -> r.index(indexName))).value());
+      }
+      catch(OpenSearchException | java.io.IOException e)
+      {
+         throw wrap("Failed to check whether index [" + indexName + "] exists", e);
+      }
+   }
+
+
+
+   /*******************************************************************************
+    ** Number of documents in the index, all tables.
+    *******************************************************************************/
+   public Long countAllDocuments() throws QException
+   {
+      try
+      {
+         return (client.count(c -> c.index(indexName)).count());
+      }
+      catch(OpenSearchException | java.io.IOException e)
+      {
+         throw wrap("Failed to count documents in index [" + indexName + "]", e);
+      }
+   }
+
+
+
+   /*******************************************************************************
+    ** Add the field-analyzer templates and the role properties (added in
+    ** 1.1.0-RC.3) to an index created before them. Additive, so the mapping
+    ** version stays 2 and no rebuild is needed; a failure is logged and only
+    ** means those fields fall back to dynamic mapping.
+    *******************************************************************************/
+   void extendMapping()
+   {
+      try
+      {
+         client.indices().putMapping(p -> p
+            .index(indexName)
+            .dynamicTemplates(dynamicTemplates())
+            .properties("subtitle", pr -> pr.text(t -> t.index(false)))
+            .properties("displayValues", pr -> pr.object(o -> o.enabled(false)))
+            .properties(PATH_WORD, pr -> pr.object(o -> o))
+            .properties(PATH_ENGLISH, pr -> pr.object(o -> o))
+            .properties(PATH_EXACT, pr -> pr.object(o -> o)));
+      }
+      catch(Exception e)
+      {
+         LOG.warn("Could not add the field-analyzer mapping to the existing index; WORD, ENGLISH and EXACT fields use dynamic mapping until a full reindex",
+            e, logPair("indexName", indexName));
       }
    }
 
@@ -220,21 +326,43 @@ public class QuickSearchOpenSearchClient implements Closeable
     *******************************************************************************/
    private TypeMapping buildMapping()
    {
-      DynamicTemplate fieldValuesAsText = DynamicTemplate.of(t -> t
-         .pathMatch("fieldValues.*")
-         .mapping(p -> p.text(tx -> tx.analyzer(INDEX_ANALYZER).searchAnalyzer(SEARCH_ANALYZER))));
-
       return (TypeMapping.of(m -> m
          .meta(META_MAPPING_VERSION, JsonData.of(MAPPING_VERSION))
          .dateDetection(false)
          .numericDetection(false)
-         .dynamicTemplates(Map.of("fieldValuesAsText", fieldValuesAsText))
+         .dynamicTemplates(dynamicTemplates())
+         .properties("subtitle", p -> p.text(t -> t.index(false)))
+         .properties("displayValues", p -> p.object(o -> o.enabled(false)))
+         .properties(PATH_WORD, p -> p.object(o -> o))
+         .properties(PATH_ENGLISH, p -> p.object(o -> o))
+         .properties(PATH_EXACT, p -> p.object(o -> o))
          .properties("sourceTable", p -> p.keyword(k -> k))
          .properties("recordId", p -> p.keyword(k -> k))
          .properties("recordLabel", p -> p.text(t -> t.analyzer(INDEX_ANALYZER).searchAnalyzer(SEARCH_ANALYZER)))
          .properties("searchableText", p -> p.text(t -> t.analyzer(INDEX_ANALYZER).searchAnalyzer(SEARCH_ANALYZER)))
          .properties("indexedAt", p -> p.date(d -> d))
          .properties("fieldValues", p -> p.object(o -> o))));
+   }
+
+
+
+   /*******************************************************************************
+    ** The dynamic templates: fieldValues.* with the prefix analyzers (as since
+    ** mapping version 2), and the field-analyzer copies: fieldValuesWord.*
+    ** (standard), fieldValuesEnglish.* (english) and fieldValuesExact.*
+    ** (keyword; values are lower-cased before indexing).
+    *******************************************************************************/
+   static List<Map<String, DynamicTemplate>> dynamicTemplates()
+   {
+      return (List.of(
+         Map.of("fieldValuesAsText", DynamicTemplate.of(t -> t.pathMatch(PATH_PREFIX + ".*")
+            .mapping(p -> p.text(tx -> tx.analyzer(INDEX_ANALYZER).searchAnalyzer(SEARCH_ANALYZER))))),
+         Map.of("fieldValuesWordAsText", DynamicTemplate.of(t -> t.pathMatch(PATH_WORD + ".*")
+            .mapping(p -> p.text(tx -> tx.analyzer("standard"))))),
+         Map.of("fieldValuesEnglishAsText", DynamicTemplate.of(t -> t.pathMatch(PATH_ENGLISH + ".*")
+            .mapping(p -> p.text(tx -> tx.analyzer("english"))))),
+         Map.of("fieldValuesExactAsKeyword", DynamicTemplate.of(t -> t.pathMatch(PATH_EXACT + ".*")
+            .mapping(p -> p.keyword(k -> k.ignoreAbove(1024)))))));
    }
 
 
@@ -803,16 +931,77 @@ public class QuickSearchOpenSearchClient implements Closeable
    {
       List<FieldValue> allowed = allowedTables.stream().map(FieldValue::of).toList();
 
+      Query snippetMatch = Query.of(q -> q.multiMatch(MultiMatchQuery.of(mm ->
+      {
+         mm.query(searchTerm).fields("searchableText").operator(Operator.And);
+         return (named ? mm.queryName(MATCH_CLAUSE_NAME) : mm);
+      })));
+
+      ////////////////////////////////////////////////////////////////////////////
+      // fields kept out of the snippet (KEYWORD, EXACT, or includeInSnippet   //
+      // off) match on their own; with none, the query is exactly as before    //
+      ////////////////////////////////////////////////////////////////////////////
+      List<Query> ownMatches = buildOwnFieldMatchQueries(searchTerm, tableConfigs, allowedTables);
+      Query       match      = ownMatches.isEmpty() ? snippetMatch
+         : Query.of(q -> q.bool(b -> b.should(snippetMatch).should(ownMatches).minimumShouldMatch("1")));
+
       BoolQuery.Builder boolBuilder = new BoolQuery.Builder()
-         .must(Query.of(q -> q.multiMatch(MultiMatchQuery.of(mm ->
-         {
-            mm.query(searchTerm).fields("searchableText").operator(Operator.And);
-            return (named ? mm.queryName(MATCH_CLAUSE_NAME) : mm);
-         }))))
+         .must(match)
          .filter(Query.of(q -> q.terms(t -> t.field("sourceTable").terms(tv -> tv.value(allowed)))))
          .should(buildFieldBoostQueries(searchTerm, tableConfigs, allowedTables, named));
 
       return (Query.of(q -> q.bool(boolBuilder.build())));
+   }
+
+
+
+   /*******************************************************************************
+    ** Matches for the fields that are not in searchableText, each limited to
+    ** its own table: an EXACT field matches the whole (lower-cased) term, any
+    ** other matches every term with its analyzer.
+    *******************************************************************************/
+   private List<Query> buildOwnFieldMatchQueries(String searchTerm, List<QuickSearchableTableConfig> tableConfigs, Collection<String> allowedTables)
+   {
+      List<Query> queries = new ArrayList<>();
+      for(QuickSearchableTableConfig tableConfig : tableConfigs == null ? List.<QuickSearchableTableConfig>of() : tableConfigs)
+      {
+         if(!allowedTables.contains(tableConfig.getTableName()) || tableConfig.isAllPlainFields())
+         {
+            continue;
+         }
+
+         Query inTable = Query.of(q -> q.term(t -> t.field("sourceTable").value(FieldValue.of(tableConfig.getTableName()))));
+         for(String field : tableConfig.getSearchableFields() == null ? List.<String>of() : tableConfig.getSearchableFields())
+         {
+            if(tableConfig.isIncludedInSnippet(field))
+            {
+               continue;
+            }
+
+            QuickSearchFieldAnalyzer analyzer = tableConfig.getAnalyzer(field);
+            Query fieldMatch = analyzer == QuickSearchFieldAnalyzer.EXACT
+               ? Query.of(q -> q.term(t -> t.field(PATH_EXACT + "." + field).value(FieldValue.of(IndexingUtils.normalizeExact(searchTerm)))))
+               : Query.of(q -> q.multiMatch(mm -> mm.query(searchTerm).fields(fieldPath(analyzer) + "." + field).operator(Operator.And).lenient(true)));
+            queries.add(Query.of(q -> q.bool(b -> b.filter(inTable).must(fieldMatch))));
+         }
+      }
+      return (queries);
+   }
+
+
+
+   /*******************************************************************************
+    ** The document object a field's analyzer writes it to.
+    *******************************************************************************/
+   static String fieldPath(QuickSearchFieldAnalyzer analyzer)
+   {
+      return (switch(analyzer == null ? QuickSearchFieldAnalyzer.PREFIX : analyzer)
+      {
+         case WORD -> PATH_WORD;
+         case ENGLISH -> PATH_ENGLISH;
+         case EXACT -> PATH_EXACT;
+         default -> PATH_PREFIX;
+      });
    }
 
 
@@ -839,11 +1028,24 @@ public class QuickSearchOpenSearchClient implements Closeable
          List<String>         fields  = tableConfig.getSearchableFields() == null ? List.of() : tableConfig.getSearchableFields();
          for(String field : fields)
          {
-            float boost = (weights == null || weights.get(field) == null) ? 1f : weights.get(field).floatValue();
+            float                    boost    = (weights == null || weights.get(field) == null) ? 1f : weights.get(field).floatValue();
+            QuickSearchFieldAnalyzer analyzer = tableConfig.getAnalyzer(field);
+            if(analyzer == QuickSearchFieldAnalyzer.EXACT)
+            {
+               String exact = IndexingUtils.normalizeExact(searchTerm);
+               queries.add(Query.of(q -> q.term(t ->
+               {
+                  t.field(PATH_EXACT + "." + field).value(FieldValue.of(exact)).boost(boost);
+                  return (named ? t.queryName(FIELD_CLAUSE_PREFIX + field) : t);
+               })));
+               continue;
+            }
+
+            String path = fieldPath(analyzer) + "." + field;
             queries.add(Query.of(q -> q.multiMatch(MultiMatchQuery.of(mm ->
             {
                mm.query(searchTerm)
-                  .fields("fieldValues." + field)
+                  .fields(path)
                   .operator(Operator.And)
                   .lenient(true)
                   .boost(boost);
