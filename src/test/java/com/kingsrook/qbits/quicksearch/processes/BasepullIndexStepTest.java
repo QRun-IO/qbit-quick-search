@@ -107,6 +107,13 @@ class BasepullIndexStepTest extends BaseQuickSearchTest
          return (new BulkIndexResult().withSuccessCount(ids.size()));
       });
       when(mockClient.countDocumentsForTable(anyString())).thenReturn(0L);
+
+      //////////////////////////////////////////////////////////////////////
+      // the index exists and is not empty, so self-priming of the index   //
+      // (queueBuildsIfIndexMissingOrEmpty) leaves these tests alone       //
+      //////////////////////////////////////////////////////////////////////
+      when(mockClient.indexExists()).thenReturn(true);
+      when(mockClient.countAllDocuments()).thenReturn(1_000L);
       QuickSearchQBitContext.setClient(mockClient);
    }
 
@@ -225,6 +232,34 @@ class BasepullIndexStepTest extends BaseQuickSearchTest
 
 
    /*******************************************************************************
+    ** Insert a RUNNING FULL_REINDEX run record for the index row whose start
+    ** and last heartbeat were the given number of minutes ago.
+    *******************************************************************************/
+   private QRecord insertRunningFullReindex(QRecord indexRow, long minutesAgo) throws QException
+   {
+      InsertInput input = new InsertInput();
+      input.setTableName(QuickSearchIndexRun.TABLE_NAME);
+      input.setRecords(List.of(new QRecord()
+         .withValue("quickSearchIndexId", indexRow.getValue("id"))
+         .withValue("runType", FullReindexStep.RUN_TYPE)
+         .withValue("status", AbstractIndexingStep.RUN_RUNNING)));
+      QRecord run = new InsertAction().execute(input).getRecords().get(0);
+
+      ////////////////////////////////////////////////////////////////////
+      // set both times without QQQ stamping modifyDate with the present //
+      ////////////////////////////////////////////////////////////////////
+      Instant     lastSeen    = Instant.now().minus(minutesAgo, ChronoUnit.MINUTES);
+      UpdateInput updateInput = new UpdateInput();
+      updateInput.setTableName(QuickSearchIndexRun.TABLE_NAME);
+      updateInput.setOmitModifyDateUpdate(true);
+      updateInput.setRecords(List.of(new QRecord().withValue("id", run.getValue("id")).withValue("startTime", lastSeen).withValue("modifyDate", lastSeen)));
+      new UpdateAction().execute(updateInput);
+      return (run);
+   }
+
+
+
+   /*******************************************************************************
     ** Query all rows of a table.
     *******************************************************************************/
    private List<QRecord> queryAll(String tableName) throws QException
@@ -265,6 +300,26 @@ class BasepullIndexStepTest extends BaseQuickSearchTest
       insertInput.setTableName(OTHER_TABLE);
       insertInput.setRecords(List.of(new QRecord().withValue("title", "Other 1"), new QRecord().withValue("title", "Other 2")));
       new InsertAction().execute(insertInput);
+   }
+
+
+
+   /*******************************************************************************
+    ** A successful basepull starts a new real-time failure counting window.
+    *******************************************************************************/
+   @Test
+   void testBasepull_resetsRealTimeErrorCount() throws QException
+   {
+      QRecord row = insertIndexRow(TEST_ENTITY_TABLE, true, null, 5);
+      new UpdateAction().execute(new UpdateInput().withTableName(QuickSearchIndex.TABLE_NAME)
+         .withRecord(new QRecord().withValue("id", row.getValue("id")).withValue("realTimeErrorCount", 7)));
+      insertTestEntities(2, Instant.now());
+
+      new BasepullIndexStep().run(new RunBackendStepInput(), new RunBackendStepOutput());
+
+      QueryInput input = new QueryInput();
+      input.setTableName(QuickSearchIndex.TABLE_NAME);
+      assertThat(new QueryAction().execute(input).getRecords().get(0).getValueInteger("realTimeErrorCount")).isZero();
    }
 
 
@@ -923,7 +978,8 @@ class BasepullIndexStepTest extends BaseQuickSearchTest
    @Test
    void testReplayFailedEvents_awaitingReindexRowsAreNotReplayed() throws QException
    {
-      insertIndexRow(TEST_ENTITY_TABLE, true, Instant.now(), 60);
+      QRecord row = insertIndexRow(TEST_ENTITY_TABLE, true, Instant.now(), 60);
+      insertRunningFullReindex(row, 1);
       QRecord captured = insertFailedEvent(TEST_ENTITY_TABLE, "7", "DELETE", 0);
       UpdateInput updateInput = new UpdateInput();
       updateInput.setTableName(QuickSearchFailedEvent.TABLE_NAME);
@@ -941,6 +997,65 @@ class BasepullIndexStepTest extends BaseQuickSearchTest
 
 
    /*******************************************************************************
+    ** Test: a DELETE event whose record exists again (re-created with the same
+    ** key since) keeps the record's document; the event is resolved.
+    *******************************************************************************/
+   @Test
+   void testReplayFailedEvents_deleteOfRecreatedRecord_keepsItsDocument() throws QException
+   {
+      insertTestEntities(1);
+      insertIndexRow(TEST_ENTITY_TABLE, true, Instant.now(), 60);
+      insertFailedEvent(TEST_ENTITY_TABLE, "1", "DELETE", 0);
+      insertFailedEvent(TEST_ENTITY_TABLE, "9", "DELETE", 0);
+
+      RunBackendStepOutput output = new RunBackendStepOutput();
+      new BasepullIndexStep().run(new RunBackendStepInput(), output);
+
+      verify(mockClient, times(1)).deleteDocuments(anyList(), anyInt());
+      verify(mockClient).deleteDocuments(List.of(TEST_ENTITY_TABLE + ":9"), QuickSearchQBitContext.getConfig().getBulkBatchSize());
+      assertThat(queryAll(QuickSearchFailedEvent.TABLE_NAME)).isEmpty();
+      assertThat(output.getValueInteger("failedEventsReplayed")).isEqualTo(2);
+   }
+
+
+
+   /*******************************************************************************
+    ** Test: a full reindex that stopped without finishing (table left
+    ** REBUILDING, run record without a heartbeat for two hours) is recovered
+    ** by the scheduled basepull, which replays its captured deletes in the same
+    ** run.
+    *******************************************************************************/
+   @Test
+   void testBasepull_recoversAStoppedFullReindex_andReplaysItsCapturedDeletes() throws QException
+   {
+      QRecord row = insertIndexRow(TEST_ENTITY_TABLE, true, Instant.now(), 60);
+      QRecord deadRun = insertRunningFullReindex(row, 120);
+      QRecord captured = insertFailedEvent(TEST_ENTITY_TABLE, "7", "DELETE", 0);
+      UpdateInput updateInput = new UpdateInput();
+      updateInput.setTableName(QuickSearchFailedEvent.TABLE_NAME);
+      updateInput.setRecords(List.of(new QRecord().withValue("id", captured.getValue("id")).withValue("status", QuickSearchFailedEvent.STATUS_AWAITING_REINDEX)));
+      new UpdateAction().execute(updateInput);
+      updateInput = new UpdateInput();
+      updateInput.setTableName(QuickSearchIndex.TABLE_NAME);
+      updateInput.setRecords(List.of(new QRecord().withValue("id", row.getValue("id")).withValue("status", AbstractIndexingStep.STATUS_REBUILDING)));
+      new UpdateAction().execute(updateInput);
+
+      RunBackendStepOutput output = new RunBackendStepOutput();
+      new BasepullIndexStep().run(new RunBackendStepInput(), output);
+
+      verify(mockClient).deleteDocuments(List.of(TEST_ENTITY_TABLE + ":7"), QuickSearchQBitContext.getConfig().getBulkBatchSize());
+      assertThat(queryAll(QuickSearchFailedEvent.TABLE_NAME)).isEmpty();
+      assertThat(output.getValueInteger("failedEventsReplayed")).isEqualTo(1);
+      assertThat(queryAll(QuickSearchIndex.TABLE_NAME).get(0).getValueString("status")).isEqualTo(AbstractIndexingStep.STATUS_ACTIVE);
+      assertThat(queryAll(QuickSearchIndexRun.TABLE_NAME))
+         .filteredOn(run -> deadRun.getValue("id").equals(run.getValue("id")))
+         .singleElement()
+         .satisfies(run -> assertThat(run.getValueString("status")).isEqualTo(AbstractIndexingStep.RUN_FAILED));
+   }
+
+
+
+   /*******************************************************************************
     ** Test: drift found while a full reindex is running does not replace the
     ** REBUILDING status the listener relies on.
     *******************************************************************************/
@@ -948,6 +1063,7 @@ class BasepullIndexStepTest extends BaseQuickSearchTest
    void testDriftDetection_duringFullReindex_keepsRebuilding() throws QException
    {
       QRecord row = insertIndexRow(TEST_ENTITY_TABLE, true, Instant.now(), 60);
+      insertRunningFullReindex(row, 1);
       UpdateInput updateInput = new UpdateInput();
       updateInput.setTableName(QuickSearchIndex.TABLE_NAME);
       updateInput.setRecords(List.of(new QRecord().withValue("id", row.getValue("id"))

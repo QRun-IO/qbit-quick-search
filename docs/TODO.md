@@ -1,5 +1,18 @@
 # TODO
 
+## Real-time error counter
+
+- [x] Count failed real-time events after commit, serialize concurrent listeners within a JVM, tolerate counter-write failures, and reset after successful basepull/full reindex; add regression tests and field/documentation help.
+
+## Architecture status API (#50 / F10)
+
+- [x] Supported Java status API, bounded cache/rate limiting, administrator authorization, home navigation, spec endpoint and committed fragment.
+- [x] Contract and strict HTTP tests; host migration mapping for kof22#164.
+- [ ] kof22#164: replace internal probes/duplicate home using `docs/STATUS-API-HOST-MIGRATION.md`.
+- [ ] Next UI: vendor the additive Quick Search status fragment when adopting RC.6.
+- [ ] Run Docker integration tests in CI; local Docker is unavailable.
+- [ ] Resolve the pre-existing repository Checkstyle baseline (438 remaining main-source violations, down from 471 at HEAD); status API adds none.
+
 ## Before tagging 1.0.0
 
 - [ ] qqq-all and Voyage adopt `1.0.0-RC.2` (items below) and report back.
@@ -43,3 +56,12 @@
 - [x] Status assessment, deep-dive audit (25 blockers), PRD (2026-10-04).
 - [x] 4.1.0-RC.1 compatibility verified (2026-10-04).
 - [x] All 25 audit blockers implemented and tested on the release branch (2026-10-04).
+
+## Secured-data section 15 (2026-10-14)
+
+- [x] Review fix: separate protection from indexability; preserve safe labels, ordinary results and unprotected hidden keys/timestamps, with regression tests.
+
+- [x] Exclude PII/PHI, hidden, sensitive, password and field-locked values from indexing and results on RC.6.
+- [x] Add canary coverage for real-time indexing, basepull and stale results; refuse classified config fields.
+- [ ] On the QQQ RC.7 upgrade, honour `ClassifiedValues.isClassified(table, field)` (qqq#1182) and `FieldAccessHelper.getLockTier` (qqq#1172).
+- [ ] Deployment: rebuild existing indexes and apply host retention policy to old physical indexes/backups containing previously indexed values.

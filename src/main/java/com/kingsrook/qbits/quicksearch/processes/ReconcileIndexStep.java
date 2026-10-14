@@ -68,7 +68,16 @@ public class ReconcileIndexStep extends AbstractIndexingStep
    @Override
    public void run(RunBackendStepInput input, RunBackendStepOutput output) throws QException
    {
-      String tableNameFilter = input.getValueString("tableName");
+      if(isPausedSkip(output))
+      {
+         output.addValue("recordsIndexed", 0);
+         output.addValue("documentsRemoved", 0L);
+         output.addValue("orphanDocumentsRemoved", 0L);
+         output.addValue("tablesSkipped", 0);
+         return;
+      }
+
+      String tableNameFilter = tableNameInput(input);
       boolean allTables      = tableNameFilter == null || tableNameFilter.isBlank();
 
       Integer recordsIndexed   = 0;
@@ -132,7 +141,7 @@ public class ReconcileIndexStep extends AbstractIndexingStep
       try
       {
          Instant     reconcileStart = Instant.now();
-         IndexCounts counts         = indexAllRecords(client, tableConfig, List.of(), null);
+         IndexCounts counts         = indexAllRecords(client, tableConfig, List.of(), null, run);
 
          Long documentsRemoved = 0L;
          if(counts.errors() == 0)
@@ -160,6 +169,7 @@ public class ReconcileIndexStep extends AbstractIndexingStep
             if(ReconcileIndexStep.RUN_TYPE.equals(runType) == false)
             {
                values.put("lastFullReindexTime", Instant.now());
+               values.put("realTimeErrorCount", 0);
             }
             updateIndexRow(indexId, values);
          }
@@ -180,6 +190,11 @@ public class ReconcileIndexStep extends AbstractIndexingStep
          }
 
          return (new ReconcileCounts(counts.indexed(), documentsRemoved));
+      }
+      catch(QuickSearchRunCancelledException e)
+      {
+         completeCancelledRun(run, e);
+         throw e;
       }
       catch(QException e)
       {

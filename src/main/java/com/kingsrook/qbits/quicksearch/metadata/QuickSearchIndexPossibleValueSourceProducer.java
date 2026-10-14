@@ -25,7 +25,7 @@ import com.kingsrook.qbits.quicksearch.QuickSearchQBitConfig;
 
 
 /*******************************************************************************
- ** Produces the possible value source over the quickSearchIndex table.
+ ** Produces the possible value source over the quick_search_index table.
  *******************************************************************************/
 public class QuickSearchIndexPossibleValueSourceProducer extends QBitComponentMetaDataProducer<QPossibleValueSource, QuickSearchQBitConfig>
 {

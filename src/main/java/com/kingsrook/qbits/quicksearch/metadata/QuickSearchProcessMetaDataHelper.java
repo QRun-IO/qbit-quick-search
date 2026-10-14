@@ -22,6 +22,8 @@ import com.kingsrook.qqq.backend.core.model.metadata.fields.QFieldMetaData;
 import com.kingsrook.qqq.backend.core.model.metadata.fields.QFieldType;
 import com.kingsrook.qqq.backend.core.model.metadata.layout.QIcon;
 import com.kingsrook.qqq.backend.core.model.metadata.processes.QBackendStepMetaData;
+import com.kingsrook.qqq.backend.core.model.metadata.processes.QComponentType;
+import com.kingsrook.qqq.backend.core.model.metadata.processes.QFrontendComponentMetaData;
 import com.kingsrook.qqq.backend.core.model.metadata.processes.QFrontendStepMetaData;
 import com.kingsrook.qqq.backend.core.model.metadata.processes.QProcessMetaData;
 import com.kingsrook.qqq.backend.core.model.metadata.scheduleing.QScheduleMetaData;
@@ -51,7 +53,7 @@ public class QuickSearchProcessMetaDataHelper
    public static QProcessMetaData buildBasepullProcess(QuickSearchQBitConfig config)
    {
       QProcessMetaData process = buildProcess(config, BASEPULL_PROCESS_NAME, "Quick Search Basepull Index", "basepull", BasepullIndexStep.class, "update");
-      process.withStep(resultStep("Basepull complete", "tablesIndexed", "failedEventsReplayed"));
+      process.withStep(resultStep("Basepull complete", "tablesIndexed", "tablesBuilt", "failedEventsReplayed", "paused"));
 
       if(StringUtils.hasContent(config.getSchedulerName()))
       {
@@ -73,7 +75,7 @@ public class QuickSearchProcessMetaDataHelper
    {
       QProcessMetaData process = buildProcess(config, FULL_REINDEX_PROCESS_NAME, "Quick Search Full Reindex", "fullReindex", FullReindexStep.class, "refresh");
       process.withStep(0, inputStep(config, "Leave the table blank to rebuild every table into a fresh index and swap the alias; pick a table to rebuild just that table in place."));
-      process.withStep(resultStep("Full reindex complete", "recordsIndexed", "aliasSwapped"));
+      process.withStep(resultStep("Full reindex complete", "recordsIndexed", "aliasSwapped", "message"));
       return (process);
    }
 
@@ -87,7 +89,7 @@ public class QuickSearchProcessMetaDataHelper
    {
       QProcessMetaData process = buildProcess(config, RECONCILE_PROCESS_NAME, "Quick Search Reconcile Index", "reconcile", ReconcileIndexStep.class, "sync");
       process.withStep(0, inputStep(config, "Leave the table blank to reconcile every table and remove documents of unconfigured tables; pick a table to reconcile just that one."));
-      process.withStep(resultStep("Reconcile complete", "recordsIndexed", "documentsRemoved", "orphanDocumentsRemoved", "tablesSkipped"));
+      process.withStep(resultStep("Reconcile complete", "recordsIndexed", "documentsRemoved", "orphanDocumentsRemoved", "tablesSkipped", "message"));
 
       if(StringUtils.hasContent(config.getSchedulerName()) && StringUtils.hasContent(config.getReconcileCronExpression()))
       {
@@ -104,18 +106,21 @@ public class QuickSearchProcessMetaDataHelper
 
 
    /*******************************************************************************
-    ** Optional table picker shown before the backend step.
+    ** Optional table picker shown before the backend step. Its field is
+    ** searchTableName, not tableName, which a process run from a table gets
+    ** from the frontend (the table it runs from).
     *******************************************************************************/
    private static QFrontendStepMetaData inputStep(QuickSearchQBitConfig config, String help)
    {
       return (new QFrontendStepMetaData()
          .withName("input")
+         .withComponent(new QFrontendComponentMetaData().withType(QComponentType.HELP_TEXT).withValue("text", help))
+         .withComponent(new QFrontendComponentMetaData().withType(QComponentType.EDIT_FORM))
          .withLabel("Choose table")
-         .withFormField(new QFieldMetaData("tableName", QFieldType.STRING)
+         .withFormField(new QFieldMetaData("searchTableName", QFieldType.STRING)
             .withLabel("Table (optional)")
-            .withPossibleValueSourceName(config.applyPrefix(QuickSearchSearchableTablePossibleValueSourceProducer.NAME))
-            .withIsRequired(false))
-         .withViewField(new QFieldMetaData("help", QFieldType.STRING).withLabel(" ").withDefaultValue(help)));
+            .withPossibleValueSourceName(config.applyTablePrefix(QuickSearchSearchableTablePossibleValueSourceProducer.NAME))
+            .withIsRequired(false)));
    }
 
 
@@ -140,10 +145,15 @@ public class QuickSearchProcessMetaDataHelper
     *******************************************************************************/
    private static QProcessMetaData buildProcess(QuickSearchQBitConfig config, String baseName, String label, String stepName, Class<?> stepClass, String icon)
    {
+      ///////////////////////////////////////////////////////////////////////
+      // run from Quick Search Index's Actions (processes are never in the //
+      // nav); the input screen's table picker is searchTableName          //
+      ///////////////////////////////////////////////////////////////////////
       return (new QProcessMetaData()
          .withName(config.applyPrefix(baseName))
          .withLabel(label)
          .withIcon(new QIcon(icon))
+         .withTableName(config.getQuickSearchIndexTableName())
          .withPermissionRules(config.getAdminPermissionRules() == null ? null : config.getAdminPermissionRules().clone())
          .withStep(new QBackendStepMetaData()
             .withName(stepName)

@@ -17,12 +17,22 @@
 package com.kingsrook.qbits.quicksearch;
 
 
+import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicLong;
+import com.kingsrook.qbits.quicksearch.config.QuickSearchConfigStore;
+import com.kingsrook.qbits.quicksearch.diagnostics.DiagnosticEventRecorder;
+import com.kingsrook.qbits.quicksearch.diagnostics.DiagnosticsRateLimiter;
+import com.kingsrook.qbits.quicksearch.diagnostics.StatusCache;
+import com.kingsrook.qbits.quicksearch.opensearch.QuickSearchOpenSearchClient;
+import com.kingsrook.qbits.quicksearch.publisher.IndexEventPublisher;
+import com.kingsrook.qbits.quicksearch.publisher.SynchronousIndexEventPublisher;
 import com.kingsrook.qqq.backend.core.actions.tables.QueryAction;
 import com.kingsrook.qqq.backend.core.context.QContext;
 import com.kingsrook.qqq.backend.core.exceptions.QException;
@@ -34,9 +44,7 @@ import com.kingsrook.qqq.backend.core.model.actions.tables.query.QueryInput;
 import com.kingsrook.qqq.backend.core.model.data.QRecord;
 import com.kingsrook.qqq.backend.core.model.metadata.QInstance;
 import com.kingsrook.qqq.backend.core.model.metadata.qbits.QBitMetaData;
-import com.kingsrook.qbits.quicksearch.opensearch.QuickSearchOpenSearchClient;
-import com.kingsrook.qbits.quicksearch.publisher.IndexEventPublisher;
-import com.kingsrook.qbits.quicksearch.publisher.SynchronousIndexEventPublisher;
+import com.kingsrook.qqq.backend.core.model.session.QSystemUserSession;
 import static com.kingsrook.qqq.backend.core.logging.LogUtils.logPair;
 
 
@@ -50,6 +58,11 @@ import static com.kingsrook.qqq.backend.core.logging.LogUtils.logPair;
  ** QBitMetaData, so steps, listeners and actions resolve it from QContext with
  ** {@link #get()} rather than from JVM-global statics. Two QInstances in one
  ** JVM therefore no longer share state.
+ **
+ ** The tables declared in code (annotations, searchableTables) are kept as
+ ** the code defaults; getDiscoveredTables() and getTableConfig() return the
+ ** effective configs, which come from the config records once they are
+ ** primed (see QuickSearchConfigStore for the precedence).
  *******************************************************************************/
 public class QuickSearchRuntime
 {
@@ -59,10 +72,14 @@ public class QuickSearchRuntime
 
    public static final long RECORD_SEARCH_BACKOFF_MILLIS = 30_000L;
 
+   private final StatusCache statusCache = new StatusCache();
+
    private final QuickSearchQBitConfig config;
 
-   private List<QuickSearchableTableConfig>        discoveredTables = new ArrayList<>();
-   private Map<String, QuickSearchableTableConfig> tablesByName     = new LinkedHashMap<>();
+   private List<QuickSearchableTableConfig>        codeTables       = new ArrayList<>();
+   private Map<String, QuickSearchableTableConfig> codeTablesByName = new LinkedHashMap<>();
+
+   private final QuickSearchConfigStore configStore;
 
    private volatile QuickSearchOpenSearchClient client;
    private volatile IndexEventPublisher         publisher;
@@ -70,7 +87,28 @@ public class QuickSearchRuntime
    private volatile boolean                     closed                         = false;
    private volatile long                        recordSearchBackoffUntilMillis = 0L;
 
-   private final Map<String, CachedFlag> enabledCache = new ConcurrentHashMap<>();
+   private final Map<String, CachedFlag> enabledCache  = new ConcurrentHashMap<>();
+   private final Map<String, Long>       buildFailures = new ConcurrentHashMap<>();
+
+   private volatile DiagnosticEventRecorder diagnosticEventRecorder;
+   private final DiagnosticsRateLimiter     diagnosticsRateLimiter = new DiagnosticsRateLimiter();
+   private final AtomicBoolean              validationRunning      = new AtomicBoolean(false);
+   private final AtomicLong                 recordSearchFailures   = new AtomicLong();
+   private final AtomicLong                 backoffDeclinedClaims  = new AtomicLong();
+   private final Instant                    startedAt              = Instant.now();
+   private volatile Instant                 lastRecordSearchFailureTime;
+   private volatile QInstance               startInstance;
+   private volatile String                  lastRecordSearchFailureMessage;
+
+
+
+   /*******************************************************************************
+    ** Instance-owned bounded administrative status cache.
+    *******************************************************************************/
+   public StatusCache getStatusCache()
+   {
+      return (statusCache);
+   }
 
 
 
@@ -88,7 +126,8 @@ public class QuickSearchRuntime
     *******************************************************************************/
    public QuickSearchRuntime(QuickSearchQBitConfig config)
    {
-      this.config = config;
+      this.config      = config;
+      this.configStore = new QuickSearchConfigStore(this);
    }
 
 
@@ -145,36 +184,89 @@ public class QuickSearchRuntime
 
 
    /*******************************************************************************
-    ** Getter for discoveredTables (never null)
+    ** The effective searchable tables (never null): from the config records
+    ** once primed, else the code-declared ones.
     *******************************************************************************/
    public List<QuickSearchableTableConfig> getDiscoveredTables()
    {
-      return (Collections.unmodifiableList(this.discoveredTables));
+      return (Collections.unmodifiableList(configStore.getTables()));
    }
 
 
 
    /*******************************************************************************
-    ** Replace the discovered tables.
+    ** Replace the code-declared tables (the defaults priming seeds).
     *******************************************************************************/
    public void setDiscoveredTables(List<QuickSearchableTableConfig> discoveredTables)
    {
-      this.discoveredTables = new ArrayList<>(discoveredTables == null ? List.of() : discoveredTables);
-      this.tablesByName     = new LinkedHashMap<>();
-      for(QuickSearchableTableConfig tableConfig : this.discoveredTables)
+      this.codeTables       = new ArrayList<>(discoveredTables == null ? List.of() : discoveredTables);
+      this.codeTablesByName = new LinkedHashMap<>();
+      for(QuickSearchableTableConfig tableConfig : this.codeTables)
       {
-         this.tablesByName.put(tableConfig.getTableName(), tableConfig);
+         this.codeTablesByName.put(tableConfig.getTableName(), tableConfig);
       }
+      configStore.invalidate();
    }
 
 
 
    /*******************************************************************************
-    ** Find the config for one table, or null.
+    ** The tables declared in code (annotations and searchableTables), never null.
+    *******************************************************************************/
+   public List<QuickSearchableTableConfig> getCodeTables()
+   {
+      return (Collections.unmodifiableList(this.codeTables));
+   }
+
+
+
+   /*******************************************************************************
+    ** One code-declared table's config, or null.
+    *******************************************************************************/
+   public QuickSearchableTableConfig getCodeTableConfig(String tableName)
+   {
+      return (tableName == null ? null : codeTablesByName.get(tableName));
+   }
+
+
+
+   /*******************************************************************************
+    ** Find the effective config for one table, or null when it is not indexed.
     *******************************************************************************/
    public QuickSearchableTableConfig getTableConfig(String tableName)
    {
-      return (tableName == null ? null : tablesByName.get(tableName));
+      return (configStore.getTable(tableName));
+   }
+
+
+
+   /*******************************************************************************
+    ** The store of the effective config records.
+    *******************************************************************************/
+   public QuickSearchConfigStore getConfigStore()
+   {
+      return (configStore);
+   }
+
+
+
+   /*******************************************************************************
+    ** Whether an admin has paused all indexing (search keeps serving).
+    *******************************************************************************/
+   public boolean isIndexingPaused()
+   {
+      return (configStore.isIndexingPaused());
+   }
+
+
+
+   /*******************************************************************************
+    ** Drop every cached config (a config row changed).
+    *******************************************************************************/
+   public void invalidateConfig()
+   {
+      configStore.invalidate();
+      enabledCache.clear();
    }
 
 
@@ -259,7 +351,7 @@ public class QuickSearchRuntime
             }
             else
             {
-               publisher = new SynchronousIndexEventPublisher(getClient(), discoveredTables, config.getBulkBatchSize());
+               publisher = new SynchronousIndexEventPublisher(getClient(), this::getTableConfig, config.getBulkBatchSize());
             }
          }
          return (publisher);
@@ -270,15 +362,20 @@ public class QuickSearchRuntime
 
    /*******************************************************************************
     ** Whether a table is enabled for indexing and search, per its
-    ** quickSearchIndex row. A table with no row yet is enabled. Results are
+    ** quick_search_index row. A table with no row yet is enabled. Results are
     ** cached for one minute; a failed lookup is treated as enabled so indexing
     ** does not stop because the operational table is unreachable.
     *******************************************************************************/
    public boolean isTableEnabled(String tableName)
    {
-      if(tableName == null || !tablesByName.containsKey(tableName))
+      QuickSearchableTableConfig tableConfig = getTableConfig(tableName);
+      if(tableConfig == null)
       {
          return (false);
+      }
+      if(tableConfig.getEnabled() != null)
+      {
+         return (tableConfig.getEnabled());
       }
 
       long       now    = System.currentTimeMillis();
@@ -291,6 +388,36 @@ public class QuickSearchRuntime
       boolean enabled = readEnabledFlag(tableName);
       enabledCache.put(tableName, new CachedFlag(enabled, now));
       return (enabled);
+   }
+
+
+
+   /*******************************************************************************
+    ** When a queued build of the table last failed on this server (0: never).
+    *******************************************************************************/
+   public long getLastBuildFailureMillis(String tableName)
+   {
+      return (buildFailures.getOrDefault(tableName, 0L));
+   }
+
+
+
+   /*******************************************************************************
+    ** Remember that a queued build of the table failed now.
+    *******************************************************************************/
+   public void recordBuildFailure(String tableName)
+   {
+      buildFailures.put(tableName, System.currentTimeMillis());
+   }
+
+
+
+   /*******************************************************************************
+    ** Forget a table's build failure (it built).
+    *******************************************************************************/
+   public void clearBuildFailure(String tableName)
+   {
+      buildFailures.remove(tableName);
    }
 
 
@@ -313,7 +440,146 @@ public class QuickSearchRuntime
     *******************************************************************************/
    public void markRecordSearchFailed()
    {
+      markRecordSearchFailed(null);
+   }
+
+
+
+   /*******************************************************************************
+    ** As markRecordSearchFailed(), also counting the failure and keeping its
+    ** message and time for the diagnostics.
+    *******************************************************************************/
+   public void markRecordSearchFailed(String message)
+   {
       recordSearchBackoffUntilMillis = System.currentTimeMillis() + RECORD_SEARCH_BACKOFF_MILLIS;
+      recordSearchFailures.incrementAndGet();
+      lastRecordSearchFailureTime    = Instant.now();
+      lastRecordSearchFailureMessage = message;
+   }
+
+
+
+   /*******************************************************************************
+    ** Milliseconds left in the current record-search backoff (0 when none).
+    *******************************************************************************/
+   public long getRecordSearchBackoffRemainingMillis()
+   {
+      return (Math.max(0L, recordSearchBackoffUntilMillis - System.currentTimeMillis()));
+   }
+
+
+
+   /*******************************************************************************
+    ** Count a table the provider declined because of a backoff (core searched
+    ** it with its own search instead).
+    *******************************************************************************/
+   public void countBackoffDeclinedClaim()
+   {
+      backoffDeclinedClaims.incrementAndGet();
+   }
+
+
+
+   /*******************************************************************************
+    ** Record searches through OpenSearch that failed since this runtime started.
+    *******************************************************************************/
+   public long getRecordSearchFailureCount()
+   {
+      return (recordSearchFailures.get());
+   }
+
+
+
+   /*******************************************************************************
+    ** Table searches core ran itself because the provider was backing off,
+    ** since this runtime started.
+    *******************************************************************************/
+   public long getBackoffDeclinedClaimCount()
+   {
+      return (backoffDeclinedClaims.get());
+   }
+
+
+
+   /*******************************************************************************
+    ** When the last record search through OpenSearch failed (null when none).
+    *******************************************************************************/
+   public Instant getLastRecordSearchFailureTime()
+   {
+      return (lastRecordSearchFailureTime);
+   }
+
+
+
+   /*******************************************************************************
+    ** The last record-search failure's message (null when none).
+    *******************************************************************************/
+   public String getLastRecordSearchFailureMessage()
+   {
+      return (lastRecordSearchFailureMessage);
+   }
+
+
+
+   /*******************************************************************************
+    ** When this runtime was created.
+    *******************************************************************************/
+   public Instant getStartedAt()
+   {
+      return (startedAt);
+   }
+
+
+
+   /*******************************************************************************
+    ** The diagnostic event recorder, built on first use.
+    *******************************************************************************/
+   public DiagnosticEventRecorder getDiagnosticEventRecorder()
+   {
+      DiagnosticEventRecorder existing = diagnosticEventRecorder;
+      if(existing != null)
+      {
+         return (existing);
+      }
+      synchronized(this)
+      {
+         if(diagnosticEventRecorder == null)
+         {
+            diagnosticEventRecorder = new DiagnosticEventRecorder(config);
+         }
+         return (diagnosticEventRecorder);
+      }
+   }
+
+
+
+   /*******************************************************************************
+    ** The per-user rate limiter of the diagnostic tools.
+    *******************************************************************************/
+   public DiagnosticsRateLimiter getDiagnosticsRateLimiter()
+   {
+      return (diagnosticsRateLimiter);
+   }
+
+
+
+   /*******************************************************************************
+    ** Claim the single validation slot of this JVM; false when a validation is
+    ** already running. Release with endValidation().
+    *******************************************************************************/
+   public boolean beginValidation()
+   {
+      return (validationRunning.compareAndSet(false, true));
+   }
+
+
+
+   /*******************************************************************************
+    ** Release the validation slot.
+    *******************************************************************************/
+   public void endValidation()
+   {
+      validationRunning.set(false);
    }
 
 
@@ -340,7 +606,7 @@ public class QuickSearchRuntime
 
 
    /*******************************************************************************
-    ** Read the enabled flag from the quickSearchIndex row.
+    ** Read the enabled flag from the quick_search_index row.
     *******************************************************************************/
    private boolean readEnabledFlag(String tableName)
    {
@@ -382,6 +648,8 @@ public class QuickSearchRuntime
     *******************************************************************************/
    public void start() throws QException
    {
+      primeConfig();
+
       try
       {
          ensureIndexReady();
@@ -415,6 +683,55 @@ public class QuickSearchRuntime
 
 
    /*******************************************************************************
+    ** Prime the config records from the code defaults (never throws; a failure
+    ** is retried on later use). Runs in a system session when no QContext is
+    ** set, as when a launcher starts the runtime service.
+    *******************************************************************************/
+   void primeConfig()
+   {
+      try
+      {
+         if(QContext.getQInstance() != null)
+         {
+            configStore.tryPrime();
+            return;
+         }
+
+         QInstance qInstance = startInstance;
+         if(qInstance == null)
+         {
+            return;
+         }
+         QContext.init(qInstance, new QSystemUserSession());
+         try
+         {
+            configStore.tryPrime();
+         }
+         finally
+         {
+            QContext.clear();
+         }
+      }
+      catch(Exception e)
+      {
+         LOG.warn("Quick Search could not prime its config records at startup; it retries on first use", e);
+      }
+   }
+
+
+
+   /*******************************************************************************
+    ** The instance to prime against when the runtime is started without a
+    ** QContext (QuickSearchRuntimeService.start sets it).
+    *******************************************************************************/
+   public void setStartInstance(QInstance startInstance)
+   {
+      this.startInstance = startInstance;
+   }
+
+
+
+   /*******************************************************************************
     ** Close the publisher and client. Safe to call more than once.
     *******************************************************************************/
    public synchronized void close()
@@ -424,6 +741,7 @@ public class QuickSearchRuntime
          return;
       }
       closed = true;
+      statusCache.close();
 
       if(publisher != null)
       {
@@ -435,6 +753,11 @@ public class QuickSearchRuntime
          {
             LOG.warn("Error closing Quick Search publisher", e);
          }
+      }
+
+      if(diagnosticEventRecorder != null)
+      {
+         diagnosticEventRecorder.close();
       }
 
       if(client != null)

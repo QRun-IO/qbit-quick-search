@@ -29,10 +29,17 @@ import com.kingsrook.qqq.backend.core.model.data.QRecordEntity;
  *******************************************************************************/
 public class QuickSearchFailedEvent extends QRecordEntity
 {
-   public static final String TABLE_NAME = "quickSearchFailedEvent";
+   public static final String TABLE_NAME = "quick_search_failed_event";
+
+   /** Table name before 1.1.0-RC.3 (camelCase). Kept only for upgrade scripts; see docs/MIGRATION-1.1.md. */
+   @Deprecated(since = "1.1.0-RC.3")
+   public static final String LEGACY_TABLE_NAME = "quickSearchFailedEvent";
 
    public static final String STATUS_PENDING   = "PENDING";
    public static final String STATUS_EXHAUSTED = "EXHAUSTED";
+
+   /** A change made while indexing was paused; becomes PENDING (replayed by basepull) when indexing resumes. */
+   public static final String STATUS_DEFERRED = "DEFERRED";
 
    ///////////////////////////////////////////////////////////////////////////
    // a delete made while a full reindex rebuilds into a new physical index; //

@@ -23,7 +23,7 @@ import com.kingsrook.qqq.backend.core.model.data.QRecordEntity;
 
 
 /*******************************************************************************
- ** Entity bean for the quickSearchIndex table.
+ ** Entity bean for the quick_search_index table.
  **
  ** Tracks configuration for each table that participates in the quick search
  ** index, including basepull scheduling, searchable field definitions, and
@@ -31,7 +31,19 @@ import com.kingsrook.qqq.backend.core.model.data.QRecordEntity;
  *******************************************************************************/
 public class QuickSearchIndex extends QRecordEntity
 {
-   public static final String TABLE_NAME = "quickSearchIndex";
+   public static final String TABLE_NAME = "quick_search_index";
+
+   /** Table name before 1.1.0-RC.3 (camelCase). Kept only for upgrade scripts; see docs/MIGRATION-1.1.md. */
+   @Deprecated(since = "1.1.0-RC.3")
+   public static final String LEGACY_TABLE_NAME = "quickSearchIndex";
+
+   ///////////////////////////////////////////////////////////////////////
+   // source: who created the row. CODE rows were seeded from code      //
+   // defaults; OWNER rows were added by an admin. ownerEdited marks a  //
+   // row whose config an admin changed: priming never overwrites it.   //
+   ///////////////////////////////////////////////////////////////////////
+   public static final String SOURCE_CODE  = "CODE";
+   public static final String SOURCE_OWNER = "OWNER";
 
    @QField()
    private Integer id;
@@ -68,6 +80,12 @@ public class QuickSearchIndex extends QRecordEntity
 
    @QField()
    private Instant modifyDate;
+
+   @QField()
+   private String source;
+
+   @QField()
+   private Boolean ownerEdited;
 
 
 
@@ -318,6 +336,67 @@ public class QuickSearchIndex extends QRecordEntity
    public QuickSearchIndex withModifyDate(Instant modifyDate)
    {
       this.modifyDate = modifyDate;
+      return (this);
+   }
+
+
+
+   /*******************************************************************************
+    ** Getter for source
+    *******************************************************************************/
+   public String getSource()
+   {
+      return (this.source);
+   }
+
+
+
+   /*******************************************************************************
+    ** Setter for source
+    *******************************************************************************/
+   public void setSource(String source)
+   {
+      this.source = source;
+   }
+
+
+
+   /*******************************************************************************
+    ** Fluent setter for source
+    *******************************************************************************/
+   public QuickSearchIndex withSource(String source)
+   {
+      this.source = source;
+      return (this);
+   }
+
+
+   /*******************************************************************************
+    ** Getter for ownerEdited
+    *******************************************************************************/
+   public Boolean getOwnerEdited()
+   {
+      return (this.ownerEdited);
+   }
+
+
+
+   /*******************************************************************************
+    ** Setter for ownerEdited
+    *******************************************************************************/
+   public void setOwnerEdited(Boolean ownerEdited)
+   {
+      this.ownerEdited = ownerEdited;
+   }
+
+
+
+   /*******************************************************************************
+    ** Fluent setter for ownerEdited
+    *******************************************************************************/
+   public QuickSearchIndex withOwnerEdited(Boolean ownerEdited)
+   {
+      this.ownerEdited = ownerEdited;
       return (this);
    }
 

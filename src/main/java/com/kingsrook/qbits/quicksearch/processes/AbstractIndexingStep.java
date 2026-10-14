@@ -23,13 +23,18 @@ import java.time.temporal.ChronoUnit;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import com.kingsrook.qqq.backend.core.actions.processes.BackendStep;
+import com.kingsrook.qqq.backend.core.model.actions.processes.RunBackendStepInput;
+import com.kingsrook.qqq.backend.core.model.actions.processes.RunBackendStepOutput;
 import com.kingsrook.qqq.backend.core.actions.tables.DeleteAction;
 import com.kingsrook.qqq.backend.core.actions.tables.InsertAction;
 import com.kingsrook.qqq.backend.core.actions.tables.QueryAction;
 import com.kingsrook.qqq.backend.core.actions.tables.UpdateAction;
+import com.kingsrook.qqq.backend.core.context.QContext;
 import com.kingsrook.qqq.backend.core.exceptions.QException;
 import com.kingsrook.qqq.backend.core.logging.QLogger;
 import com.kingsrook.qqq.backend.core.model.actions.tables.delete.DeleteInput;
@@ -45,8 +50,13 @@ import com.kingsrook.qqq.backend.core.model.data.QRecord;
 import com.kingsrook.qqq.backend.core.utils.CollectionUtils;
 import com.kingsrook.qbits.quicksearch.QuickSearchQBitConfig;
 import com.kingsrook.qbits.quicksearch.QuickSearchQBitContext;
+import com.kingsrook.qbits.quicksearch.QuickSearchRuntime;
 import com.kingsrook.qbits.quicksearch.QuickSearchableTableConfig;
+import com.kingsrook.qbits.quicksearch.config.QuickSearchConfigWrites;
+import com.kingsrook.qbits.quicksearch.config.QuickSearchFieldRules;
+import com.kingsrook.qbits.quicksearch.model.QuickSearchDiagnosticEvent;
 import com.kingsrook.qbits.quicksearch.model.QuickSearchIndexRun;
+import com.kingsrook.qbits.quicksearch.model.QuickSearchValidationRun;
 import com.kingsrook.qbits.quicksearch.opensearch.BulkIndexResult;
 import com.kingsrook.qbits.quicksearch.opensearch.OpenSearchDocument;
 import com.kingsrook.qbits.quicksearch.opensearch.QuickSearchOpenSearchClient;
@@ -66,9 +76,14 @@ public abstract class AbstractIndexingStep implements BackendStep
    public static final String STATUS_ACTIVE        = "ACTIVE";
    public static final String STATUS_NEEDS_REINDEX = "NEEDS_REINDEX";
    public static final String STATUS_REBUILDING    = "REBUILDING";
+   public static final String STATUS_PENDING_BUILD = "PENDING_BUILD";
+   public static final String STATUS_BUILDING      = "BUILDING";
    public static final String RUN_COMPLETED        = "COMPLETED";
    public static final String RUN_FAILED           = "FAILED";
    public static final String RUN_RUNNING          = "RUNNING";
+   public static final String RUN_CANCELLED        = "CANCELLED";
+
+   private String cancelledBy = "an admin";
 
 
 
@@ -117,7 +132,7 @@ public abstract class AbstractIndexingStep implements BackendStep
    protected List<QuickSearchableTableConfig> getDiscoveredTables()
    {
       List<QuickSearchableTableConfig> tables = QuickSearchQBitContext.getDiscoveredTables();
-      return (tables == null ? Collections.emptyList() : tables);
+      return (tables == null ? Collections.emptyList() : tables.stream().filter(t -> !QuickSearchFieldRules.hasProtectedPrimaryKey(t.getTableName())).toList());
    }
 
 
@@ -127,19 +142,31 @@ public abstract class AbstractIndexingStep implements BackendStep
     *******************************************************************************/
    protected QuickSearchableTableConfig getTableConfig(String tableName)
    {
-      return (QuickSearchQBitContext.getTableConfig(tableName));
+      return (QuickSearchFieldRules.hasProtectedPrimaryKey(tableName) ? null : QuickSearchQBitContext.getTableConfig(tableName));
    }
 
 
 
    /*******************************************************************************
-    ** Make sure a quickSearchIndex row exists for the table. The table's unique
+    ** Make sure a quick_search_index row exists for the table (hosts without
+    ** the config tables only; see below). The table's unique
     ** key on tableName makes a concurrent first insert fail, which is handled by
     ** re-querying.
     *******************************************************************************/
    protected void ensureIndexRowExists(String tableName, QuickSearchableTableConfig tableConfig) throws QException
    {
       if(queryIndexRow(tableName) != null)
+      {
+         return;
+      }
+
+      ///////////////////////////////////////////////////////////////////////////
+      // with the config tables, rows come only from priming (which honors    //
+      // tombstones) and Add Search Index: never re-create a removed table    //
+      // here, even while priming has not succeeded and code is in use        //
+      ///////////////////////////////////////////////////////////////////////////
+      QuickSearchRuntime runtime = QuickSearchRuntime.get();
+      if(runtime != null && runtime.getConfigStore().hasConfigTables())
       {
          return;
       }
@@ -158,7 +185,7 @@ public abstract class AbstractIndexingStep implements BackendStep
          InsertInput insertInput = new InsertInput();
          insertInput.setTableName(getConfig().getQuickSearchIndexTableName());
          insertInput.setRecords(List.of(record));
-         InsertOutput insertOutput = new InsertAction().execute(insertInput);
+         InsertOutput insertOutput = QuickSearchConfigWrites.asSystem(() -> new InsertAction().execute(insertInput));
 
          if(insertOutput.getRecords().isEmpty() || CollectionUtils.nullSafeHasContents(insertOutput.getRecords().get(0).getErrors()))
          {
@@ -178,7 +205,7 @@ public abstract class AbstractIndexingStep implements BackendStep
 
 
    /*******************************************************************************
-    ** The quickSearchIndex row for a table, or null.
+    ** The quick_search_index row for a table, or null.
     *******************************************************************************/
    protected QRecord queryIndexRow(String tableName) throws QException
    {
@@ -192,7 +219,7 @@ public abstract class AbstractIndexingStep implements BackendStep
 
 
    /*******************************************************************************
-    ** The id of the quickSearchIndex row for a table.
+    ** The id of the quick_search_index row for a table.
     *******************************************************************************/
    protected Integer queryIndexId(String tableName) throws QException
    {
@@ -280,7 +307,7 @@ public abstract class AbstractIndexingStep implements BackendStep
    /*******************************************************************************
     ** JSON array describing a table's searchable fields, weights and labels.
     *******************************************************************************/
-   protected static String buildSearchableFieldsJson(QuickSearchableTableConfig tableConfig)
+   public static String buildSearchableFieldsJson(QuickSearchableTableConfig tableConfig)
    {
       if(tableConfig.getSearchableFields() == null || tableConfig.getSearchableFields().isEmpty())
       {
@@ -301,9 +328,40 @@ public abstract class AbstractIndexingStep implements BackendStep
          Boolean includeLabel = tableConfig.getFieldIncludeLabels() != null && tableConfig.getFieldIncludeLabels().containsKey(fieldName) ? tableConfig.getFieldIncludeLabels().get(fieldName) : false;
          String  escapedName  = fieldName.replace("\\", "\\\\").replace("\"", "\\\"");
 
-         sb.append("{\"fieldName\":\"").append(escapedName).append("\",\"weight\":").append(weight).append(",\"includeLabel\":").append(includeLabel).append("}");
+         sb.append("{\"fieldName\":\"").append(escapedName).append("\",\"weight\":").append(weight).append(",\"includeLabel\":").append(includeLabel);
+
+         ///////////////////////////////////////////////////////////////////
+         // roles, analyzers and snippet flags only when set, so a table  //
+         // of plain fields keeps the JSON it had before they existed     //
+         ///////////////////////////////////////////////////////////////////
+         appendIfSet(sb, "role", tableConfig.getFieldRoles(), fieldName);
+         appendIfSet(sb, "analyzer", tableConfig.getFieldAnalyzers(), fieldName);
+         appendIfSet(sb, "includeInSnippet", tableConfig.getFieldIncludeInSnippet(), fieldName);
+         sb.append("}");
       }
       return (sb.append("]").toString());
+   }
+
+
+
+   /*******************************************************************************
+    ** Append ,"key":value for a field's entry in the map, when it has one.
+    *******************************************************************************/
+   private static void appendIfSet(StringBuilder sb, String key, Map<String, ?> values, String fieldName)
+   {
+      Object value = values == null ? null : values.get(fieldName);
+      if(value != null)
+      {
+         sb.append(",\"").append(key).append("\":");
+         if(value instanceof Boolean)
+         {
+            sb.append(value);
+         }
+         else
+         {
+            sb.append("\"").append(String.valueOf(value).replace("\\", "\\\\").replace("\"", "\\\"")).append("\"");
+         }
+      }
    }
 
 
@@ -324,7 +382,7 @@ public abstract class AbstractIndexingStep implements BackendStep
       InsertOutput insertOutput = new InsertAction().execute(insertInput);
       if(insertOutput.getRecords().isEmpty())
       {
-         throw new QException("Failed to create quickSearchIndexRun record: no record returned from insert");
+         throw new QException("Failed to create quick_search_index_run record: no record returned from insert");
       }
 
       QRecord inserted = insertOutput.getRecords().get(0);
@@ -377,7 +435,65 @@ public abstract class AbstractIndexingStep implements BackendStep
 
 
    /*******************************************************************************
-    ** Update fields on a quickSearchIndex row.
+    ** Refresh a FULL_REINDEX run record's modifyDate: the heartbeat by which
+    ** other nodes tell a full reindex that is still going from one that
+    ** stopped (see FullReindexStep.recoverDeadRun). Nothing reads it for other
+    ** run types. Best effort: a failure is logged and never stops the run (one
+    ** judged stopped as a result fails safely before its swap).
+    *******************************************************************************/
+   protected void heartbeat(QuickSearchIndexRun run)
+   {
+      if(run == null || run.getId() == null || !FullReindexStep.RUN_TYPE.equals(run.getRunType()))
+      {
+         return;
+      }
+
+      try
+      {
+         UpdateInput updateInput = new UpdateInput();
+         updateInput.setTableName(getConfig().getQuickSearchIndexRunTableName());
+         updateInput.setRecords(List.of(new QRecord().withValue("id", run.getId()).withValue("modifyDate", Instant.now())));
+         new UpdateAction().execute(updateInput);
+      }
+      catch(Exception e)
+      {
+         LOG.warn("Could not refresh the full reindex heartbeat", e, logPair("runId", run.getId()));
+      }
+   }
+
+
+
+   /*******************************************************************************
+    ** The record IDs, among the rows' recordIds, that exist in the source table.
+    *******************************************************************************/
+   Set<String> queryExistingRecordIds(String tableName, List<QRecord> rows) throws QException
+   {
+      QuickSearchableTableConfig tableConfig = getTableConfig(tableName);
+      if(tableConfig == null)
+      {
+         return (Set.of());
+      }
+
+      String             primaryKeyField = tableConfig.getPrimaryKeyField() == null ? "id" : tableConfig.getPrimaryKeyField();
+      List<Serializable> recordIds       = new ArrayList<>();
+      rows.forEach(row -> recordIds.add(row.getValueString("recordId")));
+
+      QueryInput queryInput = new QueryInput();
+      queryInput.setTableName(tableName);
+      queryInput.setFilter(new QQueryFilter(new QFilterCriteria(primaryKeyField, QCriteriaOperator.IN, recordIds)));
+
+      Set<String> existingIds = new HashSet<>();
+      for(QRecord record : CollectionUtils.nonNullList(new QueryAction().execute(queryInput).getRecords()))
+      {
+         existingIds.add(record.getValueString(primaryKeyField));
+      }
+      return (existingIds);
+   }
+
+
+
+   /*******************************************************************************
+    ** Update fields on a quick_search_index row.
     *******************************************************************************/
    protected void updateIndexRow(Integer indexId, Map<String, ? extends Serializable> values) throws QException
    {
@@ -390,7 +506,7 @@ public abstract class AbstractIndexingStep implements BackendStep
       UpdateInput updateInput = new UpdateInput();
       updateInput.setTableName(getConfig().getQuickSearchIndexTableName());
       updateInput.setRecords(List.of(record));
-      new UpdateAction().execute(updateInput);
+      QuickSearchConfigWrites.asSystem(() -> new UpdateAction().execute(updateInput));
    }
 
 
@@ -429,9 +545,10 @@ public abstract class AbstractIndexingStep implements BackendStep
    /*******************************************************************************
     ** Index every source record matching the criteria into targetIndex (null
     ** for the alias), paging by primary key so each record is read once even
-    ** while rows are inserted or deleted.
+    ** while rows are inserted or deleted. The run's heartbeat is refreshed
+    ** after every page.
     *******************************************************************************/
-   protected IndexCounts indexAllRecords(QuickSearchOpenSearchClient client, QuickSearchableTableConfig tableConfig, List<QFilterCriteria> extraCriteria, String targetIndex) throws QException
+   protected IndexCounts indexAllRecords(QuickSearchOpenSearchClient client, QuickSearchableTableConfig tableConfig, List<QFilterCriteria> extraCriteria, String targetIndex, QuickSearchIndexRun run) throws QException
    {
       QuickSearchQBitConfig config          = getConfig();
       String                tableName       = tableConfig.getTableName();
@@ -491,9 +608,128 @@ public abstract class AbstractIndexingStep implements BackendStep
          {
             throw new QException("Source record has no value in primary key field [" + primaryKeyField + "]");
          }
+
+         heartbeat(run);
+         stopIfCancelledOrPaused(run, new IndexCounts(processed, indexed, errors, skipped, firstError));
       }
 
       return (new IndexCounts(processed, indexed, errors, skipped, firstError));
+   }
+
+
+
+   /*******************************************************************************
+    ** The table a reindex or reconcile is limited to, or null for all:
+    ** searchTableName (the input screen's field), else tableName (API
+    ** callers). A Quick Search table is never meant: a process run from the
+    ** Quick Search Index table gets that table as its tableName.
+    *******************************************************************************/
+   protected String tableNameInput(RunBackendStepInput input)
+   {
+      String tableName = input.getValueString("searchTableName");
+      if(tableName == null || tableName.isBlank())
+      {
+         tableName = input.getValueString("tableName");
+      }
+      QuickSearchQBitConfig config = QuickSearchQBitContext.getConfig();
+      if(tableName == null || tableName.isBlank() || (config != null && QuickSearchFieldRules.isQuickSearchTable(config, tableName)))
+      {
+         return (null);
+      }
+      return (tableName);
+   }
+
+
+
+   /*******************************************************************************
+    ** When an admin has paused all indexing: say so in the output (the result
+    ** screen's message) and return true, so the step does nothing.
+    *******************************************************************************/
+   protected boolean isPausedSkip(RunBackendStepOutput output)
+   {
+      QuickSearchRuntime runtime = QuickSearchRuntime.get();
+      if(runtime == null || !runtime.isIndexingPaused())
+      {
+         return (false);
+      }
+      LOG.info("Quick Search indexing is paused; " + getClass().getSimpleName() + " skipped");
+      output.addValue("message", "Quick Search indexing is paused; nothing was indexed. Resume indexing from Quick Search Settings first.");
+      output.addValue("paused", true);
+      return (true);
+   }
+
+
+
+   /*******************************************************************************
+    ** Between batches: stop the run, with its counts so far, when an admin
+    ** asked to cancel it or paused all indexing.
+    *******************************************************************************/
+   protected void stopIfCancelledOrPaused(QuickSearchIndexRun run, IndexCounts counts) throws QuickSearchRunCancelledException
+   {
+      QuickSearchRuntime runtime = QuickSearchRuntime.get();
+      if(runtime != null && runtime.isIndexingPaused())
+      {
+         throw (new QuickSearchRunCancelledException("Stopped: Quick Search indexing was paused", counts));
+      }
+      if(isCancelRequested(run))
+      {
+         throw (new QuickSearchRunCancelledException("Cancelled by " + cancelledBy, counts));
+      }
+   }
+
+
+
+   /*******************************************************************************
+    ** Whether the run's cancel flag is set (read from its record, so a cancel
+    ** made on another server is seen). A read failure is not a cancel.
+    *******************************************************************************/
+   protected boolean isCancelRequested(QuickSearchIndexRun run)
+   {
+      if(run == null || run.getId() == null)
+      {
+         return (false);
+      }
+      return (isAnyCancelRequested(List.of(run.getId())));
+   }
+
+
+
+   /*******************************************************************************
+    ** Whether any of the runs' cancel flags is set; remembers who asked.
+    *******************************************************************************/
+   protected boolean isAnyCancelRequested(List<Integer> runIds)
+   {
+      try
+      {
+         QueryInput queryInput = new QueryInput();
+         queryInput.setTableName(getConfig().getQuickSearchIndexRunTableName());
+         queryInput.setFilter(new QQueryFilter(new QFilterCriteria("id", QCriteriaOperator.IN, new ArrayList<>(runIds)))
+            .withCriteria(new QFilterCriteria("cancelRequested", QCriteriaOperator.EQUALS, true)));
+         List<QRecord> rows = CollectionUtils.nonNullList(new QueryAction().execute(queryInput).getRecords());
+         if(rows.isEmpty())
+         {
+            return (false);
+         }
+         cancelledBy = rows.get(0).getValueString("cancelRequestedBy") == null ? "an admin" : rows.get(0).getValueString("cancelRequestedBy");
+         return (true);
+      }
+      catch(Exception e)
+      {
+         LOG.debug("Could not read the cancel flag of a run", e);
+         return (false);
+      }
+   }
+
+
+
+   /*******************************************************************************
+    ** End a run that was cancelled (or stopped by a pause): CANCELLED with its
+    ** counts so far. Never throws.
+    *******************************************************************************/
+   protected void completeCancelledRun(QuickSearchIndexRun run, QuickSearchRunCancelledException e)
+   {
+      IndexCounts counts = e.getCounts();
+      completeRunRecord(run, RUN_CANCELLED, counts == null ? 0 : counts.processed(), counts == null ? 0 : counts.indexed(), counts == null ? 0 : counts.errors(), e.getMessage());
    }
 
 
@@ -503,18 +739,36 @@ public abstract class AbstractIndexingStep implements BackendStep
     *******************************************************************************/
    protected void purgeOldRuns()
    {
+      Integer retentionDays = getConfigOrNull() == null ? null : getConfigOrNull().getRunHistoryRetentionDays();
+      if(retentionDays == null || retentionDays <= 0)
+      {
+         return;
+      }
+
+      Instant cutoff = Instant.now().minus(retentionDays, ChronoUnit.DAYS);
+      purgeOlderThan(getConfigOrNull().getQuickSearchIndexRunTableName(), "startTime", cutoff, retentionDays);
+      purgeOlderThan(getConfigOrNull().applyTablePrefix(QuickSearchDiagnosticEvent.TABLE_NAME), "createDate", cutoff, retentionDays);
+      purgeOlderThan(getConfigOrNull().applyTablePrefix(QuickSearchValidationRun.TABLE_NAME), "createDate", cutoff, retentionDays);
+   }
+
+
+
+   /*******************************************************************************
+    ** Delete up to 5000 rows of a history table older than the cutoff. A table
+    ** not in the instance is skipped; failures are logged.
+    *******************************************************************************/
+   private void purgeOlderThan(String tableName, String dateField, Instant cutoff, Integer retentionDays)
+   {
       try
       {
-         Integer retentionDays = getConfig().getRunHistoryRetentionDays();
-         if(retentionDays == null || retentionDays <= 0)
+         if(QContext.getQInstance() == null || QContext.getQInstance().getTable(tableName) == null)
          {
             return;
          }
 
-         Instant    cutoff     = Instant.now().minus(retentionDays, ChronoUnit.DAYS);
          QueryInput queryInput = new QueryInput();
-         queryInput.setTableName(getConfig().getQuickSearchIndexRunTableName());
-         queryInput.setFilter(new QQueryFilter(new QFilterCriteria("startTime", QCriteriaOperator.LESS_THAN, cutoff)).withLimit(5000));
+         queryInput.setTableName(tableName);
+         queryInput.setFilter(new QQueryFilter(new QFilterCriteria(dateField, QCriteriaOperator.LESS_THAN, cutoff)).withLimit(5000));
          List<QRecord> old = new QueryAction().execute(queryInput).getRecords();
          if(CollectionUtils.nullSafeIsEmpty(old))
          {
@@ -528,14 +782,31 @@ public abstract class AbstractIndexingStep implements BackendStep
          }
 
          DeleteInput deleteInput = new DeleteInput();
-         deleteInput.setTableName(getConfig().getQuickSearchIndexRunTableName());
+         deleteInput.setTableName(tableName);
          deleteInput.setPrimaryKeys(ids);
          new DeleteAction().execute(deleteInput);
-         LOG.info("Purged old Quick Search run records", logPair("count", ids.size()), logPair("olderThanDays", retentionDays));
+         LOG.info("Purged old Quick Search history records", logPair("tableName", tableName), logPair("count", ids.size()), logPair("olderThanDays", retentionDays));
       }
       catch(Exception e)
       {
-         LOG.warn("Failed to purge old run records", e);
+         LOG.warn("Failed to purge old Quick Search history records", e, logPair("tableName", tableName));
+      }
+   }
+
+
+
+   /*******************************************************************************
+    ** The config, or null when it cannot be resolved (purging is best effort).
+    *******************************************************************************/
+   private QuickSearchQBitConfig getConfigOrNull()
+   {
+      try
+      {
+         return (getConfig());
+      }
+      catch(Exception e)
+      {
+         return (null);
       }
    }
 

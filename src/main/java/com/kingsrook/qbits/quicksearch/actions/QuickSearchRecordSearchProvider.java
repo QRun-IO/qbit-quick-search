@@ -38,6 +38,9 @@ import com.kingsrook.qbits.quicksearch.QuickSearchRuntime;
 import com.kingsrook.qbits.quicksearch.opensearch.QuickSearchOpenSearchClient;
 import com.kingsrook.qbits.quicksearch.opensearch.QuickSearchOpenSearchClient.RecordSearchHit;
 import com.kingsrook.qbits.quicksearch.opensearch.QuickSearchOpenSearchClient.RecordSearchTableHits;
+import com.kingsrook.qbits.quicksearch.config.QuickSearchFieldRules;
+import com.kingsrook.qbits.quicksearch.diagnostics.DiagnosticsSupport;
+import com.kingsrook.qbits.quicksearch.model.QuickSearchDiagnosticEvent;
 import com.kingsrook.qbits.quicksearch.processes.IndexingUtils;
 import static com.kingsrook.qqq.backend.core.logging.LogUtils.logPair;
 
@@ -95,8 +98,14 @@ public class QuickSearchRecordSearchProvider implements RecordSearchProviderInte
          return (false);
       }
 
-      if(runtime.getTableConfig(table.getName()) == null || runtime.isRecordSearchBackingOff())
+      if(runtime.getTableConfig(table.getName()) == null || QuickSearchFieldRules.hasProtectedPrimaryKey(table.getName()))
       {
+         return (false);
+      }
+
+      if(runtime.isRecordSearchBackingOff())
+      {
+         runtime.countBackoffDeclinedClaim();
          return (false);
       }
 
@@ -124,7 +133,8 @@ public class QuickSearchRecordSearchProvider implements RecordSearchProviderInte
       List<String> tableNames = new ArrayList<>();
       for(String tableName : new LinkedHashSet<>(CollectionUtils.nonNullList(input.getTableNames())))
       {
-         if(runtime.getTableConfig(tableName) != null)
+         if(runtime.getTableConfig(tableName) != null
+            && !QuickSearchFieldRules.hasProtectedPrimaryKey(tableName))
          {
             tableNames.add(tableName);
          }
@@ -141,13 +151,21 @@ public class QuickSearchRecordSearchProvider implements RecordSearchProviderInte
       int offset = input.getOffset() == null ? 0 : Math.max(0, input.getOffset());
 
       Map<String, RecordSearchTableHits> hitsByTable;
+      long                               start = System.currentTimeMillis();
       try
       {
          hitsByTable = runtime.getClient().searchRecordsPerTable(term, tableNames, idsPerTable, offset, true, runtime.getDiscoveredTables(), timeoutMillis);
       }
       catch(QException | RuntimeException e)
       {
-         runtime.markRecordSearchFailed();
+         runtime.markRecordSearchFailed(e.getMessage());
+
+         //////////////////////////////////////////////////////////////////////
+         // the user's term is not recorded (it may hold personal data); its //
+         // length is, so a length-related failure is still visible          //
+         //////////////////////////////////////////////////////////////////////
+         DiagnosticsSupport.recordSearchFailure(runtime, QuickSearchDiagnosticEvent.SOURCE_CORE_RECORD_SEARCH, tableNames, term, System.currentTimeMillis() - start, e,
+            "term length " + term.length() + ", " + idsPerTable + " ids per table, timeout " + timeoutMillis + " ms; core searched these tables itself");
          LOG.info("Quick Search record search failed; core searches these tables itself, and Quick Search claims none for a while", logPair("tables", tableNames),
             logPair("backoffMillis", QuickSearchRuntime.RECORD_SEARCH_BACKOFF_MILLIS), logPair("error", e.getMessage()));
          throw (e instanceof QException qe ? qe : new QException("Quick Search record search failed: " + e.getMessage(), e));

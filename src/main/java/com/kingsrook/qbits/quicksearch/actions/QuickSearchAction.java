@@ -46,6 +46,9 @@ import com.kingsrook.qbits.quicksearch.QuickSearchQBitConfig;
 import com.kingsrook.qbits.quicksearch.QuickSearchQBitContext;
 import com.kingsrook.qbits.quicksearch.QuickSearchRuntime;
 import com.kingsrook.qbits.quicksearch.QuickSearchableTableConfig;
+import com.kingsrook.qbits.quicksearch.config.QuickSearchFieldRules;
+import com.kingsrook.qbits.quicksearch.diagnostics.DiagnosticsSupport;
+import com.kingsrook.qbits.quicksearch.model.QuickSearchDiagnosticEvent;
 import com.kingsrook.qbits.quicksearch.opensearch.OpenSearchDocument;
 import com.kingsrook.qbits.quicksearch.opensearch.QuickSearchOpenSearchClient;
 import com.kingsrook.qbits.quicksearch.processes.IndexingUtils;
@@ -219,7 +222,7 @@ public class QuickSearchAction
       if(!applyLocks)
       {
          SearchResponse<OpenSearchDocument> response = runSearch(client, term, tables, pageSize, offset, tableConfigs, null);
-         List<QuickSearchResult>            results  = toResults(response);
+         List<QuickSearchResult>            results  = toResults(response, tableConfigs);
 
          long    totalHits  = response.hits().total() != null ? response.hits().total().value() : results.size();
          boolean lowerBound = response.hits().total() != null && response.hits().total().relation() == TotalHitsRelation.Gte;
@@ -253,7 +256,7 @@ public class QuickSearchAction
          rawFloor = response.hits().total() != null && response.hits().total().relation() == TotalHitsRelation.Gte;
 
          List<QuickSearchResult> candidates = new ArrayList<>();
-         for(QuickSearchResult result : toResults(response))
+         for(QuickSearchResult result : toResults(response, tableConfigs))
          {
             if(seen.add(result.getTableName() + ":" + result.getRecordId()))
             {
@@ -313,7 +316,7 @@ public class QuickSearchAction
       List<String> allowed          = new ArrayList<>();
       for(String tableName : new LinkedHashSet<>(requested))
       {
-         if(!configured.contains(tableName))
+         if(!configured.contains(tableName) || QuickSearchFieldRules.hasProtectedPrimaryKey(tableName))
          {
             continue;
          }
@@ -405,7 +408,7 @@ public class QuickSearchAction
    /*******************************************************************************
     **
     *******************************************************************************/
-   private static List<QuickSearchResult> toResults(SearchResponse<OpenSearchDocument> response)
+   private static List<QuickSearchResult> toResults(SearchResponse<OpenSearchDocument> response, List<QuickSearchableTableConfig> tableConfigs)
    {
       QInstance               qInstance = QContext.getQInstance();
       List<QuickSearchResult> results   = new ArrayList<>();
@@ -418,9 +421,16 @@ public class QuickSearchAction
             continue;
          }
 
-         String                    highlightSnippet = null;
+         String sourceTable = source.getSourceTable();
+         boolean filterFields = QuickSearchFieldRules.requiresFieldFiltering(sourceTable);
+         source = IndexingUtils.filterResult(source, tableConfigs.stream().filter(c -> sourceTable.equals(c.getTableName())).findFirst().orElse(null));
+         if(source == null)
+         {
+            continue;
+         }
+         String                    highlightSnippet = filterFields ? source.getSearchableText() : null;
          Map<String, List<String>> highlight        = hit.highlight();
-         if(highlight != null)
+         if(highlight != null && !filterFields)
          {
             List<String> fragments = highlight.get("searchableText");
             if(fragments != null && !fragments.isEmpty())
@@ -439,7 +449,9 @@ public class QuickSearchAction
             .withRecordId(source.getRecordId())
             .withRecordLabel(source.getRecordLabel())
             .withScore(rawScore != null ? rawScore.floatValue() : null)
-            .withHighlightSnippet(highlightSnippet));
+            .withHighlightSnippet(highlightSnippet)
+            .withSubtitle(source.getSubtitle())
+            .withDisplayValues(source.getDisplayValues()));
       }
 
       return (results);
@@ -453,14 +465,34 @@ public class QuickSearchAction
     *******************************************************************************/
    private static SearchResponse<OpenSearchDocument> runSearch(QuickSearchOpenSearchClient client, String term, List<String> tables, int fetchSize, int offset, List<QuickSearchableTableConfig> tableConfigs, String preference) throws QException
    {
+      long start = System.currentTimeMillis();
       try
       {
          return (client.search(term, tables, fetchSize, offset, tableConfigs, preference));
       }
       catch(OpenSearchException e)
       {
-         throw (new QException("Quick search failed: " + (e.error() != null && e.error().reason() != null ? e.error().reason() : e.getMessage()), e));
+         QException wrapped = new QException("Quick search failed: " + (e.error() != null && e.error().reason() != null ? e.error().reason() : e.getMessage()), e);
+         recordFailure(tables, term, start, wrapped);
+         throw (wrapped);
       }
+      catch(QException e)
+      {
+         recordFailure(tables, term, start, e);
+         throw (e);
+      }
+   }
+
+
+
+   /*******************************************************************************
+    ** Record a failed search as a diagnostic event (the term's length only,
+    ** never the term).
+    *******************************************************************************/
+   private static void recordFailure(List<String> tables, String term, long start, Exception e)
+   {
+      DiagnosticsSupport.recordSearchFailure(QuickSearchRuntime.get(), QuickSearchDiagnosticEvent.SOURCE_QUICK_SEARCH_ACTION, tables, term,
+         System.currentTimeMillis() - start, e, "term length " + (term == null ? 0 : term.length()));
    }
 
 

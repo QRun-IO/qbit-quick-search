@@ -17,70 +17,45 @@
 package com.kingsrook.qbits.quicksearch.metadata;
 
 
-import java.util.ArrayList;
-import java.util.LinkedHashSet;
-import java.util.List;
-import java.util.Set;
 import com.kingsrook.qqq.backend.core.exceptions.QException;
 import com.kingsrook.qqq.backend.core.model.metadata.QInstance;
-import com.kingsrook.qqq.backend.core.model.metadata.possiblevalues.QPossibleValue;
+import com.kingsrook.qqq.backend.core.model.metadata.fields.QFieldType;
+import com.kingsrook.qqq.backend.core.model.metadata.code.QCodeReference;
 import com.kingsrook.qqq.backend.core.model.metadata.possiblevalues.QPossibleValueSource;
 import com.kingsrook.qqq.backend.core.model.metadata.possiblevalues.QPossibleValueSourceType;
 import com.kingsrook.qqq.backend.core.model.metadata.qbits.QBitComponentMetaDataProducer;
-import com.kingsrook.qqq.backend.core.model.metadata.tables.QTableMetaData;
 import com.kingsrook.qbits.quicksearch.QuickSearchQBitConfig;
-import com.kingsrook.qbits.quicksearch.SearchableTableConfig;
-import com.kingsrook.qbits.quicksearch.annotations.QuickSearchable;
+import com.kingsrook.qbits.quicksearch.config.QuickSearchTablePossibleValueProviders;
 
 
 /*******************************************************************************
- ** Enum possible value source listing the searchable tables (from annotated
- ** entity classes and config-driven tables), used by the process input screens
- ** so an operator can pick one table for a full reindex or reconcile.
+ ** Possible value source listing the indexed tables, used by the process input
+ ** screens (pick one table for a full reindex or reconcile) and to show stored
+ ** table names by label.
  *******************************************************************************/
 public class QuickSearchSearchableTablePossibleValueSourceProducer extends QBitComponentMetaDataProducer<QPossibleValueSource, QuickSearchQBitConfig>
 {
-   public static final String NAME = "quickSearchSearchableTable";
+   public static final String NAME = "quick_search_searchable_table";
+
+   /** Possible-value source name before 1.1.0-RC.3 (camelCase). */
+   @Deprecated(since = "1.1.0-RC.3")
+   public static final String LEGACY_NAME = "quickSearchSearchableTable";
 
 
 
    /*******************************************************************************
-    **
+    ** A custom source over the effective indexed tables (since 1.1.0-RC.3; it
+    ** was an enum of the code-declared tables), so tables added at runtime
+    ** appear at once, by label.
     *******************************************************************************/
    @Override
    public QPossibleValueSource produce(QInstance qInstance) throws QException
    {
-      QuickSearchQBitConfig config = getQBitConfig();
-
-      Set<String> tableNames = new LinkedHashSet<>();
-      for(Class<?> entityClass : config.getSearchableEntityClasses() == null ? List.<Class<?>>of() : config.getSearchableEntityClasses())
-      {
-         QuickSearchable annotation = entityClass.getAnnotation(QuickSearchable.class);
-         if(annotation != null)
-         {
-            tableNames.add(annotation.tableName());
-         }
-      }
-      for(SearchableTableConfig tableConfig : config.getSearchableTables() == null ? List.<SearchableTableConfig>of() : config.getSearchableTables())
-      {
-         if(tableConfig.getTableName() != null)
-         {
-            tableNames.add(tableConfig.getTableName());
-         }
-      }
-
-      List<QPossibleValue<?>> values = new ArrayList<>();
-      for(String tableName : tableNames)
-      {
-         QTableMetaData table = qInstance.getTable(tableName);
-         String         label = table != null && table.getLabel() != null ? table.getLabel() : tableName;
-         values.add(new QPossibleValue<>(tableName, label));
-      }
-
       return (new QPossibleValueSource()
-         .withName(config.applyPrefix(NAME))
-         .withType(QPossibleValueSourceType.ENUM)
-         .withEnumValues(values));
+         .withName(getQBitConfig().applyTablePrefix(NAME))
+         .withType(QPossibleValueSourceType.CUSTOM)
+         .withIdType(QFieldType.STRING)
+         .withCustomCodeReference(new QCodeReference(QuickSearchTablePossibleValueProviders.SearchableTables.class)));
    }
 
 

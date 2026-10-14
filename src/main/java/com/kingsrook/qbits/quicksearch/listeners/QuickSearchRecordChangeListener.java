@@ -19,7 +19,9 @@ package com.kingsrook.qbits.quicksearch.listeners;
 
 import java.io.Serializable;
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 import com.kingsrook.qqq.backend.core.actions.tables.InsertAction;
 import com.kingsrook.qqq.backend.core.actions.tables.QueryAction;
 import com.kingsrook.qqq.backend.core.actions.tables.UpdateAction;
@@ -39,6 +41,8 @@ import com.kingsrook.qqq.backend.core.model.data.QRecord;
 import com.kingsrook.qqq.backend.core.utils.CollectionUtils;
 import com.kingsrook.qbits.quicksearch.QuickSearchRuntime;
 import com.kingsrook.qbits.quicksearch.QuickSearchableTableConfig;
+import com.kingsrook.qbits.quicksearch.config.QuickSearchConfigWrites;
+import com.kingsrook.qbits.quicksearch.config.QuickSearchFieldRules;
 import com.kingsrook.qbits.quicksearch.model.QuickSearchFailedEvent;
 import com.kingsrook.qbits.quicksearch.processes.AbstractIndexingStep;
 import com.kingsrook.qbits.quicksearch.publisher.IndexEvent;
@@ -66,13 +70,13 @@ import static com.kingsrook.qqq.backend.core.logging.LogUtils.logPair;
  ** This listener never fails the host's write. When the re-read of inserted or
  ** updated records or publishing fails (including a LinkageError from a missing
  ** optional library while the client is built), each affected (table, record,
- ** action) is written to quickSearchFailedEvent for the scheduled basepull to
+ ** action) is written to quick_search_failed_event for the scheduled basepull to
  ** replay. A failed re-read is recorded after the commit too, so a rolled-back
  ** write leaves no row.
  **
  ** While a full reindex rebuilds into a new physical index, the alias still
  ** points at the old one, so a published delete never reaches the new index.
- ** Such deletes are also written to quickSearchFailedEvent with status
+ ** Such deletes are also written to quick_search_failed_event with status
  ** AWAITING_REINDEX; the reindex applies them after the alias swap.
  *******************************************************************************/
 public class QuickSearchRecordChangeListener implements RecordChangeListenerInterface
@@ -90,6 +94,7 @@ public class QuickSearchRecordChangeListener implements RecordChangeListenerInte
       QuickSearchRuntime runtime = QuickSearchRuntime.get();
       return (runtime != null
          && Boolean.TRUE.equals(runtime.getConfig().getEnableRealTimeIndexing())
+         && !QuickSearchFieldRules.isQuickSearchTable(runtime.getConfig(), tableName)
          && runtime.getTableConfig(tableName) != null);
    }
 
@@ -115,6 +120,24 @@ public class QuickSearchRecordChangeListener implements RecordChangeListenerInte
       }
 
       String primaryKeyField = tableConfig.getPrimaryKeyField() != null ? tableConfig.getPrimaryKeyField() : "id";
+      if(QuickSearchFieldRules.lookupTable(tableName) == null || QuickSearchFieldRules.isProtected(QuickSearchFieldRules.lookupTable(tableName), primaryKeyField))
+      {
+         QuickSearchFieldRules.warnExcludedFields(QuickSearchFieldRules.lookupTable(tableName));
+         return;
+      }
+
+      ///////////////////////////////////////////////////////////////////////////
+      // paused: index nothing, but keep the written keys (DEFERRED), which     //
+      // resuming hands to the basepull; search keeps serving the old documents //
+      ///////////////////////////////////////////////////////////////////////////
+      if(runtime.isIndexingPaused())
+      {
+         List<IndexEvent> deferred = event.getType() == RecordChangeType.DELETE
+            ? toDeleteEvents(tableName, primaryKeyField, event.getRecords())
+            : toIndexEvents(tableName, primaryKeyField, event.getRecords());
+         runAfterCommit(event, () -> recordDeferred(runtime, deferred));
+         return;
+      }
 
       List<IndexEvent> indexEvents  = new ArrayList<>();
       List<IndexEvent> deleteEvents = new ArrayList<>();
@@ -246,7 +269,7 @@ public class QuickSearchRecordChangeListener implements RecordChangeListenerInte
 
 
    /*******************************************************************************
-    ** Write one quickSearchFailedEvent row per event. Never throws.
+    ** Write one quick_search_failed_event row per event. Never throws.
     *******************************************************************************/
    static void recordFailures(QuickSearchRuntime runtime, List<IndexEvent> events, Throwable cause)
    {
@@ -261,17 +284,91 @@ public class QuickSearchRecordChangeListener implements RecordChangeListenerInte
 
       try
       {
-         if(!hasTable(runtime.getConfig().applyPrefix(QuickSearchFailedEvent.TABLE_NAME)))
+         if(!hasTable(runtime.getConfig().applyTablePrefix(QuickSearchFailedEvent.TABLE_NAME)))
          {
-            LOG.error("quickSearchFailedEvent table is not in the QInstance; failed events are lost", logPair("eventCount", events.size()));
+            LOG.error("quick_search_failed_event table is not in the QInstance; failed events are lost", logPair("eventCount", events.size()));
             return;
          }
 
          insertFailedEventRows(runtime, events, message, QuickSearchFailedEvent.STATUS_PENDING);
+         incrementRealTimeErrorCounts(runtime, events);
       }
       catch(Exception e)
       {
          LOG.error("Could not record failed index events", e, logPair("eventCount", events.size()));
+      }
+   }
+
+
+
+   /*******************************************************************************
+    ** QQQ UpdateInput has no arithmetic update. Serialize this read-modify-write
+    ** across listeners in this JVM, after the source transaction has committed.
+    ** Counter failures must not prevent replay or fail the source write.
+    *******************************************************************************/
+   private static synchronized void incrementRealTimeErrorCounts(QuickSearchRuntime runtime, List<IndexEvent> events)
+   {
+      Map<String, Integer> counts = new HashMap<>();
+      for(IndexEvent event : events)
+      {
+         counts.merge(event.getTableName(), 1, Integer::sum);
+      }
+
+      for(Map.Entry<String, Integer> entry : counts.entrySet())
+      {
+         try
+         {
+            String     indexTable = runtime.getConfig().getQuickSearchIndexTableName();
+            QueryInput queryInput = new QueryInput();
+            queryInput.setTableName(indexTable);
+            queryInput.setFilter(new QQueryFilter(new QFilterCriteria("tableName", QCriteriaOperator.EQUALS, entry.getKey())).withLimit(1));
+            List<QRecord> rows = new QueryAction().execute(queryInput).getRecords();
+            if(CollectionUtils.nullSafeIsEmpty(rows))
+            {
+               continue;
+            }
+
+            QRecord row      = rows.get(0);
+            Integer previous = row.getValueInteger("realTimeErrorCount");
+            UpdateInput updateInput = new UpdateInput();
+            updateInput.setTableName(indexTable);
+            updateInput.setRecords(List.of(new QRecord().withValue("id", row.getValue("id"))
+               .withValue("realTimeErrorCount", Math.addExact(previous == null ? 0 : previous, entry.getValue()))));
+            List<QRecord> updated = QuickSearchConfigWrites.asSystem(() -> new UpdateAction().execute(updateInput)).getRecords();
+            if(CollectionUtils.nullSafeIsEmpty(updated) || CollectionUtils.nullSafeHasContents(updated.get(0).getErrors()))
+            {
+               throw (new QException("Counter update returned errors"));
+            }
+         }
+         catch(Exception | LinkageError e)
+         {
+            LOG.warn("Could not increment real-time indexing error count", e, logPair("tableName", entry.getKey()));
+         }
+      }
+   }
+
+
+
+   /*******************************************************************************
+    ** Keep changes made while indexing is paused, for the basepull to replay
+    ** when it resumes. Never throws.
+    *******************************************************************************/
+   static void recordDeferred(QuickSearchRuntime runtime, List<IndexEvent> events)
+   {
+      if(events.isEmpty())
+      {
+         return;
+      }
+      try
+      {
+         if(hasTable(runtime.getConfig().applyTablePrefix(QuickSearchFailedEvent.TABLE_NAME)))
+         {
+            insertFailedEventRows(runtime, events, "deferred: indexing was paused", QuickSearchFailedEvent.STATUS_DEFERRED);
+         }
+      }
+      catch(Exception e)
+      {
+         LOG.warn("Could not keep changes made while indexing is paused; the next reconcile covers them", e, logPair("eventCount", events.size()));
       }
    }
 
@@ -292,7 +389,7 @@ public class QuickSearchRecordChangeListener implements RecordChangeListenerInte
       String tableName = deleteEvents.get(0).getTableName();
       try
       {
-         return (hasTable(runtime.getConfig().applyPrefix(QuickSearchFailedEvent.TABLE_NAME)) && isRebuilding(runtime, tableName));
+         return (hasTable(runtime.getConfig().applyTablePrefix(QuickSearchFailedEvent.TABLE_NAME)) && isRebuilding(runtime, tableName));
       }
       catch(Exception e)
       {
@@ -347,7 +444,7 @@ public class QuickSearchRecordChangeListener implements RecordChangeListenerInte
       }
 
       UpdateInput updateInput = new UpdateInput();
-      updateInput.setTableName(runtime.getConfig().applyPrefix(QuickSearchFailedEvent.TABLE_NAME));
+      updateInput.setTableName(runtime.getConfig().applyTablePrefix(QuickSearchFailedEvent.TABLE_NAME));
       updateInput.setRecords(updates);
       new UpdateAction().execute(updateInput);
    }
@@ -355,7 +452,7 @@ public class QuickSearchRecordChangeListener implements RecordChangeListenerInte
 
 
    /*******************************************************************************
-    ** Whether the table's quickSearchIndex row is REBUILDING.
+    ** Whether the table's quick_search_index row is REBUILDING.
     *******************************************************************************/
    private static boolean isRebuilding(QuickSearchRuntime runtime, String tableName) throws QException
    {
@@ -375,7 +472,7 @@ public class QuickSearchRecordChangeListener implements RecordChangeListenerInte
 
 
    /*******************************************************************************
-    ** Insert one quickSearchFailedEvent row per event; returns the inserted rows.
+    ** Insert one quick_search_failed_event row per event; returns the inserted rows.
     *******************************************************************************/
    static List<QRecord> insertFailedEventRows(QuickSearchRuntime runtime, List<IndexEvent> events, String message, String status) throws QException
    {
@@ -392,7 +489,7 @@ public class QuickSearchRecordChangeListener implements RecordChangeListenerInte
       }
 
       InsertInput insertInput = new InsertInput();
-      insertInput.setTableName(runtime.getConfig().applyPrefix(QuickSearchFailedEvent.TABLE_NAME));
+      insertInput.setTableName(runtime.getConfig().applyTablePrefix(QuickSearchFailedEvent.TABLE_NAME));
       insertInput.setRecords(rows);
       return (CollectionUtils.nonNullList(new InsertAction().execute(insertInput).getRecords()));
    }
@@ -422,7 +519,17 @@ public class QuickSearchRecordChangeListener implements RecordChangeListenerInte
          {
             continue;
          }
-         events.add(new IndexEvent().withAction(IndexEventAction.INDEX).withTableName(tableName).withRecordId(recordId).withRecord(record));
+         QRecord safeRecord = new QRecord();
+         for(var field : QuickSearchFieldRules.indexableFields(QuickSearchFieldRules.lookupTable(tableName)))
+         {
+            safeRecord.setValue(field.getName(), record.getValue(field.getName()));
+            safeRecord.setDisplayValue(field.getName(), record.getDisplayValue(field.getName()));
+         }
+         if(!QuickSearchFieldRules.requiresFieldFiltering(tableName))
+         {
+            safeRecord.setRecordLabel(record.getRecordLabel());
+         }
+         events.add(new IndexEvent().withAction(IndexEventAction.INDEX).withTableName(tableName).withRecordId(recordId).withRecord(safeRecord));
       }
       return (events);
    }

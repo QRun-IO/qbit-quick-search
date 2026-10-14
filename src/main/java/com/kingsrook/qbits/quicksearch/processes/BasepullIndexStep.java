@@ -25,6 +25,7 @@ import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import com.kingsrook.qqq.backend.core.actions.tables.DeleteAction;
 import com.kingsrook.qqq.backend.core.actions.tables.QueryAction;
 import com.kingsrook.qqq.backend.core.actions.tables.UpdateAction;
@@ -42,7 +43,10 @@ import com.kingsrook.qqq.backend.core.model.actions.tables.update.UpdateInput;
 import com.kingsrook.qqq.backend.core.model.data.QRecord;
 import com.kingsrook.qqq.backend.core.utils.CollectionUtils;
 import com.kingsrook.qbits.quicksearch.QuickSearchQBitConfig;
+import com.kingsrook.qbits.quicksearch.QuickSearchRuntime;
 import com.kingsrook.qbits.quicksearch.QuickSearchableTableConfig;
+import com.kingsrook.qbits.quicksearch.config.QuickSearchConfigWrites;
+import com.kingsrook.qbits.quicksearch.config.QuickSearchFieldRules;
 import com.kingsrook.qbits.quicksearch.model.QuickSearchFailedEvent;
 import com.kingsrook.qbits.quicksearch.model.QuickSearchIndex;
 import com.kingsrook.qbits.quicksearch.model.QuickSearchIndexRun;
@@ -55,10 +59,12 @@ import static com.kingsrook.qqq.backend.core.logging.LogUtils.logPair;
 /*******************************************************************************
  ** Scheduled catch-up. For each enabled table that is due, re-indexes records
  ** whose basepull timestamp is at or after the previous run's start minus the
- ** configured overlap, paging by primary key. First replays failed real-time
- ** events, and afterwards purges old run history.
+ ** configured overlap, paging by primary key. First recovers what a full
+ ** reindex that stopped without finishing left behind (so its captured deletes
+ ** are replayed in the same run) and replays failed real-time events, and
+ ** afterwards purges old run history.
  **
- ** The watermark stored on the quickSearchIndex row is the run's start time,
+ ** The watermark stored on the quick_search_index row is the run's start time,
  ** captured before the first query, so rows modified during the run are read
  ** again next time (re-indexing is idempotent). A table without a timestamp
  ** field is left to the reconcile process.
@@ -81,7 +87,41 @@ public class BasepullIndexStep extends AbstractIndexingStep
    @Override
    public void run(RunBackendStepInput input, RunBackendStepOutput output) throws QException
    {
-      List<String> failures = new ArrayList<>();
+      QuickSearchRuntime runtime = QuickSearchRuntime.get();
+      if(runtime != null)
+      {
+         runtime.getConfigStore().tryPrime();
+         if(runtime.isIndexingPaused())
+         {
+            LOG.info("Quick Search indexing is paused; basepull skipped");
+            output.addValue("tablesIndexed", 0);
+            output.addValue("paused", true);
+            return;
+         }
+      }
+
+      List<String>  failures = new ArrayList<>();
+      List<QRecord> liveRuns = List.of();
+
+      try
+      {
+         liveRuns = new FullReindexStep().recoverDeadRun(true);
+      }
+      catch(Exception e)
+      {
+         LOG.warn("Recovering from a stopped full reindex did not complete", e);
+         failures.add("full reindex recovery: " + e.getMessage());
+      }
+
+      try
+      {
+         queueBuildsIfIndexMissingOrEmpty();
+      }
+      catch(Exception e)
+      {
+         LOG.warn("Could not check whether the search index is missing or empty", e);
+         failures.add("index check: " + e.getMessage());
+      }
 
       try
       {
@@ -105,14 +145,38 @@ public class BasepullIndexStep extends AbstractIndexingStep
 
       if(CollectionUtils.nullSafeIsEmpty(indexRecords))
       {
-         LOG.info("No enabled quickSearchIndex rows found; nothing to basepull");
+         LOG.info("No enabled quick_search_index rows found; nothing to basepull");
          purgeOldRuns();
          return;
       }
 
       Integer tablesIndexed = 0;
+      Integer tablesBuilt   = 0;
       for(QRecord indexRecord : indexRecords)
       {
+         ////////////////////////////////////////////////////////////////////////
+         // self-priming: a table queued for a build (new, changed by code, or //
+         // the index was missing) is built in place instead of basepulled; a  //
+         // BUILDING row with no live run was left by a stopped server         //
+         ////////////////////////////////////////////////////////////////////////
+         String status = indexRecord.getValueString("status");
+         if(STATUS_PENDING_BUILD.equals(status) || (STATUS_BUILDING.equals(status) && CollectionUtils.nullSafeIsEmpty(liveRuns)))
+         {
+            try
+            {
+               if(buildTable(indexRecord, runtime))
+               {
+                  tablesBuilt++;
+               }
+            }
+            catch(Exception e)
+            {
+               LOG.warn("Building a queued search index failed; it is retried after its update interval", e, logPair("tableName", indexRecord.getValueString("tableName")));
+               failures.add(indexRecord.getValueString("tableName") + " build: " + e.getMessage());
+            }
+            continue;
+         }
+
          QuickSearchIndex index = new QuickSearchIndex()
             .withId(indexRecord.getValueInteger("id"))
             .withTableName(indexRecord.getValueString("tableName"))
@@ -144,11 +208,154 @@ public class BasepullIndexStep extends AbstractIndexingStep
 
       purgeOldRuns();
       output.addValue("tablesIndexed", tablesIndexed);
+      output.addValue("tablesBuilt", tablesBuilt);
 
       if(!failures.isEmpty())
       {
          throw (new QException("Basepull failed for " + failures.size() + " item(s): " + String.join("; ", failures)));
       }
+   }
+
+
+
+   /*******************************************************************************
+    ** Build one queued table in place (the reconcile algorithm, recorded as a
+    ** FULL_REINDEX run): BUILDING while it runs, ACTIVE after. A failure
+    ** queues it again, retried once its update interval has passed since the
+    ** failure; a cancel leaves it NEEDS_REINDEX (Apply Search Index Changes
+    ** starts it again); a pause leaves it queued for when indexing resumes.
+    ** Returns false when it was skipped (backing off after a failure).
+    *******************************************************************************/
+   public boolean buildTable(QRecord row, QuickSearchRuntime runtime) throws QException
+   {
+      String                     tableName   = row.getValueString("tableName");
+      Integer                    indexId     = row.getValueInteger("id");
+      QuickSearchableTableConfig tableConfig = getTableConfig(tableName);
+      if(tableConfig == null)
+      {
+         throw (new QException("Table is no longer configured for Quick Search"));
+      }
+
+      Integer intervalMinutes = row.getValueInteger("basepullIntervalMinutes");
+      long    backoffMillis   = Math.max(1, intervalMinutes == null ? 5 : intervalMinutes) * 60_000L;
+      if(runtime != null && System.currentTimeMillis() - runtime.getLastBuildFailureMillis(tableName) < backoffMillis)
+      {
+         return (false);
+      }
+
+      updateIndexRow(indexId, Map.of("status", STATUS_BUILDING));
+      try
+      {
+         new ReconcileIndexStep().reconcileTable(tableConfig, FullReindexStep.RUN_TYPE);
+         if(runtime != null)
+         {
+            runtime.clearBuildFailure(tableName);
+         }
+         LOG.info("Built queued search index", logPair("tableName", tableName));
+         return (true);
+      }
+      catch(QuickSearchRunCancelledException e)
+      {
+         boolean paused = runtime != null && runtime.isIndexingPaused();
+         updateIndexRow(indexId, Map.of("status", paused ? STATUS_PENDING_BUILD : STATUS_NEEDS_REINDEX));
+         LOG.info("Queued search index build stopped: " + e.getMessage(), logPair("tableName", tableName));
+         return (false);
+      }
+      catch(Exception e)
+      {
+         updateIndexRow(indexId, Map.of("status", STATUS_PENDING_BUILD));
+         if(runtime != null)
+         {
+            runtime.recordBuildFailure(tableName);
+         }
+         throw (e instanceof QException qe ? qe : new QException("Build failed: " + e.getMessage(), e));
+      }
+   }
+
+
+
+   /*******************************************************************************
+    ** Self-priming of the index itself: when the alias is gone (a new cluster,
+    ** or the index was deleted) it is created again. When the index was just
+    ** created, every enabled table that had documents in the lost index (and
+    ** has not been fully rebuilt since) is queued for a build; when it is
+    ** empty while a table last counted documents in it, every enabled table is.
+    *******************************************************************************/
+   void queueBuildsIfIndexMissingOrEmpty() throws QException
+   {
+      QuickSearchOpenSearchClient client = getClient();
+      String                      reason = null;
+      if(!client.indexExists())
+      {
+         client.ensureIndexExists();
+      }
+
+      List<QRecord> rows = queryEnabledRows();
+      if(client.wasIndexCreated())
+      {
+         ///////////////////////////////////////////////////////////////////////
+         // only tables that had documents in the lost index and have not been //
+         // fully rebuilt since: a table never basepulled reads everything on  //
+         // its first basepull anyway                                          //
+         ///////////////////////////////////////////////////////////////////////
+         Instant createdAt = client.getIndexCreatedAt() == null ? Instant.EPOCH : client.getIndexCreatedAt();
+         rows = rows.stream().filter(r -> r.getValue("lastBasepullTime") != null
+            && !isAfter(r.getValueInstant("lastFullReindexTime"), createdAt) && !isAfter(r.getValueInstant("lastReconcileTime"), createdAt)).toList();
+         reason = "the search index was missing and has been created";
+      }
+      else
+      {
+         Long documents = client.countAllDocuments();
+         if(documents != null && documents == 0 && rows.stream().anyMatch(r -> r.getValueInteger("documentCount") != null && r.getValueInteger("documentCount") > 0))
+         {
+            reason = "the search index is empty";
+         }
+      }
+
+      if(reason == null)
+      {
+         return;
+      }
+
+      int queued = 0;
+      for(QRecord row : rows)
+      {
+         String status = row.getValueString("status");
+         if(!STATUS_PENDING_BUILD.equals(status) && !STATUS_BUILDING.equals(status) && !STATUS_REBUILDING.equals(status))
+         {
+            QuickSearchConfigWrites.asSystem(() ->
+            {
+               updateIndexRow(row.getValueInteger("id"), Map.of("status", STATUS_PENDING_BUILD));
+               return (null);
+            });
+            queued++;
+         }
+      }
+      client.clearIndexCreated();
+      LOG.info("Queued a build of every enabled table: " + reason, logPair("tablesQueued", queued));
+   }
+
+
+
+   /*******************************************************************************
+    ** Whether a time is set and after another.
+    *******************************************************************************/
+   private static boolean isAfter(Instant time, Instant other)
+   {
+      return (time != null && time.isAfter(other));
+   }
+
+
+
+   /*******************************************************************************
+    ** The enabled quick_search_index rows.
+    *******************************************************************************/
+   private List<QRecord> queryEnabledRows() throws QException
+   {
+      QueryInput queryInput = new QueryInput();
+      queryInput.setTableName(getConfig().getQuickSearchIndexTableName());
+      queryInput.setFilter(new QQueryFilter(new QFilterCriteria("enabled", QCriteriaOperator.EQUALS, true)));
+      return (CollectionUtils.nonNullList(new QueryAction().execute(queryInput).getRecords()));
    }
 
 
@@ -183,7 +390,7 @@ public class BasepullIndexStep extends AbstractIndexingStep
 
       if(tableConfig == null)
       {
-         String message = "Table is no longer configured for Quick Search; disable or remove its quickSearchIndex row";
+         String message = "Table is no longer configured for Quick Search; disable or remove its quick_search_index row";
          completeRunRecord(run, RUN_FAILED, 0, 0, 1, message);
          throw (new QException(tableName + ": " + message));
       }
@@ -211,12 +418,13 @@ public class BasepullIndexStep extends AbstractIndexingStep
             criteria.add(new QFilterCriteria(timestampField, QCriteriaOperator.GREATER_THAN_OR_EQUALS, since));
          }
 
-         IndexCounts counts = indexAllRecords(client, tableConfig, criteria, null);
+         IndexCounts counts = indexAllRecords(client, tableConfig, criteria, null, run);
 
          if(counts.errors() == 0)
          {
             Map<String, Serializable> values = new HashMap<>();
             values.put("lastBasepullTime", runStart);
+            values.put("realTimeErrorCount", 0);
             Integer documentCount = ReconcileIndexStep.safeCount(client, tableName);
             if(documentCount != null)
             {
@@ -235,6 +443,11 @@ public class BasepullIndexStep extends AbstractIndexingStep
          {
             throw (new QException("Basepull indexed " + counts.indexed() + " of " + counts.processed() + " records for table [" + tableName + "]; first error: " + counts.firstError()));
          }
+      }
+      catch(QuickSearchRunCancelledException e)
+      {
+         completeCancelledRun(run, e);
+         throw e;
       }
       catch(QException e)
       {
@@ -256,13 +469,15 @@ public class BasepullIndexStep extends AbstractIndexingStep
 
    /*******************************************************************************
     ** Replay PENDING failed real-time events: re-read and index records for
-    ** INDEX events, delete documents for DELETE events. Successes are removed;
-    ** failures bump attempts and become EXHAUSTED at the limit.
+    ** INDEX events, delete documents for DELETE events. A DELETE whose record
+    ** exists again (re-created with the same key since) keeps its document and
+    ** counts as replayed. Successes are removed; failures bump attempts and
+    ** become EXHAUSTED at the limit.
     *******************************************************************************/
    void replayFailedEvents(RunBackendStepOutput output) throws QException
    {
       QuickSearchQBitConfig config          = getConfig();
-      String                failedEventTable = config.applyPrefix(QuickSearchFailedEvent.TABLE_NAME);
+      String                failedEventTable = config.applyTablePrefix(QuickSearchFailedEvent.TABLE_NAME);
 
       QueryInput queryInput = new QueryInput();
       queryInput.setTableName(failedEventTable);
@@ -292,19 +507,42 @@ public class BasepullIndexStep extends AbstractIndexingStep
 
       for(Map.Entry<String, List<QRecord>> entry : deleteByTable.entrySet())
       {
-         List<String> documentIds = new ArrayList<>();
-         for(QRecord event : entry.getValue())
+         if(QuickSearchFieldRules.hasProtectedPrimaryKey(entry.getKey()))
          {
-            documentIds.add(OpenSearchDocument.buildDocumentId(entry.getKey(), event.getValueString("recordId")));
+            markReplayOutcome(entry.getValue(), false, List.of("The primary key cannot be indexed"), succeeded, failed);
+            continue;
          }
+         List<QRecord> toDelete = entry.getValue();
          try
          {
-            BulkIndexResult result = client.deleteDocuments(documentIds, config.getBulkBatchSize());
-            markReplayOutcome(entry.getValue(), result.getFailureCount() == 0, result.getErrors(), succeeded, failed);
+            Set<String> existingIds = queryExistingRecordIds(entry.getKey(), entry.getValue());
+            toDelete = new ArrayList<>();
+            for(QRecord event : entry.getValue())
+            {
+               if(existingIds.contains(event.getValueString("recordId")))
+               {
+                  succeeded.add(event.getValue("id"));
+               }
+               else
+               {
+                  toDelete.add(event);
+               }
+            }
+
+            if(!toDelete.isEmpty())
+            {
+               List<String> documentIds = new ArrayList<>();
+               for(QRecord event : toDelete)
+               {
+                  documentIds.add(OpenSearchDocument.buildDocumentId(entry.getKey(), event.getValueString("recordId")));
+               }
+               BulkIndexResult result = client.deleteDocuments(documentIds, config.getBulkBatchSize());
+               markReplayOutcome(toDelete, result.getFailureCount() == 0, result.getErrors(), succeeded, failed);
+            }
          }
          catch(Exception e)
          {
-            markReplayOutcome(entry.getValue(), false, List.of(e.getMessage() == null ? e.toString() : e.getMessage()), succeeded, failed);
+            markReplayOutcome(toDelete, false, List.of(e.getMessage() == null ? e.toString() : e.getMessage()), succeeded, failed);
          }
       }
 

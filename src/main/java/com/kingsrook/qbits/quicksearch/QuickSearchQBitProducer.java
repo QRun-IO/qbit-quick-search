@@ -25,6 +25,15 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Properties;
+import com.kingsrook.qbits.quicksearch.actions.QuickSearchRecordSearchProvider;
+import com.kingsrook.qbits.quicksearch.annotations.QuickSearchField;
+import com.kingsrook.qbits.quicksearch.annotations.QuickSearchable;
+import com.kingsrook.qbits.quicksearch.api.QuickSearchApi;
+import com.kingsrook.qbits.quicksearch.config.QuickSearchFieldRules;
+import com.kingsrook.qbits.quicksearch.listeners.QuickSearchRecordChangeListener;
+import com.kingsrook.qbits.quicksearch.metadata.QuickSearchAdminAppMetaDataProducer;
+import com.kingsrook.qbits.quicksearch.metadata.QuickSearchDiagnosticsProcessMetaDataHelper;
+import com.kingsrook.qbits.quicksearch.metadata.QuickSearchProcessMetaDataHelper;
 import com.kingsrook.qqq.backend.core.exceptions.QException;
 import com.kingsrook.qqq.backend.core.logging.QLogger;
 import com.kingsrook.qqq.backend.core.model.metadata.MetaDataProducerMultiOutput;
@@ -32,17 +41,13 @@ import com.kingsrook.qqq.backend.core.model.metadata.QBackendMetaData;
 import com.kingsrook.qqq.backend.core.model.metadata.QInstance;
 import com.kingsrook.qqq.backend.core.model.metadata.code.QCodeReference;
 import com.kingsrook.qqq.backend.core.model.metadata.fields.QFieldMetaData;
+import com.kingsrook.qqq.backend.core.model.metadata.processes.QProcessMetaData;
 import com.kingsrook.qqq.backend.core.model.metadata.qbits.QBitMetaData;
 import com.kingsrook.qqq.backend.core.model.metadata.qbits.QBitMetaDataProducer;
 import com.kingsrook.qqq.backend.core.model.metadata.tables.QTableMetaData;
 import com.kingsrook.qqq.backend.core.utils.CollectionUtils;
 import com.kingsrook.qqq.backend.core.utils.StringUtils;
-import com.kingsrook.qbits.quicksearch.actions.QuickSearchRecordSearchProvider;
-import com.kingsrook.qbits.quicksearch.annotations.QuickSearchField;
-import com.kingsrook.qbits.quicksearch.annotations.QuickSearchable;
-import com.kingsrook.qbits.quicksearch.listeners.QuickSearchRecordChangeListener;
-import com.kingsrook.qbits.quicksearch.metadata.QuickSearchAdminAppMetaDataProducer;
-import com.kingsrook.qbits.quicksearch.metadata.QuickSearchProcessMetaDataHelper;
+import com.kingsrook.qqq.middleware.javalin.specs.extensions.MiddlewareSpecExtensionsMetaData;
 import static com.kingsrook.qqq.backend.core.logging.LogUtils.logPair;
 
 
@@ -260,6 +265,11 @@ public class QuickSearchQBitProducer implements QBitMetaDataProducer<QuickSearch
 
       qInstance.withRuntimeService(new QCodeReference(QuickSearchRuntimeService.class));
 
+      MiddlewareSpecExtensionsMetaData.ofOrWithNew(qInstance)
+         .withExtension(QuickSearchApi.extension());
+
+      addRecordDiagnosticActions(output, qInstance, discoveredTables);
+
       if(Boolean.TRUE.equals(qBitConfig.getServeCoreRecordSearch()))
       {
          registerRecordSearchProvider(qInstance);
@@ -278,6 +288,40 @@ public class QuickSearchQBitProducer implements QBitMetaDataProducer<QuickSearch
 
       LOG.info("Quick Search QBit produced", logPair("version", VERSION), logPair("tables", discoveredTables.size()),
          logPair("indexName", qBitConfig.getOpensearchIndexName()), logPair("startupMode", qBitConfig.getStartupMode()));
+   }
+
+
+
+   /*******************************************************************************
+    ** Give every indexed table in the instance the Inspect Search Document and
+    ** Reindex in Search record actions (when enableDiagnosticTools and
+    ** enableRecordDiagnosticActions are on). A process the host already
+    ** defined with the same name is kept.
+    *******************************************************************************/
+   void addRecordDiagnosticActions(MetaDataProducerMultiOutput output, QInstance qInstance, List<QuickSearchableTableConfig> tableConfigs)
+   {
+      if(!Boolean.TRUE.equals(qBitConfig.getEnableDiagnosticTools()) || !Boolean.TRUE.equals(qBitConfig.getEnableRecordDiagnosticActions()))
+      {
+         return;
+      }
+
+      for(QuickSearchableTableConfig tableConfig : tableConfigs)
+      {
+         if(qInstance.getTable(tableConfig.getTableName()) == null)
+         {
+            continue;
+         }
+         for(QProcessMetaData process : List.of(
+            QuickSearchDiagnosticsProcessMetaDataHelper.buildInspectProcess(qBitConfig, tableConfig.getTableName()),
+            QuickSearchDiagnosticsProcessMetaDataHelper.buildReindexRecordsProcess(qBitConfig, tableConfig.getTableName())))
+         {
+            if(qInstance.getProcess(process.getName()) == null && output.get(QProcessMetaData.class, process.getName()) == null)
+            {
+               process.setSourceQBitName(getQBitMetaData().getName());
+               output.add(process);
+            }
+         }
+      }
    }
 
 
@@ -309,7 +353,7 @@ public class QuickSearchQBitProducer implements QBitMetaDataProducer<QuickSearch
     ** never replaced. A table that is not in the instance yet, uses backend
     ** variants, or has no such field is skipped with a warning.
     *******************************************************************************/
-   static void defaultCoreSearchFields(QInstance qInstance, List<QuickSearchableTableConfig> tableConfigs)
+   public static void defaultCoreSearchFields(QInstance qInstance, List<QuickSearchableTableConfig> tableConfigs)
    {
       for(QuickSearchableTableConfig tableConfig : tableConfigs)
       {
@@ -337,8 +381,8 @@ public class QuickSearchQBitProducer implements QBitMetaDataProducer<QuickSearch
          for(String fieldName : CollectionUtils.nonNullList(tableConfig.getSearchableFields()))
          {
             QFieldMetaData field = table.getFields() == null ? null : table.getFields().get(fieldName);
-            if(field != null && !Boolean.TRUE.equals(field.getIsHidden()) && field.getType() != null
-               && (field.getType().isStringLike() || field.getType().isIntegral()) && !field.getType().needsMasked()
+            if(QuickSearchFieldRules.isIndexable(table, fieldName)
+               && (field.getType().isStringLike() || field.getType().isIntegral())
                && !searchFields.contains(fieldName))
             {
                searchFields.add(fieldName);
@@ -423,7 +467,7 @@ public class QuickSearchQBitProducer implements QBitMetaDataProducer<QuickSearch
          {
             primaryKeyField        = table.getPrimaryKeyField();
             basepullTimestampField = resolveTimestampField(table, searchableFields, basepullTimestampField);
-            removeHiddenFields(table, searchableFields, fieldWeights, fieldIncludeLabels);
+            removeExcludedFields(table, searchableFields, fieldWeights, fieldIncludeLabels);
          }
 
          tables.add(new QuickSearchableTableConfig()
@@ -474,9 +518,13 @@ public class QuickSearchQBitProducer implements QBitMetaDataProducer<QuickSearch
          QTableMetaData table                  = qInstance.getTable(stc.getTableName());
          if(table != null)
          {
-            primaryKeyField        = table.getPrimaryKeyField();
-            basepullTimestampField = (basepullTimestampField != null && !table.getFields().containsKey(basepullTimestampField)) ? null : basepullTimestampField;
-            removeHiddenFields(table, searchableFields, fieldWeights, fieldIncludeLabels);
+            primaryKeyField = table.getPrimaryKeyField();
+            if(basepullTimestampField != null && !table.getFields().containsKey(basepullTimestampField))
+            {
+               warnIncrementalBasepullDisabled(table, basepullTimestampField);
+               basepullTimestampField = null;
+            }
+            removeExcludedFields(table, searchableFields, fieldWeights, fieldIncludeLabels);
          }
 
          Integer basepullInterval = stc.getBasepullIntervalMinutes();
@@ -532,7 +580,7 @@ public class QuickSearchQBitProducer implements QBitMetaDataProducer<QuickSearch
       {
          if(QuickSearchQBitConfig.DEFAULT_BASEPULL_TIMESTAMP_FIELD.equals(basepullTimestampField))
          {
-            LOG.warn("Table has no modifyDate field; incremental basepull is disabled for it (reconcile still covers it)", logPair("tableName", table.getName()));
+            warnIncrementalBasepullDisabled(table, basepullTimestampField);
             return (null);
          }
          throw (new QException("basepullTimestampField [" + basepullTimestampField + "] does not exist on table [" + table.getName() + "]"));
@@ -543,23 +591,35 @@ public class QuickSearchQBitProducer implements QBitMetaDataProducer<QuickSearch
 
 
    /*******************************************************************************
-    ** Hidden and password fields are never indexed: their values would leak
-    ** through searchable text and highlights.
+    ** The startup warning, once per table, for annotated and config-driven
+    ** tables alike, when the basepull timestamp field is missing. A field
+    ** explicitly set to null is an opt-out and is not warned about.
     *******************************************************************************/
-   private static void removeHiddenFields(QTableMetaData table, List<String> searchableFields, Map<String, Integer> fieldWeights, Map<String, Boolean> fieldIncludeLabels)
+   private static void warnIncrementalBasepullDisabled(QTableMetaData table, String basepullTimestampField)
+   {
+      LOG.warn("Table has no basepull timestamp field; incremental basepull is disabled for it (reconcile still covers it)",
+         logPair("tableName", table.getName()), logPair("timestampField", basepullTimestampField));
+   }
+
+
+
+   /*******************************************************************************
+    ** Classified, locked, hidden, sensitive and password fields are excluded:
+    ** would leak through searchable text and highlights.
+    *******************************************************************************/
+   private static void removeExcludedFields(QTableMetaData table, List<String> searchableFields, Map<String, Integer> fieldWeights, Map<String, Boolean> fieldIncludeLabels)
    {
       List<String> hidden = new ArrayList<>();
       for(String fieldName : searchableFields)
       {
-         QFieldMetaData field = table.getFields().get(fieldName);
-         if(field != null && (Boolean.TRUE.equals(field.getIsHidden()) || (field.getType() != null && field.getType().needsMasked())))
+         if(!QuickSearchFieldRules.isIndexable(table, fieldName))
          {
             hidden.add(fieldName);
          }
       }
       if(!hidden.isEmpty())
       {
-         LOG.warn("Hidden and password fields are excluded from Quick Search indexing", logPair("tableName", table.getName()), logPair("fields", hidden));
+         QuickSearchFieldRules.warnExcludedFields(table);
          searchableFields.removeAll(hidden);
          hidden.forEach(fieldWeights::remove);
          hidden.forEach(fieldIncludeLabels::remove);
