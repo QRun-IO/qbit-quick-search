@@ -362,8 +362,27 @@ class QuickSearchStatusTest
          assertThat(anonymous.statusCode()).as(anonymous.body()).isEqualTo(403);
          var denied = client.send(HttpRequest.newBuilder(URI.create(url)).header("Cookie", "sessionUUID=reader-" + suffix).GET().build(), HttpResponse.BodyHandlers.ofString());
          assertThat(denied.statusCode()).as(denied.body()).isEqualTo(403);
+         String suggestUrl = "http://127.0.0.1:" + port + "/qqq/v1/qbit/quick-search/suggest";
+         for(String query : List.of("?q=x", "?q=%20x%20", "?q=wi&tables=unknown", "?q=wi&tables=", "?q=wi"))
+         {
+            var suggestions = client.send(HttpRequest.newBuilder(URI.create(suggestUrl + query))
+               .header("Cookie", "sessionUUID=reader-" + suffix).GET().build(), HttpResponse.BodyHandlers.ofString());
+            assertThat(suggestions.statusCode()).as(suggestions.body()).isEqualTo(200);
+            var suggestionJson = new ObjectMapper().readTree(suggestions.body());
+            assertThat(suggestionJson.path("groups").isArray()).isTrue();
+            assertThat(suggestionJson.path("groups").size()).isZero();
+            assertThat(suggestionJson.path("truncated").asBoolean()).isFalse();
+         }
+         for(String query : List.of("", "?q=" + "x".repeat(101), "?q=wi&limitPerTable=no", "?q=wi&limitPerTable=11", "?q=wi&maxTables=21"))
+         {
+            var invalid = client.send(HttpRequest.newBuilder(URI.create(suggestUrl + query))
+               .header("Cookie", "sessionUUID=reader-" + suffix).GET().build(), HttpResponse.BodyHandlers.ofString());
+            assertThat(invalid.statusCode()).as(invalid.body()).isEqualTo(400);
+            assertThat(new ObjectMapper().readTree(invalid.body()).path("error").isTextual()).isTrue();
+         }
          var openapi = client.send(HttpRequest.newBuilder(URI.create("http://127.0.0.1:" + port + "/qqq/v1/openapi.yaml")).GET().build(), HttpResponse.BodyHandlers.ofString());
-         assertThat(openapi.body()).contains("/qqq/v1/qbit/quick-search/status", "QuickSearchStatusV1");
+         assertThat(openapi.body()).contains("/qqq/v1/qbit/quick-search/status", "QuickSearchStatusV1",
+            "/qqq/v1/qbit/quick-search/suggest", "getQuickSearchSuggestions", "QuickSearchSuggestV1");
       }
       finally
       {

@@ -132,6 +132,66 @@ components:
           nullable: true
           type: "integer"
       type: "object"
+    QuickSearchSuggestGroupV1:
+      nullable: false
+      properties:
+        hasMore:
+          description: "An extra accessible item was found in the bounded batch. False\
+            \ does not prove the index has no further matches."
+          nullable: false
+          type: "boolean"
+        items:
+          description: "At most limitPerTable accessible items in per-table relevance\
+            \ order."
+          items:
+            $ref: "#/components/schemas/QuickSearchSuggestItemV1"
+          nullable: false
+          type: "array"
+        tableLabel:
+          description: "Source table label, falling back to its metadata name."
+          nullable: false
+          type: "string"
+        tableName:
+          description: "Source table metadata name."
+          nullable: false
+          type: "string"
+      type: "object"
+    QuickSearchSuggestItemV1:
+      nullable: false
+      properties:
+        label:
+          description: "Filtered record label, falling back to tableLabel #recordId\
+            \ when blank."
+          nullable: false
+          type: "string"
+        recordId:
+          description: "Source record primary key."
+          nullable: false
+          type: "string"
+        subtitle:
+          description: "Already-filtered result subtitle; null when absent."
+          nullable: true
+          type: "string"
+      type: "object"
+    QuickSearchSuggestV1:
+      nullable: false
+      properties:
+        groups:
+          description: "Readable tables ordered by best accessible score; at most\
+            \ maxTables."
+          items:
+            $ref: "#/components/schemas/QuickSearchSuggestGroupV1"
+          nullable: false
+          type: "array"
+        query:
+          description: "Search term after trimming and collapsing whitespace."
+          nullable: false
+          type: "string"
+        truncated:
+          description: "More tables had accessible hits than maxTables."
+          nullable: false
+          type: "boolean"
+      type: "object"
   securitySchemes:
     sessionUuidCookie:
       in: "cookie"
@@ -140,7 +200,7 @@ components:
 info:
   contact:
     email: "contact@kingsrook.com"
-  description: "Quick Search administrative status"
+  description: "Quick Search administration and suggestions"
   title: "QQQ Middleware API extension: quick-search"
   version: "1.0.0"
 openapi: "3.0.3"
@@ -181,3 +241,77 @@ paths:
       - sessionUuidCookie:
         - "N/A"
       summary: "Get Quick Search status"
+  /qqq/v1/qbit/quick-search/suggest:
+    get:
+      description: "Requires a signed-in session, not Quick Search admin permission.\
+        \ Results inherit table READ permissions, configured record security locks\
+        \ and protected-field exclusions. One bounded candidate batch per table; no\
+        \ extra scans. Unavailable search and normalized terms shorter than two characters\
+        \ return empty groups."
+      operationId: "getQuickSearchSuggestions"
+      parameters:
+      - description: "Search text: trim and collapse whitespace before applying the\
+          \ 2..100 character range. Shorter terms return empty groups; longer terms\
+          \ return 400."
+        in: "query"
+        name: "q"
+        required: true
+        schema:
+          description: "Normalized search term."
+          nullable: false
+          type: "string"
+      - description: "Items per table: integer 1..10, default 5."
+        in: "query"
+        name: "limitPerTable"
+        required: false
+        schema:
+          description: "Maximum items per table; default 5, maximum 10."
+          nullable: false
+          type: "integer"
+      - description: "Groups to return: integer 1..20, default 8."
+        in: "query"
+        name: "maxTables"
+        required: false
+        schema:
+          description: "Maximum groups; default 8, maximum 20."
+          nullable: false
+          type: "integer"
+      - description: "Optional comma-separated table metadata names. Unknown, disabled\
+          \ and unreadable tables are omitted."
+        in: "query"
+        name: "tables"
+        required: false
+        schema:
+          description: "Table-name filter; omitted means all eligible tables."
+          nullable: false
+          type: "string"
+      responses:
+        400:
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/QuickSearchErrorV1"
+          description: "Missing q, normalized term longer than 100 characters, or\
+            \ invalid limits"
+        401:
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/QuickSearchErrorV1"
+          description: "Sign in required"
+        403:
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/QuickSearchErrorV1"
+          description: "Session permission denied"
+        200:
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/QuickSearchSuggestV1"
+          description: "Successful Response"
+      security:
+      - sessionUuidCookie:
+        - "N/A"
+      summary: "Get Quick Search suggestions"

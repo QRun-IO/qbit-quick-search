@@ -166,7 +166,7 @@ public class QuickSearchAction
 
       if(input.getLimitPerTable() != null && input.getLimitPerTable() > 0)
       {
-         return (searchPerTable(client, normalizedTerm, allowedTables, offset, Math.min(input.getLimitPerTable(), maxLimit), tableConfigs, applyLocks));
+         return (searchPerTable(client, normalizedTerm, allowedTables, offset, Math.min(input.getLimitPerTable(), maxLimit), tableConfigs, applyLocks, Boolean.TRUE.equals(input.getSinglePass())));
       }
 
       Page page = searchPage(client, normalizedTerm, allowedTables, offset, limit, tableConfigs, applyLocks, new ScanBudget(QuickSearchOpenSearchClient.MAX_RESULT_WINDOW, MAX_LOCKED_ROUND_TRIPS));
@@ -178,8 +178,10 @@ public class QuickSearchAction
    /*******************************************************************************
     ** Search each allowed table separately, skipping offset results and
     ** returning up to limitPerTable hits in each table.
+    ** singlePass bounds locked searches to one batch of twice the requested
+    ** page size; it never scans again to fill gaps left by inaccessible rows.
     *******************************************************************************/
-   private QuickSearchOutput searchPerTable(QuickSearchOpenSearchClient client, String term, List<String> allowedTables, int offset, int limitPerTable, List<QuickSearchableTableConfig> tableConfigs, boolean applyLocks) throws QException
+   private QuickSearchOutput searchPerTable(QuickSearchOpenSearchClient client, String term, List<String> allowedTables, int offset, int limitPerTable, List<QuickSearchableTableConfig> tableConfigs, boolean applyLocks, boolean singlePass) throws QException
    {
       List<QuickSearchResult> results    = new ArrayList<>();
       long                    totalHits  = 0;
@@ -189,6 +191,11 @@ public class QuickSearchAction
       int window     = QuickSearchOpenSearchClient.MAX_RESULT_WINDOW;
       int tableHits  = Math.max(window / allowedTables.size(), Math.min(window, 2 * limitPerTable));
       int tableTrips = Math.max(2, MAX_LOCKED_ROUND_TRIPS / allowedTables.size());
+      if(singlePass)
+      {
+         tableHits = Math.min(window, 2 * limitPerTable);
+         tableTrips = 1;
+      }
 
       for(String tableName : allowedTables)
       {
