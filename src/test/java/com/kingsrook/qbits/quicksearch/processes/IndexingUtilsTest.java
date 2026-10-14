@@ -21,6 +21,8 @@ import java.time.Instant;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import com.kingsrook.qqq.backend.core.actions.ai.AiFieldMetaData;
+import com.kingsrook.qqq.backend.core.actions.ai.DataClassification;
 import com.kingsrook.qqq.backend.core.context.QContext;
 import com.kingsrook.qqq.backend.core.model.data.QRecord;
 import com.kingsrook.qqq.backend.core.model.metadata.QAuthenticationType;
@@ -33,8 +35,10 @@ import com.kingsrook.qqq.backend.core.model.metadata.tables.QTableMetaData;
 import com.kingsrook.qqq.backend.core.model.session.QSession;
 import com.kingsrook.qqq.backend.core.modules.backend.implementations.memory.MemoryBackendModule;
 import com.kingsrook.qbits.quicksearch.QuickSearchableTableConfig;
+import com.kingsrook.qbits.quicksearch.config.QuickSearchFieldRules;
 import com.kingsrook.qbits.quicksearch.opensearch.OpenSearchDocument;
 import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -44,6 +48,143 @@ import static org.assertj.core.api.Assertions.assertThat;
  *******************************************************************************/
 class IndexingUtilsTest
 {
+
+   /*******************************************************************************
+    ** Document building requires field metadata to apply the index policy.
+    *******************************************************************************/
+   @BeforeEach
+   void setUpMetadata()
+   {
+      QInstance instance = new QInstance();
+      instance.addBackend(new QBackendMetaData().withName("memory").withBackendType(MemoryBackendModule.class));
+      instance.withInstanceDefaultAuthentication(new QAuthenticationMetaData().withName("anonymous").withType(QAuthenticationType.FULLY_ANONYMOUS));
+      for(String tableName : List.of("customers", "person", "product", "order"))
+      {
+         QTableMetaData table = new QTableMetaData().withName(tableName).withBackendName("memory").withPrimaryKeyField("id")
+            .withField(new QFieldMetaData("id", QFieldType.INTEGER))
+            .withField(new QFieldMetaData("modifyDate", QFieldType.DATE_TIME));
+         for(String field : List.of("name", "description", "firstName", "lastName", "email", "statusId", "quantity", "notes", "sku"))
+         {
+            table.withField(new QFieldMetaData(field, QFieldType.STRING));
+         }
+         instance.addTable(table);
+      }
+      QContext.init(instance, new QSession());
+   }
+
+
+
+   /*******************************************************************************
+    ** Unsupported search fields must not erase labels or rebuild results.
+    *******************************************************************************/
+   @Test
+   void testUnprotectedBooleanAndBlobPreserveLabelAndResult()
+   {
+      QTableMetaData table = QContext.getQInstance().getTable("product");
+      table.withField(new QFieldMetaData("active", QFieldType.BOOLEAN))
+         .withField(new QFieldMetaData("attachment", QFieldType.BLOB))
+         .withRecordLabelFields("name").withRecordLabelFormat("%s");
+      QRecord record = new QRecord().withValue("id", 1).withValue("name", "Widget")
+         .withValue("active", true).withValue("attachment", new byte[] { 1, 2 });
+      record.setRecordLabel("Widget label");
+      QuickSearchableTableConfig config = new QuickSearchableTableConfig().withTableName("product").withPrimaryKeyField("id")
+         .withSearchableFields(List.of("name", "active", "attachment"));
+
+      OpenSearchDocument document = IndexingUtils.buildDocument(record, config);
+      assertThat(document.getRecordLabel()).isEqualTo("Widget label");
+      assertThat(document.getSearchableText()).isEqualTo("Widget");
+      assertThat(document.getFieldValues()).containsExactlyEntriesOf(Map.of("name", "Widget"));
+      assertThat(QuickSearchFieldRules.requiresFieldFiltering("product")).isFalse();
+      assertThat(IndexingUtils.filterResult(document, config)).isSameAs(document);
+
+      record.setRecordLabel(null);
+      assertThat(IndexingUtils.buildDocument(record, config).getRecordLabel()).isEqualTo("Widget");
+      config.withRecordLabelFields(List.of("name", "active")).withRecordLabelFormat("%s: %s");
+      assertThat(IndexingUtils.buildDocument(record, config).getRecordLabel()).isEqualTo("Widget: true");
+      table.withRecordLabelFields("name", "active").withRecordLabelFormat("%s: %s");
+      config.withRecordLabelFormat(null);
+      assertThat(IndexingUtils.buildDocument(record, config).getRecordLabel()).isEqualTo("Widget: true");
+   }
+
+
+
+   /*******************************************************************************
+    ** A protected field unrelated to the label must not erase a safe label.
+    *******************************************************************************/
+   @Test
+   void testUnrelatedProtectedFieldPreservesLabel()
+   {
+      QTableMetaData table = QContext.getQInstance().getTable("product");
+      table.withRecordLabelFields("name").withRecordLabelFormat("%s");
+      table.getField("description").withSupplementalMetaData(new AiFieldMetaData().withClassification(DataClassification.PHI));
+      QRecord record = new QRecord().withValue("id", 1).withValue("name", "Widget").withValue("description", "PHI-CANARY");
+      record.setRecordLabel("Widget label");
+      QuickSearchableTableConfig config = new QuickSearchableTableConfig().withTableName("product").withPrimaryKeyField("id")
+         .withSearchableFields(List.of("name", "description"));
+
+      assertThat(IndexingUtils.buildDocument(record, config).getRecordLabel()).isEqualTo("Widget label");
+      record.setRecordLabel(null);
+      assertThat(IndexingUtils.buildDocument(record, config).getRecordLabel()).isEqualTo("Widget");
+      assertThat(QuickSearchFieldRules.requiresFieldFiltering("product")).isTrue();
+   }
+
+
+
+   /*******************************************************************************
+    ** Both table and configured label formats must exclude protected fields.
+    *******************************************************************************/
+   @Test
+   void testProtectedLabelFieldsOmitPreformattedAndComputedLabels()
+   {
+      QTableMetaData table = QContext.getQInstance().getTable("person");
+      table.getField("email").withSupplementalMetaData(new AiFieldMetaData().withClassification(DataClassification.PII));
+      table.withRecordLabelFields("name", "email").withRecordLabelFormat("%s %s");
+      QRecord record = new QRecord().withValue("id", 1).withValue("name", "Public name").withValue("email", "PII-CANARY");
+      record.setRecordLabel("Public name PII-CANARY");
+      QuickSearchableTableConfig config = new QuickSearchableTableConfig().withTableName("person").withPrimaryKeyField("id")
+         .withSearchableFields(List.of("name", "email"))
+         .withRecordLabelFields(List.of("email")).withRecordLabelFormat("%s");
+
+      assertThat(IndexingUtils.buildDocument(record, config).getRecordLabel()).isNull();
+      record.setRecordLabel(null);
+      assertThat(IndexingUtils.buildDocument(record, config).getRecordLabel()).isNull();
+      table.withRecordLabelFields("name").withRecordLabelFormat("%s");
+      record.setRecordLabel("PII-CANARY");
+      assertThat(IndexingUtils.buildDocument(record, config).getRecordLabel()).isEqualTo("Public name");
+      assertThat(record.getRecordLabel()).isEqualTo("PII-CANARY");
+      table.withRecordLabelFormat(null);
+      assertThat(IndexingUtils.buildDocument(record, config).getRecordLabel()).isEqualTo("1");
+   }
+
+
+
+   /*******************************************************************************
+    ** Hidden keys and timestamps remain usable unless they are protected.
+    *******************************************************************************/
+   @Test
+   void testHiddenPrimaryKeyAndTimestampAreNotProtected()
+   {
+      QTableMetaData table = QContext.getQInstance().getTable("product");
+      table.getField("id").withIsHidden(true);
+      table.getField("modifyDate").withIsHidden(true);
+      Instant timestamp = Instant.parse("2026-10-14T12:00:00Z");
+      QRecord record = new QRecord().withValue("id", 1).withValue("name", "Widget").withValue("modifyDate", timestamp);
+      QuickSearchableTableConfig config = new QuickSearchableTableConfig().withTableName("product").withPrimaryKeyField("id")
+         .withSearchableFields(List.of("name")).withBasepullTimestampField("modifyDate");
+
+      OpenSearchDocument document = IndexingUtils.buildDocument(record, config);
+      assertThat(document.getRecordId()).isEqualTo("1");
+      assertThat(document.getVersion()).isEqualTo(timestamp.toEpochMilli());
+      assertThat(QuickSearchFieldRules.hasProtectedPrimaryKey("product")).isFalse();
+      assertThat(QuickSearchFieldRules.requiresFieldFiltering("product")).isFalse();
+      table.getField("modifyDate").withSupplementalMetaData(new AiFieldMetaData().withClassification(DataClassification.PHI));
+      assertThat(IndexingUtils.buildDocument(record, config).getVersion()).isNull();
+      table.getField("id").withIsSensitive(true);
+      assertThat(QuickSearchFieldRules.hasProtectedPrimaryKey("product")).isTrue();
+      assertThat(IndexingUtils.buildDocument(record, config)).isNull();
+   }
+
+
 
    /*******************************************************************************
     ** Test that normal input is trimmed and its case is preserved (the analyzer
@@ -606,7 +747,7 @@ class IndexingUtilsTest
          .withSearchableFields(List.of("sku"))
          .withFieldIncludeLabels(Map.of("sku", true));
 
-      assertThat(IndexingUtils.buildDocument(record, tableConfig).getSearchableText()).isEqualTo("sku: AB-1");
+      assertThat(IndexingUtils.buildDocument(record, tableConfig).getSearchableText()).isEqualTo("Sku: AB-1");
 
       initContextWithPersonTable();
       assertThat(IndexingUtils.buildDocument(record, tableConfig).getSearchableText()).isEqualTo("SKU Code: AB-1");

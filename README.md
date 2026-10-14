@@ -346,3 +346,36 @@ configured metadata prefix. `QuickSearchApi.APP_NAME` (`quickSearchAdmin`) and
 `QuickSearchApi.HOME_HREF` (`/app/quickSearchAdmin`) are available for default-name
 navigation. Keep detailed runs, failed events, validation and operator tools in the
 qbit's own home. [kof22 migration mapping](docs/STATUS-API-HOST-MIGRATION.md).
+
+## Classified data
+
+Quick Search excludes fields classified as **PII** or **PHI**, including fields
+that inherit the table's classification. It also excludes hidden, sensitive,
+password/masked fields and every field with a `FieldSecurityLock`; a shared
+search index cannot enforce access to individual fields for each user. PUBLIC,
+CONFIDENTIAL and unclassified fields remain eligible under the usual field rules.
+
+The same rule applies to annotation and code configuration, admin field choices,
+real-time writes, basepull, rebuilds, replay, labels, snippets, analyzer copies and
+result display fields. An admin trying to add a protected field gets an error.
+Protected fields in existing or explicit code configuration are dropped, with one
+warning per table metadata lifetime; warnings never contain field values. A
+protected primary key prevents indexing the record or sending its ID for deletion.
+
+Protection is separate from search eligibility: boolean, blob, hidden and other
+unsupported fields alone do not trigger result filtering or remove record labels.
+Labels are omitted when their source fields are protected; unrelated protected
+fields do not erase safe labels. Unprotected hidden keys and timestamps can still
+provide record IDs and document versions.
+
+After upgrading, or after changing a field's classification or security metadata,
+run **Full Reindex** across all indexed tables to remove previously indexed values.
+Until then, tables containing protected fields are searched through allowed field
+values, and results are rebuilt without old combined labels or highlights.
+Diagnostic views also omit protected values and the raw response for these tables.
+This does not purge old OpenSearch backups or retained physical indexes; apply your
+host's retention policy to those copies.
+
+This release uses the APIs in QQQ **4.1.0-RC.6**. Support for the host's
+`AuditValueProtector` classification (`ClassifiedValues`, qqq#1182) and
+`FieldAccessHelper.getLockTier` (qqq#1172) is deferred until the qbit moves to RC.7.

@@ -36,6 +36,7 @@ import com.kingsrook.qqq.backend.core.exceptions.QException;
 import com.kingsrook.qqq.backend.core.logging.QLogger;
 import com.kingsrook.qbits.quicksearch.QuickSearchQBitConfig;
 import com.kingsrook.qbits.quicksearch.QuickSearchableTableConfig;
+import com.kingsrook.qbits.quicksearch.config.QuickSearchFieldRules;
 import com.kingsrook.qbits.quicksearch.model.QuickSearchFieldAnalyzer;
 import com.kingsrook.qbits.quicksearch.processes.IndexingUtils;
 import org.opensearch.client.json.JsonData;
@@ -53,6 +54,7 @@ import org.opensearch.client.opensearch._types.query_dsl.MultiMatchQuery;
 import org.opensearch.client.opensearch._types.query_dsl.Operator;
 import org.opensearch.client.opensearch._types.query_dsl.Query;
 import org.opensearch.client.opensearch._types.query_dsl.TermQuery;
+import org.opensearch.client.opensearch._types.query_dsl.TextQueryType;
 import org.opensearch.client.opensearch.core.BulkRequest;
 import org.opensearch.client.opensearch.core.BulkResponse;
 import org.opensearch.client.opensearch.core.DeleteByQueryRequest;
@@ -796,7 +798,8 @@ public class QuickSearchOpenSearchClient implements Closeable
       try
       {
          Query     finalQuery = buildSearchQuery(searchTerm, allowedTables, tableConfigs);
-         Highlight highlight  = Highlight.of(h -> h.fields("searchableText", HighlightField.of(hf -> hf)));
+         Highlight highlight  = allowedTables.stream().anyMatch(QuickSearchFieldRules::requiresFieldFiltering) ? null
+            : Highlight.of(h -> h.fields("searchableText", HighlightField.of(hf -> hf)));
 
          SearchRequest request = SearchRequest.of(r -> r
             .index(indexName)
@@ -941,9 +944,22 @@ public class QuickSearchOpenSearchClient implements Closeable
       // fields kept out of the snippet (KEYWORD, EXACT, or includeInSnippet   //
       // off) match on their own; with none, the query is exactly as before    //
       ////////////////////////////////////////////////////////////////////////////
+      List<String> aggregateTables = allowedTables.stream().filter(t -> !QuickSearchFieldRules.requiresFieldFiltering(t)).toList();
+      if(aggregateTables.isEmpty())
+      {
+         snippetMatch = Query.of(q -> q.matchNone(m -> m));
+      }
+      else if(aggregateTables.size() != allowedTables.size())
+      {
+         Query aggregateMatch = snippetMatch;
+         snippetMatch = Query.of(q -> q.bool(b -> b.must(aggregateMatch).filter(f -> f.terms(t -> t.field("sourceTable")
+            .terms(v -> v.value(aggregateTables.stream().map(FieldValue::of).toList()))))));
+      }
       List<Query> ownMatches = buildOwnFieldMatchQueries(searchTerm, tableConfigs, allowedTables);
-      Query       match      = ownMatches.isEmpty() ? snippetMatch
-         : Query.of(q -> q.bool(b -> b.should(snippetMatch).should(ownMatches).minimumShouldMatch("1")));
+      ownMatches.addAll(buildFilteredSnippetQueries(searchTerm, tableConfigs, allowedTables));
+      Query safeSnippetMatch = snippetMatch;
+      Query       match      = ownMatches.isEmpty() ? safeSnippetMatch
+         : Query.of(q -> q.bool(b -> b.should(safeSnippetMatch).should(ownMatches).minimumShouldMatch("1")));
 
       BoolQuery.Builder boolBuilder = new BoolQuery.Builder()
          .must(match)
@@ -951,6 +967,36 @@ public class QuickSearchOpenSearchClient implements Closeable
          .should(buildFieldBoostQueries(searchTerm, tableConfigs, allowedTables, named));
 
       return (Query.of(q -> q.bool(boolBuilder.build())));
+   }
+
+
+
+   /*******************************************************************************
+    ** For tables with excluded fields, match only attributable field values.
+    ** Old combined text may still contain fields that became classified later.
+    *******************************************************************************/
+   private List<Query> buildFilteredSnippetQueries(String term, List<QuickSearchableTableConfig> configs, Collection<String> allowedTables)
+   {
+      List<Query> queries = new ArrayList<>();
+      for(QuickSearchableTableConfig config : configs == null ? List.<QuickSearchableTableConfig>of() : configs)
+      {
+         if(!allowedTables.contains(config.getTableName()) || !QuickSearchFieldRules.requiresFieldFiltering(config.getTableName()))
+         {
+            continue;
+         }
+         var table = QuickSearchFieldRules.lookupTable(config.getTableName());
+         List<String> fields = QuickSearchFieldRules.indexableFields(table, config.getSearchableFields()).stream()
+            .filter(config::isIncludedInSnippet).map(f -> PATH_PREFIX + "." + f).toList();
+         if(fields.isEmpty() || QuickSearchFieldRules.isProtected(table, table.getPrimaryKeyField()))
+         {
+            continue;
+         }
+         queries.add(Query.of(q -> q.bool(b -> b
+            .filter(f -> f.term(t -> t.field("sourceTable").value(FieldValue.of(config.getTableName()))))
+            .must(m -> m.multiMatch(mm -> mm.query(term).fields(fields).type(TextQueryType.CrossFields)
+               .operator(Operator.And).lenient(true))))));
+      }
+      return (queries);
    }
 
 
@@ -965,7 +1011,7 @@ public class QuickSearchOpenSearchClient implements Closeable
       List<Query> queries = new ArrayList<>();
       for(QuickSearchableTableConfig tableConfig : tableConfigs == null ? List.<QuickSearchableTableConfig>of() : tableConfigs)
       {
-         if(!allowedTables.contains(tableConfig.getTableName()) || tableConfig.isAllPlainFields())
+         if(QuickSearchFieldRules.hasProtectedPrimaryKey(tableConfig.getTableName()) || !allowedTables.contains(tableConfig.getTableName()) || tableConfig.isAllPlainFields())
          {
             continue;
          }
@@ -973,7 +1019,8 @@ public class QuickSearchOpenSearchClient implements Closeable
          Query inTable = Query.of(q -> q.term(t -> t.field("sourceTable").value(FieldValue.of(tableConfig.getTableName()))));
          for(String field : tableConfig.getSearchableFields() == null ? List.<String>of() : tableConfig.getSearchableFields())
          {
-            if(tableConfig.isIncludedInSnippet(field))
+            if(tableConfig.isIncludedInSnippet(field)
+               || (QuickSearchFieldRules.lookupTable(tableConfig.getTableName()) != null && !QuickSearchFieldRules.isIndexable(QuickSearchFieldRules.lookupTable(tableConfig.getTableName()), field)))
             {
                continue;
             }
@@ -1019,7 +1066,7 @@ public class QuickSearchOpenSearchClient implements Closeable
 
       for(QuickSearchableTableConfig tableConfig : tableConfigs)
       {
-         if(!allowedTables.contains(tableConfig.getTableName()))
+         if(QuickSearchFieldRules.hasProtectedPrimaryKey(tableConfig.getTableName()) || !allowedTables.contains(tableConfig.getTableName()))
          {
             continue;
          }
@@ -1028,6 +1075,10 @@ public class QuickSearchOpenSearchClient implements Closeable
          List<String>         fields  = tableConfig.getSearchableFields() == null ? List.of() : tableConfig.getSearchableFields();
          for(String field : fields)
          {
+            if(QuickSearchFieldRules.lookupTable(tableConfig.getTableName()) != null && !QuickSearchFieldRules.isIndexable(QuickSearchFieldRules.lookupTable(tableConfig.getTableName()), field))
+            {
+               continue;
+            }
             float                    boost    = (weights == null || weights.get(field) == null) ? 1f : weights.get(field).floatValue();
             QuickSearchFieldAnalyzer analyzer = tableConfig.getAnalyzer(field);
             if(analyzer == QuickSearchFieldAnalyzer.EXACT)

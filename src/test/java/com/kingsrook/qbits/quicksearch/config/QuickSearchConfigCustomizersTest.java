@@ -19,8 +19,13 @@ package com.kingsrook.qbits.quicksearch.config;
 
 import java.util.List;
 import java.util.Map;
+import com.kingsrook.qqq.backend.core.actions.ai.AiFieldMetaData;
+import com.kingsrook.qqq.backend.core.actions.ai.AiTableMetaData;
+import com.kingsrook.qqq.backend.core.actions.ai.DataClassification;
 import com.kingsrook.qqq.backend.core.actions.tables.UpdateAction;
 import com.kingsrook.qqq.backend.core.exceptions.QException;
+import com.kingsrook.qqq.backend.core.logging.QCollectingLogger;
+import com.kingsrook.qqq.backend.core.logging.QLogger;
 import com.kingsrook.qqq.backend.core.model.actions.tables.update.UpdateInput;
 import com.kingsrook.qqq.backend.core.model.data.QRecord;
 import com.kingsrook.qqq.backend.core.model.metadata.fields.QFieldMetaData;
@@ -28,6 +33,8 @@ import com.kingsrook.qqq.backend.core.model.metadata.fields.QFieldType;
 import com.kingsrook.qqq.backend.core.context.QContext;
 import com.kingsrook.qqq.backend.core.model.actions.values.SearchPossibleValueSourceInput;
 import com.kingsrook.qqq.backend.core.model.metadata.possiblevalues.QPossibleValue;
+import com.kingsrook.qqq.backend.core.model.metadata.security.FieldSecurityLock;
+import com.kingsrook.qqq.backend.core.model.metadata.tables.QTableMetaData;
 import com.kingsrook.qbits.quicksearch.model.QuickSearchFailedEvent;
 import com.kingsrook.qbits.quicksearch.model.QuickSearchFieldAnalyzer;
 import com.kingsrook.qbits.quicksearch.model.QuickSearchFieldRole;
@@ -46,6 +53,106 @@ import static org.assertj.core.api.Assertions.assertThat;
  *******************************************************************************/
 class QuickSearchConfigCustomizersTest extends BaseDataDrivenTest
 {
+
+   /*******************************************************************************
+    ** Classification falls back to the table; PUBLIC and unclassified fields
+    ** remain searchable. Password, hidden, sensitive and locked fields do not.
+    *******************************************************************************/
+   @Test
+   void testClassifiedAndSecuredFieldRules()
+   {
+      QTableMetaData table = QContext.getQInstance().getTable(TEST_ENTITY_TABLE);
+      assertThat(QuickSearchFieldRules.isIndexable(table, "name")).isTrue();
+      assertThat(QuickSearchFieldRules.isProtected(table, "name")).isFalse();
+      for(DataClassification classification : DataClassification.values())
+      {
+         table.getField("name").withSupplementalMetaData(new AiFieldMetaData().withClassification(classification));
+         assertThat(QuickSearchFieldRules.isIndexable(table, "name")).as(classification.name())
+            .isEqualTo(classification != DataClassification.PII && classification != DataClassification.PHI);
+         assertThat(QuickSearchFieldRules.isProtected(table, "name")).as(classification.name())
+            .isEqualTo(classification == DataClassification.PII || classification == DataClassification.PHI);
+      }
+      table.withSupplementalMetaData(new AiTableMetaData().withClassification(DataClassification.PHI));
+      assertThat(QuickSearchFieldRules.whyNotIndexable(table, "description")).contains("classified PHI");
+      assertThat(QuickSearchFieldRules.isProtected(table, "description")).isTrue();
+      table.getField("name").withSupplementalMetaData(new AiFieldMetaData().withClassification(DataClassification.PUBLIC));
+      assertThat(QuickSearchFieldRules.isIndexable(table, "name")).isTrue();
+      table.getField("name").setFieldSecurityLock(new FieldSecurityLock());
+      assertThat(QuickSearchFieldRules.isProtected(table, "name")).isTrue();
+      assertThat(QuickSearchFieldRules.whyNotIndexable(table, "name")).contains("security lock");
+      table.getField("name").setFieldSecurityLock(null);
+      table.getField("name").setType(QFieldType.PASSWORD);
+      assertThat(QuickSearchFieldRules.isProtected(table, "name")).isTrue();
+      assertThat(QuickSearchFieldRules.whyNotIndexable(table, "name")).contains("sensitive");
+      table.getField("name").setType(QFieldType.STRING);
+      table.getField("name").setIsHidden(true);
+      assertThat(QuickSearchFieldRules.whyNotIndexable(table, "name")).contains("hidden");
+      assertThat(QuickSearchFieldRules.isProtected(table, "name")).isFalse();
+      for(QFieldType type : List.of(QFieldType.BOOLEAN, QFieldType.BLOB))
+      {
+         table.getField("name").setType(type);
+         assertThat(QuickSearchFieldRules.isProtected(table, "name")).isFalse();
+      }
+      table.getField("name").setType(null);
+      assertThat(QuickSearchFieldRules.isProtected(table, "name")).isFalse();
+      table.getField("name").setIsSensitive(true);
+      assertThat(QuickSearchFieldRules.isProtected(table, "name")).isTrue();
+      assertThat(QuickSearchFieldRules.isProtected(null, "name")).isFalse();
+      assertThat(QuickSearchFieldRules.isProtected(table, null)).isFalse();
+      assertThat(QuickSearchFieldRules.isProtected(table, "missing")).isFalse();
+   }
+
+
+
+   /*******************************************************************************
+    ** Repeated config loads and document writes warn only once per table.
+    *******************************************************************************/
+   @Test
+   void testExcludedFieldsWarnOncePerTable()
+   {
+      QTableMetaData table = QContext.getQInstance().getTable(TEST_ENTITY_TABLE);
+      table.getField("description").withSupplementalMetaData(new AiFieldMetaData().withClassification(DataClassification.PHI));
+      QCollectingLogger logger = QLogger.activateCollectingLoggerForClass(QuickSearchFieldRules.class);
+      try
+      {
+         for(int i = 0; i < 3; i++)
+         {
+            assertThat(QuickSearchFieldRules.indexableFields(table, List.of("name", "description"))).containsExactly("name");
+         }
+      }
+      finally
+      {
+         QLogger.deactivateCollectingLoggerForClass(QuickSearchFieldRules.class);
+      }
+      assertThat(logger.getCollectedMessages()).singleElement()
+         .satisfies(message -> assertThat(message.getMessage()).contains("dropped fields", TEST_ENTITY_TABLE, "PII/PHI"));
+   }
+
+
+
+   /*******************************************************************************
+    ** Config writes refuse classified fields with a useful message; the same
+    ** fields are absent from the picker and default selection.
+    *******************************************************************************/
+   @Test
+   void testClassifiedFieldConfigIsRefused() throws QException
+   {
+      runtime.getConfigStore().tryPrime();
+      Integer indexId = indexRow(TEST_ENTITY_TABLE).getValueInteger("id");
+      QTableMetaData table = QContext.getQInstance().getTable(TEST_ENTITY_TABLE);
+      for(DataClassification classification : List.of(DataClassification.PII, DataClassification.PHI))
+      {
+         String fieldName = classification.name().toLowerCase(java.util.Locale.ROOT);
+         table.withField(new QFieldMetaData(fieldName, QFieldType.STRING)
+            .withSupplementalMetaData(new AiFieldMetaData().withClassification(classification)));
+         assertThat(insertField(indexId, fieldName, 1, null).getErrors()).singleElement()
+            .satisfies(e -> assertThat(e.getMessage()).contains("classified " + classification, "cannot be indexed"));
+         assertThat(QuickSearchFieldRules.indexableFields(table)).extracting(QFieldMetaData::getName).doesNotContain(fieldName);
+         assertThat(QuickSearchFieldRules.defaultFields(table)).extracting(QuickSearchFieldRules.DefaultField::fieldName).doesNotContain(fieldName);
+      }
+   }
+
+
 
    /*******************************************************************************
     ** Field rows: a field must exist, be indexable, not sensitive or hidden,

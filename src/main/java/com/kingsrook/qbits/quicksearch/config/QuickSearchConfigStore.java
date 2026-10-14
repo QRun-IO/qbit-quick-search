@@ -377,7 +377,7 @@ public class QuickSearchConfigStore
          String problem   = QuickSearchFieldRules.whyNotIndexable(table, fieldName);
          if(problem != null)
          {
-            LOG.warn("Quick Search field row skipped: " + problem, logPair("tableName", tableName), logPair("fieldName", fieldName));
+            QuickSearchFieldRules.warnExcludedFields(table);
             continue;
          }
          if(fields.contains(fieldName))
