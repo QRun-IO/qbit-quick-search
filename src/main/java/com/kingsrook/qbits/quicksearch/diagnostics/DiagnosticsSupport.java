@@ -18,13 +18,20 @@ package com.kingsrook.qbits.quicksearch.diagnostics;
 
 
 import java.util.Collection;
+import com.kingsrook.qbits.quicksearch.QuickSearchQBitConfig;
+import com.kingsrook.qbits.quicksearch.QuickSearchRuntime;
+import com.kingsrook.qbits.quicksearch.model.QuickSearchDiagnosticEvent;
+import com.kingsrook.qbits.quicksearch.model.QuickSearchValidationRun;
+import com.kingsrook.qqq.backend.core.actions.tables.QueryAction;
 import com.kingsrook.qqq.backend.core.context.QContext;
 import com.kingsrook.qqq.backend.core.exceptions.QException;
 import com.kingsrook.qqq.backend.core.exceptions.QUserFacingException;
 import com.kingsrook.qqq.backend.core.logging.QLogger;
+import com.kingsrook.qqq.backend.core.model.actions.tables.query.QFilterOrderBy;
+import com.kingsrook.qqq.backend.core.model.actions.tables.query.QQueryFilter;
+import com.kingsrook.qqq.backend.core.model.actions.tables.query.QueryInput;
+import com.kingsrook.qqq.backend.core.model.data.QRecord;
 import com.kingsrook.qqq.backend.core.model.session.QSession;
-import com.kingsrook.qbits.quicksearch.QuickSearchRuntime;
-import com.kingsrook.qbits.quicksearch.model.QuickSearchDiagnosticEvent;
 import static com.kingsrook.qqq.backend.core.logging.LogUtils.logPair;
 
 
@@ -42,6 +49,26 @@ public final class DiagnosticsSupport
    public static final String TOOL_REINDEX_RECORDS = "REINDEX_RECORDS";
    public static final String TOOL_VALIDATE_INDEX  = "VALIDATE_INDEX";
    public static final String TOOL_ANALYZE_TEXT    = "ANALYZE_TEXT";
+
+
+
+   /*******************************************************************************
+    ** Latest saved validation, shared by the home widget and host status API.
+    ** This does not run validation or scan source tables.
+    *******************************************************************************/
+   public static QRecord latestValidation(QuickSearchQBitConfig config) throws QException
+   {
+      String tableName = config.applyTablePrefix(QuickSearchValidationRun.TABLE_NAME);
+      if(QContext.getQInstance().getTable(tableName) == null)
+      {
+         return (null);
+      }
+      var input = new QueryInput(tableName)
+         .withFilter(new QQueryFilter()
+            .withOrderBy(new QFilterOrderBy("id", false)).withLimit(1));
+      var rows = new QueryAction().execute(input).getRecords();
+      return (rows == null || rows.isEmpty() ? null : rows.get(0));
+   }
 
 
 

@@ -288,3 +288,59 @@ See also the [QQQ adoption checklist](https://github.com/QRun-IO/qqq/blob/develo
 ## License
 
 Apache License, Version 2.0. See [LICENSE](LICENSE).
+
+## Status API for hosts
+
+Requires QQQ **4.1.0-RC.6**. Hosts should use the supported API rather than reach into
+`QuickSearchRuntime`, `QuickSearchOpenSearchClient`, diagnostic renderers, or qbit tables:
+
+```java
+import com.kingsrook.qbits.quicksearch.api.QuickSearchStatus;
+import com.kingsrook.qbits.quicksearch.api.QuickSearchStatusService;
+
+// Runs in the host request's QContext, with the caller's QSession.
+QuickSearchStatus status = QuickSearchStatusService.get();
+String homeHref = status.homeHref();
+```
+
+UI clients use **`GET /qqq/v1/qbit/quick-search/status`**, operationId
+`getQuickSearchStatus`, extension `quick-search` version `1.0.0`. The endpoint returns
+that same immutable value as JSON; it requires the Quick Search app's configured
+`adminPermissionRules` (default `quick_search_admin.hasAccess`). Permission is checked
+before every read, including cache hits. No additional source-table permissions are
+required: like index validation, this is an administrator's aggregate view of the index.
+The committed contract is [quick-search.yaml](src/main/resources/openapi/qqq-v1/quick-search.yaml).
+
+The default core namespace is intentional: RC.6 permits `/qbit/quick-search` but rejects
+`/quick-search`, which is not an established legacy prefix. There were no existing
+Quick Search UI API routes to preserve. Core source is unchanged.
+
+- `state`: `OK`, `DEGRADED` (including paused indexing, backlog, incomplete diagnostics
+  or a refresh timeout), `DOWN` (unavailable health or red health), or `DISABLED`
+  (qbit absent or every persisted index disabled). Pausing indexing does not disable search.
+- `clusterReachable`, `clusterHealth`, `nodes`, `activeShards`, `unassignedShards` come
+  from the existing diagnostics health operation. Null means unknown/not probed.
+- `indexes` contains up to 100 persisted index rows. `documentCount` and `sourceCount`
+  come from the latest saved `IndexValidator` report, with `countsCheckedAt`. Without
+  matching validation, only the last indexing run's document count is available and
+  its observation time is unknown. These are **saved counts, not live counts**. A
+  missing source count must not be displayed as zero or “in sync.”
+- `pending` includes `PENDING` and `AWAITING_REINDEX` failed events; `exhausted` counts
+  failed events that gave up. At most 1000 backlog rows are read; `backlogTruncated`
+  makes both counts lower bounds. `tablesTruncated` indicates incomplete index rows.
+  These counters do not measure an external publisher's queue.
+- `lastSuccessfulSync` is the newest successful indexing watermark among the included
+  tables (basepull is start-anchored), not proof that all tables are current.
+  `lastError` is the newest available indexing/runtime search error or snapshot failure.
+- `checkedAt` is snapshot completion time. A per-runtime five-second cache bounds
+  polling cost; each refresh uses `DiagnosticsRateLimiter`'s per-user `STATUS` key.
+  Rate-limit refusal uses the existing diagnostics error (HTTP 400). A refresh waits
+  at most two seconds and retains at most one in-flight worker, even if a backend is
+  stuck. Runtime shutdown stops the worker. No source counts, record samples, full
+  validation, or per-table OpenSearch calls run on this polling path.
+
+Link to `status.homeHref()` instead of copying the Quick Search home. It includes the
+configured metadata prefix. `QuickSearchApi.APP_NAME` (`quickSearchAdmin`) and
+`QuickSearchApi.HOME_HREF` (`/app/quickSearchAdmin`) are available for default-name
+navigation. Keep detailed runs, failed events, validation and operator tools in the
+qbit's own home. [kof22 migration mapping](docs/STATUS-API-HOST-MIGRATION.md).

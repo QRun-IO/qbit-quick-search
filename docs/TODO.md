@@ -1,5 +1,14 @@
 # TODO
 
+## Architecture status API (#50 / F10)
+
+- [x] Supported Java status API, bounded cache/rate limiting, administrator authorization, home navigation, spec endpoint and committed fragment.
+- [x] Contract and strict HTTP tests; host migration mapping for kof22#164.
+- [ ] kof22#164: replace internal probes/duplicate home using `docs/STATUS-API-HOST-MIGRATION.md`.
+- [ ] Next UI: vendor the additive Quick Search status fragment when adopting RC.6.
+- [ ] Run Docker integration tests in CI; local Docker is unavailable.
+- [ ] Resolve the pre-existing repository Checkstyle baseline (438 remaining main-source violations, down from 471 at HEAD); status API adds none.
+
 ## Before tagging 1.0.0
 
 - [ ] qqq-all and Voyage adopt `1.0.0-RC.2` (items below) and report back.
