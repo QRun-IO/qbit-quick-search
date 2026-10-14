@@ -169,6 +169,7 @@ public class ReconcileIndexStep extends AbstractIndexingStep
             if(ReconcileIndexStep.RUN_TYPE.equals(runType) == false)
             {
                values.put("lastFullReindexTime", Instant.now());
+               values.put("realTimeErrorCount", 0);
             }
             updateIndexRow(indexId, values);
          }

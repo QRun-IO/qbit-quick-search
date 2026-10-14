@@ -6,6 +6,9 @@ All notable changes to this project are documented here. The format follows Keep
 
 Requires QQQ 4.1.0-RC.6 or later (the spec-managed UI API extension contract).
 
+### Fixed
+- Real-time indexing failures now increase the table's error count by the number of failed events. Successful basepulls and full reindexes reset the count. Counter update failures are logged without failing the source write.
+
 ### Added
 - Supported host status API (`api.QuickSearchStatusService.get()`), immutable status values, and `QuickSearchApi` home navigation constants (issue #50/F10). Permission-checked, bounded diagnostics refreshes share a short per-runtime cache and reuse saved validation counts. New spec-managed `GET /qqq/v1/qbit/quick-search/status` (`getQuickSearchStatus`) with committed OpenAPI fragment and strict HTTP/contract tests. RC.6 requires the default `/qbit/quick-search` prefix; `/quick-search` is not permitted by core. Existing routes and wire shapes are unchanged.
 - Record developer panel: `QuickSearchDeveloperPanelProvider` (id `quickSearch`) adds a "Quick Search" panel to the developer view of every record of an indexed table (`/app/{table}/{id}/dev` in the Next UI), for users who may read Quick Search Index. It shows the table's index row (enabled, status, record count, last basepull and full reindex, searchable fields), the latest index run, the record's indexed document compared field by field with the database (Inspect Search Document's comparison; needs `debugPermissionRules`), the record's failed index events, the Inspect Search Document and Reindex in Search actions the user may run, and links to the admin app and the index row. An unreachable OpenSearch shows a warning in the panel. Registered by `QuickSearchDeveloperPanelsMetaDataProducer`.

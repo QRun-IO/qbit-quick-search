@@ -239,6 +239,7 @@ public class FullReindexStep extends AbstractIndexingStep
 
             Map<String, Serializable> values = new HashMap<>();
             values.put("lastFullReindexTime", Instant.now());
+            values.put("realTimeErrorCount", 0);
             values.put("lastBasepullTime", startTimes.get(tableName));
             values.put("recordCount", tableCounts.processed());
             Integer documentCount = ReconcileIndexStep.safeCount(client, tableName);
