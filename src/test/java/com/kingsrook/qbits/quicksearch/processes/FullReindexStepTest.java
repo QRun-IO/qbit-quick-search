@@ -162,6 +162,7 @@ class FullReindexStepTest extends BaseQuickSearchTest
          .withValue("enabled", enabled)
          .withValue("basepullIntervalMinutes", 5)
          .withValue("documentCount", documentCount)
+         .withValue("realTimeErrorCount", 7)
          .withValue("status", "ACTIVE")));
       new InsertAction().execute(insertInput);
    }
@@ -268,6 +269,7 @@ class FullReindexStepTest extends BaseQuickSearchTest
    @Test
    void testAllTables_updatesIndexRowAfterSwap() throws QException
    {
+      insertIndexRow(true);
       insertTestEntities(2);
       when(mockClient.countDocumentsForTable(TEST_ENTITY_TABLE)).thenReturn(2L);
 
@@ -276,6 +278,7 @@ class FullReindexStepTest extends BaseQuickSearchTest
       QRecord row = queryIndexRow();
       assertThat(row).isNotNull();
       assertThat(row.getValue("lastFullReindexTime")).isNotNull();
+      assertThat(row.getValueInteger("realTimeErrorCount")).isZero();
       assertThat(row.getValue("lastBasepullTime")).isNotNull();
       assertThat(row.getValueInteger("recordCount")).isEqualTo(2);
       assertThat(row.getValueInteger("documentCount")).isEqualTo(2);
@@ -449,6 +452,7 @@ class FullReindexStepTest extends BaseQuickSearchTest
    @Test
    void testSingleTable_reconcilesInPlace_neverWipes() throws QException
    {
+      insertIndexRow(true);
       insertTestEntities(2);
 
       RunBackendStepOutput output = new RunBackendStepOutput();
@@ -471,6 +475,7 @@ class FullReindexStepTest extends BaseQuickSearchTest
       assertThat(runs.get(0).getValueInteger("recordsProcessed")).isEqualTo(2);
 
       assertThat(queryIndexRow().getValue("lastFullReindexTime")).isNotNull();
+      assertThat(queryIndexRow().getValueInteger("realTimeErrorCount")).isZero();
       assertThat(output.getValueInteger("recordsIndexed")).isEqualTo(2);
       assertThat(output.getValueBoolean("aliasSwapped")).isFalse();
    }

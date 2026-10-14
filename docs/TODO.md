@@ -1,5 +1,9 @@
 # TODO
 
+## Real-time error counter
+
+- [x] Count failed real-time events after commit, serialize concurrent listeners within a JVM, tolerate counter-write failures, and reset after successful basepull/full reindex; add regression tests and field/documentation help.
+
 ## Architecture status API (#50 / F10)
 
 - [x] Supported Java status API, bounded cache/rate limiting, administrator authorization, home navigation, spec endpoint and committed fragment.

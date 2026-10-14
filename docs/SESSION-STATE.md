@@ -1,6 +1,15 @@
 # Session State
 
-Updated: 2026-10-13
+Updated: 2026-10-14
+
+## Real-time error counter fix (2026-10-14)
+
+- Failed-event recording now increments the table's `realTimeErrorCount` after commit, using QQQ reads and system writes. Null counts start at zero; update failures are logged and cannot fail the source write or prevent replay.
+- QQQ has no arithmetic update API. The read-modify-write fallback is serialized across listeners in this JVM; separate application nodes can still race.
+- Successful basepull and full-reindex status updates reset the count, including the single-table reindex path. Investigation found the previous zero assignments only initialized new rows. Field help, README and Unreleased changelog now describe the reset window.
+- Regression coverage includes event counts, concurrent listeners, counter-update failure, after-commit timing, basepull reset and both full-reindex reset paths.
+- Final gate: `./mvnw.cmd -o -B verify` passed against released QQQ 4.1.0-RC.6: 476 unit tests, zero failures/errors; 41 integration tests skipped because Docker is unavailable; architecture guardrails and JaCoCo coverage gates passed. No dependency changes or offline artifact gaps. Checkstyle, PMD and SpotBugs are not configured in this Maven build.
+- No commit, push or branch creation. Second-brain save is blocked by the vault being outside writable roots; this section retains the durable handoff for later vault synchronization.
 
 ## Status API worktree (2026-10-13, issue #50 / F10)
 
