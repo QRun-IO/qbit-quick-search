@@ -35,6 +35,28 @@ public class QuickSearchInput extends AbstractActionInput
    private Integer offset;
    private List<String> tableNames;
    private Integer limitPerTable;
+   private Boolean singlePass = false;
+
+
+
+   /*******************************************************************************
+    ** Whether per-table searches stop after one bounded candidate batch.
+    *******************************************************************************/
+   public Boolean getSinglePass()
+   {
+      return (singlePass);
+   }
+
+
+
+   /*******************************************************************************
+    ** Opt in to bounded typeahead latency, accepting partially filled pages.
+    *******************************************************************************/
+   public QuickSearchInput withSinglePass(Boolean singlePass)
+   {
+      this.singlePass = singlePass;
+      return (this);
+   }
 
 
    /*******************************************************************************
