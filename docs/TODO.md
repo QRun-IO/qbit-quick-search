@@ -56,3 +56,12 @@
 - [x] Status assessment, deep-dive audit (25 blockers), PRD (2026-10-04).
 - [x] 4.1.0-RC.1 compatibility verified (2026-10-04).
 - [x] All 25 audit blockers implemented and tested on the release branch (2026-10-04).
+
+## Secured-data section 15 (2026-10-14)
+
+- [x] Review fix: separate protection from indexability; preserve safe labels, ordinary results and unprotected hidden keys/timestamps, with regression tests.
+
+- [x] Exclude PII/PHI, hidden, sensitive, password and field-locked values from indexing and results on RC.6.
+- [x] Add canary coverage for real-time indexing, basepull and stale results; refuse classified config fields.
+- [ ] On the QQQ RC.7 upgrade, honour `ClassifiedValues.isClassified(table, field)` (qqq#1182) and `FieldAccessHelper.getLockTier` (qqq#1172).
+- [ ] Deployment: rebuild existing indexes and apply host retention policy to old physical indexes/backups containing previously indexed values.

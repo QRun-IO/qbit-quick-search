@@ -23,9 +23,14 @@ import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Set;
+import java.util.WeakHashMap;
 import java.util.regex.Pattern;
+import com.kingsrook.qqq.backend.core.actions.ai.AiDataClassifications;
+import com.kingsrook.qqq.backend.core.actions.ai.DataClassification;
 import com.kingsrook.qqq.backend.core.actions.permissions.PermissionsHelper;
 import com.kingsrook.qqq.backend.core.actions.permissions.TablePermissionSubType;
+import com.kingsrook.qqq.backend.core.context.QContext;
+import com.kingsrook.qqq.backend.core.logging.QLogger;
 import com.kingsrook.qqq.backend.core.model.actions.tables.query.QueryInput;
 import com.kingsrook.qqq.backend.core.model.metadata.QBackendMetaData;
 import com.kingsrook.qqq.backend.core.model.metadata.QInstance;
@@ -48,11 +53,14 @@ import com.kingsrook.qbits.quicksearch.model.QuickSearchFieldRole;
  ** on backend variants, not produced by a QBit (qbit-internal), not a QQQ
  ** system table (audits, saved views and reports, scheduled jobs, scripts),
  ** not named like a secret store, and has at least one indexable field. A
- ** field is indexable when it is not hidden, not isSensitive, not a password
- ** and not a blob or boolean.
+ ** field is indexable when it is not PII/PHI-classified, locked, hidden,
+ ** sensitive, masked, a blob or a boolean.
  *******************************************************************************/
 public final class QuickSearchFieldRules
 {
+   private static final QLogger LOG = QLogger.getLogger(QuickSearchFieldRules.class);
+   private static final WeakHashMap<QTableMetaData, Boolean> WARNED_TABLES = new WeakHashMap<>();
+
    public static final int MAX_DEFAULT_FIELDS = 20;
    public static final int TITLE_WEIGHT       = 3;
 
@@ -85,6 +93,9 @@ public final class QuickSearchFieldRules
 
    /*******************************************************************************
     ** Why a field cannot be indexed, or null when it can.
+    ** When the qbit moves to QQQ 4.1.0-RC.7, also honour core
+    ** ClassifiedValues.isClassified(table, field) (the host's AuditValueProtector
+    ** classification, qqq#1182) and FieldAccessHelper.getLockTier (qqq#1172).
     *******************************************************************************/
    public static String whyNotIndexable(QTableMetaData table, String fieldName)
    {
@@ -100,6 +111,15 @@ public final class QuickSearchFieldRules
       if(Boolean.TRUE.equals(field.getIsHidden()))
       {
          return ("field [" + fieldName + "] is hidden");
+      }
+      DataClassification classification = AiDataClassifications.ofField(table, fieldName);
+      if(classification == DataClassification.PII || classification == DataClassification.PHI)
+      {
+         return ("field [" + fieldName + "] is classified " + classification + " and cannot be indexed");
+      }
+      if(field.getFieldSecurityLock() != null)
+      {
+         return ("field [" + fieldName + "] has a field security lock and cannot be indexed");
       }
       if(field.getIsSensitive() || (field.getType() != null && field.getType().needsMasked()))
       {
@@ -120,6 +140,96 @@ public final class QuickSearchFieldRules
    public static boolean isIndexable(QTableMetaData table, String fieldName)
    {
       return (whyNotIndexable(table, fieldName) == null);
+   }
+
+
+
+   /*******************************************************************************
+    ** Whether a field contains protected values, independently of searchability.
+    ** Classification falls back to the table. When the qbit moves to QQQ
+    ** 4.1.0-RC.7, also honour ClassifiedValues.isClassified(table, field)
+    ** (qqq#1182) and FieldAccessHelper.getLockTier (qqq#1172).
+    *******************************************************************************/
+   public static boolean isProtected(QTableMetaData table, String fieldName)
+   {
+      QFieldMetaData field = table == null || fieldName == null ? null : table.getFields().get(fieldName);
+      if(field == null)
+      {
+         return (false);
+      }
+      DataClassification classification = AiDataClassifications.ofField(table, fieldName);
+      return (classification == DataClassification.PII || classification == DataClassification.PHI
+         || field.getFieldSecurityLock() != null || field.getIsSensitive()
+         || (field.getType() != null && field.getType().needsMasked()));
+   }
+
+
+
+   /*******************************************************************************
+    ** Warn once per table metadata lifetime; never include record values.
+    *******************************************************************************/
+   public static synchronized void warnExcludedFields(QTableMetaData table)
+   {
+      if(table != null && WARNED_TABLES.put(table, Boolean.TRUE) == null)
+      {
+         LOG.warn("Quick Search dropped fields that cannot be indexed (classified PII/PHI, secured, hidden, sensitive or unsupported fields) from table [" + table.getName() + "]");
+      }
+   }
+
+
+
+   /*******************************************************************************
+    ** Filter explicit field lists as well as cached configurations at use time.
+    *******************************************************************************/
+   public static List<String> indexableFields(QTableMetaData table, List<String> fields)
+   {
+      List<String> result = new ArrayList<>();
+      for(String field : CollectionUtils.nonNullList(fields))
+      {
+         if(isIndexable(table, field))
+         {
+            result.add(field);
+         }
+         else
+         {
+            warnExcludedFields(table);
+         }
+      }
+      return (result);
+   }
+
+
+
+   /*******************************************************************************
+    ** Resolve a table's metadata for backend query and result filtering.
+    *******************************************************************************/
+   public static QTableMetaData lookupTable(String tableName)
+   {
+      QInstance instance = QContext.getQInstance();
+      return (instance == null || tableName == null ? null : instance.getTable(tableName));
+   }
+
+
+
+   /*******************************************************************************
+    ** Combined text and labels from an older index cannot be attributed to
+    ** individual fields. Use only allowed field values for these tables.
+    *******************************************************************************/
+   public static boolean requiresFieldFiltering(String tableName)
+   {
+      QTableMetaData table = lookupTable(tableName);
+      return (table != null && table.getFields().keySet().stream().anyMatch(f -> isProtected(table, f)));
+   }
+
+
+
+   /*******************************************************************************
+    ** A protected primary key cannot be sent as an index id, even for deletes.
+    *******************************************************************************/
+   public static boolean hasProtectedPrimaryKey(String tableName)
+   {
+      QTableMetaData table = lookupTable(tableName);
+      return (table != null && isProtected(table, table.getPrimaryKeyField()));
    }
 
 

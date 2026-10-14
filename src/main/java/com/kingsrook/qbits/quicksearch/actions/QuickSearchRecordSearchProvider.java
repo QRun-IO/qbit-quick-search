@@ -32,6 +32,7 @@ import com.kingsrook.qqq.backend.core.model.metadata.tables.QTableMetaData;
 import com.kingsrook.qqq.backend.core.utils.CollectionUtils;
 import com.kingsrook.qbits.quicksearch.QuickSearchQBitConfig;
 import com.kingsrook.qbits.quicksearch.QuickSearchRuntime;
+import com.kingsrook.qbits.quicksearch.config.QuickSearchFieldRules;
 import com.kingsrook.qbits.quicksearch.diagnostics.DiagnosticsSupport;
 import com.kingsrook.qbits.quicksearch.model.QuickSearchDiagnosticEvent;
 import com.kingsrook.qbits.quicksearch.processes.IndexingUtils;
@@ -85,7 +86,7 @@ public class QuickSearchRecordSearchProvider implements RecordSearchProviderInte
          return (false);
       }
 
-      if(runtime.getTableConfig(table.getName()) == null)
+      if(runtime.getTableConfig(table.getName()) == null || QuickSearchFieldRules.hasProtectedPrimaryKey(table.getName()))
       {
          return (false);
       }
@@ -120,7 +121,8 @@ public class QuickSearchRecordSearchProvider implements RecordSearchProviderInte
       List<String> tableNames = new ArrayList<>();
       for(String tableName : new LinkedHashSet<>(CollectionUtils.nonNullList(input.getTableNames())))
       {
-         if(runtime.getTableConfig(tableName) != null)
+         if(runtime.getTableConfig(tableName) != null
+            && !QuickSearchFieldRules.hasProtectedPrimaryKey(tableName))
          {
             tableNames.add(tableName);
          }

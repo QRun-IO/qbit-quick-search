@@ -33,6 +33,8 @@ import com.fasterxml.jackson.databind.node.JsonNodeFactory;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.kingsrook.qqq.backend.core.exceptions.QException;
 import com.kingsrook.qbits.quicksearch.QuickSearchableTableConfig;
+import com.kingsrook.qbits.quicksearch.config.QuickSearchFieldRules;
+import com.kingsrook.qbits.quicksearch.processes.IndexingUtils;
 import jakarta.json.stream.JsonGenerator;
 import org.opensearch.client.json.JsonpMapper;
 import org.opensearch.client.json.JsonpSerializable;
@@ -42,6 +44,7 @@ import org.opensearch.client.opensearch._types.query_dsl.Query;
 import org.opensearch.client.opensearch.core.ExplainResponse;
 import org.opensearch.client.opensearch.core.SearchRequest;
 import org.opensearch.client.opensearch.core.SearchResponse;
+import org.opensearch.client.opensearch.core.search.Highlight;
 import org.opensearch.client.opensearch.core.search.Hit;
 import org.opensearch.client.opensearch.core.search.HighlightField;
 import org.opensearch.client.opensearch.core.search.MatchedQueries;
@@ -169,13 +172,14 @@ public class QuickSearchDiagnosticsOperations
    {
       int           boundedSize = Math.max(1, Math.min(size, MAX_PROBE_SIZE));
       Query         query       = quickSearchClient.buildSearchQuery(term, List.of(tableName), tableConfigs, true);
+      Highlight highlight = QuickSearchFieldRules.requiresFieldFiltering(tableName) ? null : Highlight.of(h -> h
+         .requireFieldMatch(true)
+         .fields("searchableText", HighlightField.of(hf -> hf))
+         .fields("fieldValues.*", HighlightField.of(hf -> hf)));
       SearchRequest request     = SearchRequest.of(r -> r
          .index(indexName)
          .query(query)
-         .highlight(h -> h
-            .requireFieldMatch(true)
-            .fields("searchableText", HighlightField.of(hf -> hf))
-            .fields("fieldValues.*", HighlightField.of(hf -> hf)))
+         .highlight(highlight)
          .trackTotalHits(t -> t.count(QuickSearchOpenSearchClient.MAX_RESULT_WINDOW))
          .size(boundedSize));
 
@@ -189,17 +193,26 @@ public class QuickSearchDiagnosticsOperations
          for(Hit<OpenSearchDocument> hit : response.hits().hits())
          {
             OpenSearchDocument source = hit.source();
+            boolean filterFields = QuickSearchFieldRules.requiresFieldFiltering(tableName);
+            if(source != null)
+            {
+               source = IndexingUtils.filterResult(source, tableConfigs.stream().filter(c -> tableName.equals(c.getTableName())).findFirst().orElse(null));
+            }
+            if(filterFields && source == null)
+            {
+               continue;
+            }
             hits.add(new ProbeHit(
                source == null ? idFromDocumentId(hit.id()) : source.getRecordId(),
                source == null ? null : source.getRecordLabel(),
                hit.score(),
                matchedClauses(hit.matchedQueries()),
-               hit.highlight() == null ? Map.of() : new LinkedHashMap<>(hit.highlight())));
+               filterFields || hit.highlight() == null ? Map.of() : new LinkedHashMap<>(hit.highlight())));
          }
 
          Long    total      = response.hits().total() == null ? (long) hits.size() : response.hits().total().value();
          Boolean lowerBound = response.hits().total() != null && response.hits().total().relation() == TotalHitsRelation.Gte;
-         return (new SearchProbe(tableName, toJson(request), toJson(response), response.took(), wall, total, lowerBound, hits));
+         return (new SearchProbe(tableName, toJson(request), QuickSearchFieldRules.requiresFieldFiltering(tableName) ? "{}" : toJson(response), response.took(), wall, total, lowerBound, hits));
       }
       catch(OpenSearchException | IOException e)
       {
@@ -308,7 +321,7 @@ public class QuickSearchDiagnosticsOperations
       requireOk(response, "Document read failed");
       JsonNode body = response.body();
       return (new DocumentView(body.path("found").asBoolean(false), body.has("_version") ? body.get("_version").asLong() : null,
-         body.path("_index").asText(null), body.get("_source")));
+         body.path("_index").asText(null), filterDocumentSource(tableName, body.get("_source"))));
    }
 
 
@@ -338,10 +351,43 @@ public class QuickSearchDiagnosticsOperations
       {
          if(doc.path("found").asBoolean(false) && doc.has("_source"))
          {
-            sources.put(idFromDocumentId(doc.path("_id").asText()), doc.get("_source"));
+            sources.put(idFromDocumentId(doc.path("_id").asText()), filterDocumentSource(tableName, doc.get("_source")));
          }
       }
       return (sources);
+   }
+
+
+
+   /*******************************************************************************
+    ** Old documents may retain protected values. Diagnostic reads expose only
+    ** attributable, indexable fields, never the old combined presentation.
+    *******************************************************************************/
+   private static JsonNode filterDocumentSource(String tableName, JsonNode source)
+   {
+      if(source == null || !QuickSearchFieldRules.requiresFieldFiltering(tableName))
+      {
+         return (source);
+      }
+      ObjectNode filtered = JsonNodeFactory.instance.objectNode();
+      filtered.put("sourceTable", tableName);
+      var table = QuickSearchFieldRules.lookupTable(tableName);
+      if(!QuickSearchFieldRules.isProtected(table, table.getPrimaryKeyField()))
+      {
+         filtered.set("recordId", source.get("recordId"));
+      }
+      for(String container : List.of("fieldValues", "fieldValuesWord", "fieldValuesEnglish", "fieldValuesExact"))
+      {
+         ObjectNode values = filtered.putObject(container);
+         source.path(container).fields().forEachRemaining(entry ->
+         {
+            if(QuickSearchFieldRules.isIndexable(table, entry.getKey()))
+            {
+               values.set(entry.getKey(), entry.getValue());
+            }
+         });
+      }
+      return (filtered);
    }
 
 

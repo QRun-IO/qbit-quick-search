@@ -48,3 +48,75 @@ Updated: 2026-10-14
 1. qqq-all and Voyage pin `1.0.0-RC.2` and report back; their feedback decides RC.3 or GA.
 2. Remaining "Before 1.0.0 GA" items in `docs/TODO.md`: stuck `REBUILDING` after a killed or overlapping full reindex (from the PR #20 review), and the `qbit-build-parent` 2.1.0 re-pin.
 3. GA: merge `release/1.0` to `main` and tag `v1.0.0`.
+
+## 2026-10-14 — secured-data section 15
+
+- Implemented a shared RC.6 classification/security policy in `QuickSearchFieldRules`.
+- Applied it to config discovery, config writes/choices, document construction,
+  safe query fields, result presentation and diagnostic reads; protected primary
+  keys cannot be used as index IDs.
+- Added live-listener/basepull/stale-result PHI/PII canaries and config/rule tests.
+- Final gate: `mvnw.cmd -o -B verify` **BUILD SUCCESS**. 479 unit tests passed
+  (7 new tests); 41 Docker integration tests skipped because Docker is unavailable.
+  Architecture guardrails passed. JaCoCo: 73.84% instruction / 91.61% class coverage,
+  above the 70% / 90% gates. Checkstyle, PMD and SpotBugs are not configured in this
+  build. No missing offline artifacts. `git diff --check` passed.
+- Reviewed the diff; changes remain uncommitted. Gate log:
+  `target/secured-data-verify.log`.
+- RC.7 host audit-protector classification and lock-tier APIs remain deferred.
+
+### Changed files
+
+- Documentation: `README.md`, `CHANGELOG.md`, `docs/SESSION-STATE.md`, `docs/TODO.md`.
+- Configuration: `QuickSearchQBitProducer.java`, `config/QuickSearchFieldRules.java`,
+  `config/QuickSearchConfigPrimer.java`, `config/QuickSearchConfigStore.java`.
+- Indexing: `listeners/QuickSearchRecordChangeListener.java`,
+  `processes/IndexingUtils.java`, `processes/AbstractIndexingStep.java`,
+  `processes/BasepullIndexStep.java`.
+- Search and diagnostics: `actions/QuickSearchAction.java`,
+  `actions/QuickSearchRecordSearchProvider.java`,
+  `opensearch/QuickSearchOpenSearchClient.java`,
+  `opensearch/QuickSearchDiagnosticsOperations.java`.
+- Tests: `config/QuickSearchConfigCustomizersTest.java`,
+  `listeners/QuickSearchRecordChangeListenerTest.java`,
+  `processes/IndexingUtilsTest.java`, `publisher/SynchronousIndexEventPublisherTest.java`,
+  new `opensearch/ClassifiedDataCanaryTest.java`.
+
+Production and test paths above are relative to
+`src/{main,test}/java/com/kingsrook/qbits/quicksearch/` respectively.
+
+### Continuity
+
+Second-brain project/daily writes are unavailable in this session because the
+vault lies outside the writable roots. This local checkpoint holds the durable
+outcome for the reviewer. No commit, push, branch creation, dependency version
+change, or production filesystem IO was introduced.
+
+
+## 2026-10-14 - protection review follow-up
+
+- Added isProtected for PII/PHI (including table defaults), field locks, sensitive
+  values and masked types. Unsupported search types and hidden fields alone are
+  not protected. Searchable/snippet/display field lists still use isIndexable.
+- Labels check their configured/table source fields; unrelated protected fields
+  preserve safe labels. A copied record prevents unsafe preformatted labels from
+  returning through QQQ fallback formatting without changing the input record.
+- Primary-key guards and timestamp versions now use protection rather than
+  search eligibility. Added four regression tests and extended rule/canary tests.
+- Follow-up files: config/QuickSearchFieldRules.java, processes/IndexingUtils.java,
+  listeners/QuickSearchRecordChangeListener.java,
+  opensearch/QuickSearchOpenSearchClient.java,
+  opensearch/QuickSearchDiagnosticsOperations.java; test files
+  config/QuickSearchConfigCustomizersTest.java, processes/IndexingUtilsTest.java,
+  opensearch/ClassifiedDataCanaryTest.java; README.md, CHANGELOG.md,
+  docs/TODO.md and this file. Java paths are relative to the existing main/test
+  quicksearch packages. All earlier uncommitted work is preserved.
+- Second-brain project/daily synchronization remains unavailable because the vault
+  is outside writable roots; this checkpoint is the local handoff. Nothing committed
+  or pushed; no branches or dependency changes.
+- Final gate: `mvnw.cmd -o -B verify` BUILD SUCCESS; 483 unit tests passed
+  (four additional tests); all three PHI/PII canaries passed. All 41 Docker
+  integration tests skipped because Docker is unavailable. Architecture guards
+  and JaCoCo passed (73.88% instruction / 91.61% class coverage).
+  Checkstyle, PMD and SpotBugs are not configured in this build. No offline
+  artifacts missing. Gate log: `target/protection-review-verify.log`.

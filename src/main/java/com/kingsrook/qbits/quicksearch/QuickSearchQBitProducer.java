@@ -29,6 +29,7 @@ import com.kingsrook.qbits.quicksearch.actions.QuickSearchRecordSearchProvider;
 import com.kingsrook.qbits.quicksearch.annotations.QuickSearchField;
 import com.kingsrook.qbits.quicksearch.annotations.QuickSearchable;
 import com.kingsrook.qbits.quicksearch.api.QuickSearchApi;
+import com.kingsrook.qbits.quicksearch.config.QuickSearchFieldRules;
 import com.kingsrook.qbits.quicksearch.listeners.QuickSearchRecordChangeListener;
 import com.kingsrook.qbits.quicksearch.metadata.QuickSearchAdminAppMetaDataProducer;
 import com.kingsrook.qbits.quicksearch.metadata.QuickSearchDiagnosticsProcessMetaDataHelper;
@@ -380,8 +381,8 @@ public class QuickSearchQBitProducer implements QBitMetaDataProducer<QuickSearch
          for(String fieldName : CollectionUtils.nonNullList(tableConfig.getSearchableFields()))
          {
             QFieldMetaData field = table.getFields() == null ? null : table.getFields().get(fieldName);
-            if(field != null && !Boolean.TRUE.equals(field.getIsHidden()) && field.getType() != null
-               && (field.getType().isStringLike() || field.getType().isIntegral()) && !field.getType().needsMasked() && !field.getIsSensitive()
+            if(QuickSearchFieldRules.isIndexable(table, fieldName)
+               && (field.getType().isStringLike() || field.getType().isIntegral())
                && !searchFields.contains(fieldName))
             {
                searchFields.add(fieldName);
@@ -466,7 +467,7 @@ public class QuickSearchQBitProducer implements QBitMetaDataProducer<QuickSearch
          {
             primaryKeyField        = table.getPrimaryKeyField();
             basepullTimestampField = resolveTimestampField(table, searchableFields, basepullTimestampField);
-            removeHiddenFields(table, searchableFields, fieldWeights, fieldIncludeLabels);
+            removeExcludedFields(table, searchableFields, fieldWeights, fieldIncludeLabels);
          }
 
          tables.add(new QuickSearchableTableConfig()
@@ -523,7 +524,7 @@ public class QuickSearchQBitProducer implements QBitMetaDataProducer<QuickSearch
                warnIncrementalBasepullDisabled(table, basepullTimestampField);
                basepullTimestampField = null;
             }
-            removeHiddenFields(table, searchableFields, fieldWeights, fieldIncludeLabels);
+            removeExcludedFields(table, searchableFields, fieldWeights, fieldIncludeLabels);
          }
 
          Integer basepullInterval = stc.getBasepullIntervalMinutes();
@@ -603,23 +604,22 @@ public class QuickSearchQBitProducer implements QBitMetaDataProducer<QuickSearch
 
 
    /*******************************************************************************
-    ** Hidden, isSensitive and password fields are never indexed: their values
+    ** Classified, locked, hidden, sensitive and password fields are excluded:
     ** would leak through searchable text and highlights.
     *******************************************************************************/
-   private static void removeHiddenFields(QTableMetaData table, List<String> searchableFields, Map<String, Integer> fieldWeights, Map<String, Boolean> fieldIncludeLabels)
+   private static void removeExcludedFields(QTableMetaData table, List<String> searchableFields, Map<String, Integer> fieldWeights, Map<String, Boolean> fieldIncludeLabels)
    {
       List<String> hidden = new ArrayList<>();
       for(String fieldName : searchableFields)
       {
-         QFieldMetaData field = table.getFields().get(fieldName);
-         if(field != null && (Boolean.TRUE.equals(field.getIsHidden()) || field.getIsSensitive() || (field.getType() != null && field.getType().needsMasked())))
+         if(!QuickSearchFieldRules.isIndexable(table, fieldName))
          {
             hidden.add(fieldName);
          }
       }
       if(!hidden.isEmpty())
       {
-         LOG.warn("Hidden, sensitive and password fields are excluded from Quick Search indexing", logPair("tableName", table.getName()), logPair("fields", hidden));
+         QuickSearchFieldRules.warnExcludedFields(table);
          searchableFields.removeAll(hidden);
          hidden.forEach(fieldWeights::remove);
          hidden.forEach(fieldIncludeLabels::remove);
