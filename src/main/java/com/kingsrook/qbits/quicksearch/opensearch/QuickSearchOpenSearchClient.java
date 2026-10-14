@@ -113,6 +113,14 @@ public class QuickSearchOpenSearchClient implements Closeable
    public static final String PATH_ENGLISH         = "fieldValuesEnglish";
    public static final String PATH_EXACT           = "fieldValuesExact";
 
+   ////////////////////////////////////////////////////////////////////////////
+   // record search highlight markers: private-use characters, which do not //
+   // occur in indexed text, so fragments convert to plain text and ranges  //
+   ////////////////////////////////////////////////////////////////////////////
+   public static final String HIGHLIGHT_PRE_TAG       = "\uE000"; // private use area
+   public static final String HIGHLIGHT_POST_TAG      = "\uE001"; // private use area
+   public static final int    HIGHLIGHT_FRAGMENT_SIZE = 160;
+
    private final OpenSearchClient      client;
    private final OpenSearchAsyncClient asyncClient;
    private final OpenSearchTransport   transport;
@@ -821,23 +829,67 @@ public class QuickSearchOpenSearchClient implements Closeable
 
 
    /*******************************************************************************
-    ** Record ids of the best matches in each table, best first, for core record
-    ** search. One _msearch request with one search per table (the same query and
-    ** ranking as {@link #search}, restricted to that table), so every table gets
-    ** its own top idsPerTable hits. Only sourceTable and recordId are fetched.
+    ** One hit of a record search: the record id, its relevance score, and its
+    ** highlight fragments by index field (e.g., "fieldValues.firstName"), with
+    ** matches between {@link #HIGHLIGHT_PRE_TAG} and {@link #HIGHLIGHT_POST_TAG}.
+    *******************************************************************************/
+   public record RecordSearchHit(String recordId, Double score, Map<String, List<String>> highlights)
+   {
+   }
+
+
+
+   /*******************************************************************************
+    ** The hits of a record search in one table, best first, and the table's
+    ** total number of matches (counted up to {@link #MAX_RESULT_WINDOW}; null
+    ** if unknown).
+    *******************************************************************************/
+   public record RecordSearchTableHits(List<RecordSearchHit> hits, Long totalHits)
+   {
+   }
+
+
+
+   /*******************************************************************************
+    ** Record ids of the best matches in each table, best first - see
+    ** {@link #searchRecordsPerTable}, which also returns scores, highlights and
+    ** totals.
+    *******************************************************************************/
+   public Map<String, List<String>> searchRecordIdsPerTable(String searchTerm, List<String> tableNames, int idsPerTable, List<QuickSearchableTableConfig> tableConfigs, int timeoutMillis) throws QException
+   {
+      Map<String, List<String>> idsByTable = new LinkedHashMap<>();
+      for(Map.Entry<String, RecordSearchTableHits> entry : searchRecordsPerTable(searchTerm, tableNames, idsPerTable, 0, false, tableConfigs, timeoutMillis).entrySet())
+      {
+         idsByTable.put(entry.getKey(), entry.getValue().hits().stream().map(RecordSearchHit::recordId).toList());
+      }
+      return (idsByTable);
+   }
+
+
+
+   /*******************************************************************************
+    ** The best matches in each table, best first, for core record search. One
+    ** _msearch request with one search per table (the same query and ranking as
+    ** {@link #search}, restricted to that table), so every table gets its own
+    ** top hitsPerTable hits, after skipping offset. Only sourceTable and
+    ** recordId are fetched, plus each hit's score, the table's total hits
+    ** (counted up to MAX_RESULT_WINDOW) and - when highlight is set - one
+    ** highlight fragment per matching fieldValues.* field.
     **
     ** The whole request is bounded by timeoutMillis of wall-clock time (and the
     ** same server-side search timeout): when it runs out, the request is
     ** cancelled and a QException is thrown. A failed search for any table fails
     ** the call. Returns every requested table as a key, in the given order.
     *******************************************************************************/
-   public Map<String, List<String>> searchRecordIdsPerTable(String searchTerm, List<String> tableNames, int idsPerTable, List<QuickSearchableTableConfig> tableConfigs, int timeoutMillis) throws QException
+   public Map<String, RecordSearchTableHits> searchRecordsPerTable(String searchTerm, List<String> tableNames, int hitsPerTable, int offset, boolean highlight, List<QuickSearchableTableConfig> tableConfigs, int timeoutMillis) throws QException
    {
-      Map<String, List<String>> idsByTable = new LinkedHashMap<>();
+      Map<String, RecordSearchTableHits> hitsByTable = new LinkedHashMap<>();
       if(tableNames == null || tableNames.isEmpty())
       {
-         return (idsByTable);
+         return (hitsByTable);
       }
+
+      int from = Math.max(0, Math.min(offset, MAX_RESULT_WINDOW - hitsPerTable));
 
       List<RequestItem> searches = new ArrayList<>();
       for(String tableName : tableNames)
@@ -845,12 +897,26 @@ public class QuickSearchOpenSearchClient implements Closeable
          Query query = buildSearchQuery(searchTerm, List.of(tableName), tableConfigs);
          searches.add(RequestItem.of(ri -> ri
             .header(h -> h.index(indexName))
-            .body(b -> b
-               .query(query)
-               .size(idsPerTable)
-               .trackTotalHits(t -> t.enabled(false))
-               .source(sc -> sc.filter(f -> f.includes("sourceTable", "recordId")))
-               .timeout(timeoutMillis + "ms"))));
+            .body(b ->
+            {
+               b.query(query)
+                  .from(from)
+                  .size(hitsPerTable)
+                  .trackTotalHits(t -> t.count(MAX_RESULT_WINDOW))
+                  .source(sc -> sc.filter(f -> f.includes("sourceTable", "recordId")))
+                  .timeout(timeoutMillis + "ms");
+               if(highlight)
+               {
+                  b.highlight(h -> h
+                     .preTags(HIGHLIGHT_PRE_TAG)
+                     .postTags(HIGHLIGHT_POST_TAG)
+                     .requireFieldMatch(false)
+                     .numberOfFragments(1)
+                     .fragmentSize(HIGHLIGHT_FRAGMENT_SIZE)
+                     .fields("fieldValues.*", HighlightField.of(hf -> hf)));
+               }
+               return (b);
+            })));
       }
 
       CompletableFuture<MsearchResponse<OpenSearchDocument>> future = null;
@@ -874,17 +940,19 @@ public class QuickSearchOpenSearchClient implements Closeable
                throw (new QException("Record search failed for table [" + tableNames.get(i) + "]: " + reason));
             }
 
-            List<String> ids = new ArrayList<>();
+            List<RecordSearchHit> hits = new ArrayList<>();
             for(Hit<OpenSearchDocument> hit : item.result().hits().hits())
             {
                if(hit.source() != null && hit.source().getRecordId() != null)
                {
-                  ids.add(hit.source().getRecordId());
+                  hits.add(new RecordSearchHit(hit.source().getRecordId(), hit.score(), hit.highlight()));
                }
             }
-            idsByTable.put(tableNames.get(i), ids);
+
+            Long totalHits = item.result().hits().total() == null ? null : item.result().hits().total().value();
+            hitsByTable.put(tableNames.get(i), new RecordSearchTableHits(hits, totalHits));
          }
-         return (idsByTable);
+         return (hitsByTable);
       }
       catch(TimeoutException e)
       {

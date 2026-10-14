@@ -49,6 +49,6 @@ public final class QuickSearchApi
    public static MiddlewareSpecExtension extension()
    {
       return (new MiddlewareSpecExtension().withName("quick-search").withSemanticVersion("1.0.0")
-         .withDescription("Quick Search administrative status").withSpec(QuickSearchStatusSpec.class));
+         .withDescription("Quick Search administration and suggestions").withSpec(QuickSearchStatusSpec.class).withSpec(QuickSearchSuggestSpec.class));
    }
 }

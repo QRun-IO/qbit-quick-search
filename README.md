@@ -130,11 +130,11 @@ Search runs as the current `QContext` session: tables the session cannot read ar
 QQQ core has its own record search (`RecordSearchAction`, served at `POST /qqq/v1/search` and used by the Next UI's global search box): a case-insensitive contains-query over each table's `searchFields`. With `serveCoreRecordSearch` (default `true`) the producer registers `QuickSearchRecordSearchProvider` on the instance, and core asks it to search every table Quick Search indexes. The API and the UI do not change.
 
 - **What is served from OpenSearch.** Tables this QBit indexes and that are enabled in `quick_search_index`. Core offers a table only when it has `searchFields`, the session may read it, and it supports query, so the producer gives each indexed table that has no `searchFields` its visible string and integer searchable fields (never hidden or password fields). `searchFields` you set yourself are kept. A table must be in the `QInstance` before the QBit is produced to get them.
-- **How.** One `_msearch` request with one search per table (Quick Search's query, AND semantics and field weights); each table returns up to 4 x `limitPerTable` record ids (at most 100) in relevance order. Core re-reads them by primary key through `QueryAction`, so table permissions, record security locks and record labels are core's, and records deleted since they were indexed drop out.
+- **How.** One `_msearch` request with one search per table (Quick Search's query, AND semantics and field weights), skipping the request's `offset`; each table returns up to 4 x `limitPerTable` record ids (at most 100) in relevance order, each with its score and a highlight of the matching `fieldValues.*` fields (plain text plus match ranges), and the table's total hits (counted to 10,000). Core re-reads the ids by primary key through `QueryAction`, so table permissions, record security locks and record labels are core's, records deleted since they were indexed drop out, and only highlights of fields the user can see (where core's own highlighting found no match) reach the response, with `tables[].totalCount` and `hasMore`. The index holds no record modify dates, so `sort: RECENT` gets relevance order for indexed tables.
 - **Failure.** The OpenSearch request is cancelled after `recordSearchTimeoutMillis` (default 2500). Any failure (timeout, cluster down, index missing) makes core search those tables with its own contains-query instead, so search degrades but never fails. After a failure, Quick Search claims no tables for 30 seconds, so a down cluster does not add a timeout to every search.
 - **Opting out.** `withServeCoreRecordSearch(false)` leaves core search and `searchFields` untouched. If the host already registered another record-search provider, the QBit keeps it and logs a warning (an instance has one provider).
 
-`QuickSearchAction` remains the richer API (scores, highlights, pagination, totals).
+`QuickSearchAction` remains the direct API (all hits in one ranked list, `searchableText` highlights, pagination across tables).
 
 ### Processes
 
@@ -291,7 +291,55 @@ See also the [QQQ adoption checklist](https://github.com/QRun-IO/qqq/blob/develo
 
 Apache License, Version 2.0. See [LICENSE](LICENSE).
 
-## Status API for hosts
+## UI API for hosts
+
+The `quick-search` extension registers both status and suggestions in the committed
+[OpenAPI fragment](src/main/resources/openapi/qqq-v1/quick-search.yaml).
+
+### Typeahead suggestions
+
+`GET /qqq/v1/qbit/quick-search/suggest` (`getQuickSearchSuggestions`) requires a
+signed-in session. Quick Search admin permission is not required. Java hosts use
+`QuickSearchSuggestService.suggest(q, limitPerTable, maxTables, tables)` in the caller's
+`QContext`.
+
+| Query parameter | Meaning |
+| --- | --- |
+| `q` | Required text, trimmed with consecutive whitespace collapsed. Fewer than 2 characters returns empty groups; more than 100 returns HTTP 400. |
+| `limitPerTable` | Integer 1..10; default 5. |
+| `maxTables` | Integer 1..20; default 8. |
+| `tables` | Optional comma-separated table metadata names. Unknown, disabled and unreadable tables are omitted; an empty filter returns no groups. |
+
+```json
+{
+  "query": "blue wid",
+  "groups": [{
+    "tableName": "product",
+    "tableLabel": "Products",
+    "hasMore": true,
+    "items": [{"recordId": "42", "label": "Blue Widget", "subtitle": "Small"}]
+  }],
+  "truncated": false
+}
+```
+
+The existing edge-ngram query supports the last word's prefix. Groups are ordered
+by their best accessible score, with per-table relevance order preserved. Labels
+fall back to `tableLabel #recordId`; subtitles are nullable and come only from the
+already-filtered result. Scores, highlights and display values are never returned.
+The existing action enforces table READ permissions, enabled-table selection,
+configured record security locks (on by default), PHI/PII exclusions and protected
+primary keys.
+
+Suggestions make one bounded OpenSearch request per eligible table, fetching at
+most `2 * (limitPerTable + 1)` candidates under record locks (also subject to the
+host's `maxSearchLimit`). Locked rows can leave a group partially filled.
+`hasMore` confirms an extra accessible hit in this batch; false does not prove
+there are no further matches. `truncated` means more tables had accessible hits
+than `maxTables`. Missing runtime/client or unavailable search returns empty groups.
+Missing `q`, invalid integers and out-of-range limits return HTTP 400.
+
+### Administrative status
 
 Requires QQQ **4.1.0-RC.6**. Hosts should use the supported API rather than reach into
 `QuickSearchRuntime`, `QuickSearchOpenSearchClient`, diagnostic renderers, or qbit tables:
