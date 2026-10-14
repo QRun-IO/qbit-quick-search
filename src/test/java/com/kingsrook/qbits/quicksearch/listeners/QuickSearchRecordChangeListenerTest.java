@@ -19,6 +19,10 @@ package com.kingsrook.qbits.quicksearch.listeners;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.concurrent.TimeUnit;
 import com.kingsrook.qqq.backend.core.actions.QBackendTransaction;
 import com.kingsrook.qqq.backend.core.actions.tables.DeleteAction;
 import com.kingsrook.qqq.backend.core.actions.tables.InsertAction;
@@ -36,6 +40,7 @@ import com.kingsrook.qqq.backend.core.model.actions.tables.query.QueryInput;
 import com.kingsrook.qqq.backend.core.model.actions.tables.update.UpdateInput;
 import com.kingsrook.qqq.backend.core.model.data.QRecord;
 import com.kingsrook.qqq.backend.core.model.metadata.QInstance;
+import com.kingsrook.qqq.backend.core.model.session.QSession;
 import com.kingsrook.qqq.backend.core.model.metadata.code.QCodeReference;
 import com.kingsrook.qqq.backend.core.model.metadata.fields.QFieldMetaData;
 import com.kingsrook.qqq.backend.core.model.metadata.fields.QFieldType;
@@ -203,7 +208,9 @@ class QuickSearchRecordChangeListenerTest extends BaseQuickSearchTest
       }
 
       assertThat(queryFailedEvents()).isEmpty();
+      assertThat(realTimeErrorCount()).isZero();
       transaction.commit();
+      assertThat(realTimeErrorCount()).isEqualTo(2);
 
       List<QRecord> failed = queryFailedEvents();
       assertThat(failed).extracting(r -> r.getValueString("recordId")).containsExactlyInAnyOrder("7", "8");
@@ -328,6 +335,102 @@ class QuickSearchRecordChangeListenerTest extends BaseQuickSearchTest
 
 
 
+   /*******************************************************************************
+    ** Count failed events, including repeated failures, rather than batches.
+    *******************************************************************************/
+   @Test
+   void testPublishFailure_incrementsErrorCount() throws QException
+   {
+      insertIndexRowWithStatus(AbstractIndexingStep.STATUS_ACTIVE);
+      doThrow(new QException("cluster down")).when(publisher).publishDeleteEvents(anyList());
+      List<IndexEvent> events = List.of(
+         new IndexEvent().withTableName(TEST_ENTITY_TABLE).withRecordId("7").withAction(IndexEventAction.DELETE),
+         new IndexEvent().withTableName(TEST_ENTITY_TABLE).withRecordId("8").withAction(IndexEventAction.DELETE));
+
+      QuickSearchRecordChangeListener.publish(runtime, List.of(), events);
+      assertThat(realTimeErrorCount()).isEqualTo(2);
+      QuickSearchRecordChangeListener.publish(runtime, List.of(), events);
+      assertThat(realTimeErrorCount()).isEqualTo(4);
+      assertThat(queryFailedEvents()).hasSize(4);
+   }
+
+
+
+   /*******************************************************************************
+    ** Independent listeners must not overwrite each other's increments.
+    *******************************************************************************/
+   @Test
+   void testConcurrentFailures_preserveErrorCount() throws Exception
+   {
+      insertIndexRowWithStatus(AbstractIndexingStep.STATUS_ACTIVE);
+      doThrow(new QException("cluster down")).when(publisher).publishDeleteEvents(anyList());
+      QInstance instance = QContext.getQInstance();
+      CountDownLatch start = new CountDownLatch(1);
+      try(var executor = Executors.newFixedThreadPool(4))
+      {
+         List<Future<?>> futures = new ArrayList<>();
+         for(Integer worker = 0; worker < 4; worker++)
+         {
+            futures.add(executor.submit(() ->
+            {
+               QContext.init(instance, new QSession());
+               try
+               {
+                  assertThat(start.await(10, TimeUnit.SECONDS)).isTrue();
+                  for(Integer i = 0; i < 5; i++)
+                  {
+                     QuickSearchRecordChangeListener.publish(runtime, List.of(), List.of(
+                        new IndexEvent().withTableName(TEST_ENTITY_TABLE).withRecordId("7").withAction(IndexEventAction.DELETE)));
+                  }
+               }
+               finally
+               {
+                  QContext.clear();
+               }
+               return (null);
+            }));
+         }
+         start.countDown();
+         for(Future<?> future : futures)
+         {
+            future.get(20, TimeUnit.SECONDS);
+         }
+      }
+      assertThat(realTimeErrorCount()).isEqualTo(20);
+   }
+
+
+
+   /*******************************************************************************
+    ** Counter storage failure must leave the source write and replay intact.
+    *******************************************************************************/
+   @Test
+   void testCounterUpdateFails_doesNotFailWrite() throws QException
+   {
+      insertIndexRowWithStatus(AbstractIndexingStep.STATUS_ACTIVE);
+      doThrow(new QException("cluster down")).when(publisher).publishIndexEvents(anyList());
+      try(MockedConstruction<UpdateAction> ignored = mockConstruction(UpdateAction.class, (mock, context) ->
+         when(mock.execute(any(UpdateInput.class))).thenThrow(new QException("counter unavailable"))))
+      {
+         assertThat(insert("widget", null)).isNotNull();
+      }
+      assertThat(queryFailedEvents()).hasSize(1);
+   }
+
+
+
+   /*******************************************************************************
+    ** Read the persisted counter from the memory backend.
+    *******************************************************************************/
+   private Integer realTimeErrorCount() throws QException
+   {
+      QueryInput input = new QueryInput();
+      input.setTableName(QuickSearchIndex.TABLE_NAME);
+      return (new QueryAction().execute(input).getRecords().get(0).getValueInteger("realTimeErrorCount"));
+   }
+
+
+
    @Test
    void testDisabledTable_isSkipped() throws QException
    {
@@ -410,6 +513,7 @@ class QuickSearchRecordChangeListenerTest extends BaseQuickSearchTest
    @Test
    void testUpdate_reReadFails_recordsFailedEventsAfterCommit() throws QException
    {
+      insertIndexRowWithStatus(AbstractIndexingStep.STATUS_ACTIVE);
       QBackendTransaction transaction = new QBackendTransaction();
       try(MockedConstruction<QueryAction> ignored = failingQueries(new QException("possible-value backend unavailable")))
       {
@@ -417,7 +521,9 @@ class QuickSearchRecordChangeListenerTest extends BaseQuickSearchTest
       }
 
       assertThat(queryFailedEvents()).isEmpty();
+      assertThat(realTimeErrorCount()).isNull();
       transaction.commit();
+      assertThat(realTimeErrorCount()).isEqualTo(2);
 
       List<QRecord> failed = queryFailedEvents();
       assertThat(failed).extracting(r -> r.getValueString("recordId")).containsExactlyInAnyOrder("7", "8");

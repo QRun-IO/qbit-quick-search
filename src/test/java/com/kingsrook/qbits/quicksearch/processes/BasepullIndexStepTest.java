@@ -305,6 +305,26 @@ class BasepullIndexStepTest extends BaseQuickSearchTest
 
 
    /*******************************************************************************
+    ** A successful basepull starts a new real-time failure counting window.
+    *******************************************************************************/
+   @Test
+   void testBasepull_resetsRealTimeErrorCount() throws QException
+   {
+      QRecord row = insertIndexRow(TEST_ENTITY_TABLE, true, null, 5);
+      new UpdateAction().execute(new UpdateInput().withTableName(QuickSearchIndex.TABLE_NAME)
+         .withRecord(new QRecord().withValue("id", row.getValue("id")).withValue("realTimeErrorCount", 7)));
+      insertTestEntities(2, Instant.now());
+
+      new BasepullIndexStep().run(new RunBackendStepInput(), new RunBackendStepOutput());
+
+      QueryInput input = new QueryInput();
+      input.setTableName(QuickSearchIndex.TABLE_NAME);
+      assertThat(new QueryAction().execute(input).getRecords().get(0).getValueInteger("realTimeErrorCount")).isZero();
+   }
+
+
+
+   /*******************************************************************************
     ** Test: no discovered tables, no quickSearchIndex rows - step completes
     ** without calling the OpenSearch client.
     *******************************************************************************/
