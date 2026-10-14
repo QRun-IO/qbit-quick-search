@@ -26,6 +26,7 @@ import com.kingsrook.qqq.backend.core.model.metadata.fields.AdornmentType;
 import com.kingsrook.qqq.backend.core.model.metadata.fields.FieldAdornment;
 import com.kingsrook.qqq.backend.core.model.metadata.fields.QFieldMetaData;
 import com.kingsrook.qqq.backend.core.model.metadata.fields.QFieldType;
+import com.kingsrook.qqq.backend.core.model.metadata.help.QHelpContent;
 import com.kingsrook.qqq.backend.core.model.metadata.layout.QIcon;
 import com.kingsrook.qqq.backend.core.model.metadata.possiblevalues.QPossibleValueSource;
 import com.kingsrook.qqq.backend.core.model.metadata.tables.Association;
@@ -99,7 +100,8 @@ public class QuickSearchTableMetaDataHelper
          .withField(new QFieldMetaData("lastErrorMessage", QFieldType.TEXT).withIsEditable(false))
          .withField(new QFieldMetaData("recordCount", QFieldType.INTEGER).withIsEditable(false))
          .withField(new QFieldMetaData("documentCount", QFieldType.INTEGER).withIsEditable(false))
-         .withField(new QFieldMetaData("realTimeErrorCount", QFieldType.INTEGER).withIsEditable(false))
+         .withField(new QFieldMetaData("realTimeErrorCount", QFieldType.INTEGER).withIsEditable(false)
+            .withHelpContent(new QHelpContent("Real-time indexing failures since the last full reindex or basepull")))
          .withField(new QFieldMetaData("status", QFieldType.STRING).withIsEditable(false))
          .withField(new QFieldMetaData("createDate", QFieldType.DATE_TIME).withIsEditable(false))
          .withField(new QFieldMetaData("modifyDate", QFieldType.DATE_TIME).withIsEditable(false))

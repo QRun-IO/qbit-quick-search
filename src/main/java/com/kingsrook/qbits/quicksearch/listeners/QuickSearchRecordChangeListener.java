@@ -19,7 +19,9 @@ package com.kingsrook.qbits.quicksearch.listeners;
 
 import java.io.Serializable;
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 import com.kingsrook.qqq.backend.core.actions.tables.InsertAction;
 import com.kingsrook.qqq.backend.core.actions.tables.QueryAction;
 import com.kingsrook.qqq.backend.core.actions.tables.UpdateAction;
@@ -39,6 +41,7 @@ import com.kingsrook.qqq.backend.core.model.data.QRecord;
 import com.kingsrook.qqq.backend.core.utils.CollectionUtils;
 import com.kingsrook.qbits.quicksearch.QuickSearchRuntime;
 import com.kingsrook.qbits.quicksearch.QuickSearchableTableConfig;
+import com.kingsrook.qbits.quicksearch.config.QuickSearchConfigWrites;
 import com.kingsrook.qbits.quicksearch.config.QuickSearchFieldRules;
 import com.kingsrook.qbits.quicksearch.model.QuickSearchFailedEvent;
 import com.kingsrook.qbits.quicksearch.processes.AbstractIndexingStep;
@@ -288,10 +291,59 @@ public class QuickSearchRecordChangeListener implements RecordChangeListenerInte
          }
 
          insertFailedEventRows(runtime, events, message, QuickSearchFailedEvent.STATUS_PENDING);
+         incrementRealTimeErrorCounts(runtime, events);
       }
       catch(Exception e)
       {
          LOG.error("Could not record failed index events", e, logPair("eventCount", events.size()));
+      }
+   }
+
+
+
+   /*******************************************************************************
+    ** QQQ UpdateInput has no arithmetic update. Serialize this read-modify-write
+    ** across listeners in this JVM, after the source transaction has committed.
+    ** Counter failures must not prevent replay or fail the source write.
+    *******************************************************************************/
+   private static synchronized void incrementRealTimeErrorCounts(QuickSearchRuntime runtime, List<IndexEvent> events)
+   {
+      Map<String, Integer> counts = new HashMap<>();
+      for(IndexEvent event : events)
+      {
+         counts.merge(event.getTableName(), 1, Integer::sum);
+      }
+
+      for(Map.Entry<String, Integer> entry : counts.entrySet())
+      {
+         try
+         {
+            String     indexTable = runtime.getConfig().getQuickSearchIndexTableName();
+            QueryInput queryInput = new QueryInput();
+            queryInput.setTableName(indexTable);
+            queryInput.setFilter(new QQueryFilter(new QFilterCriteria("tableName", QCriteriaOperator.EQUALS, entry.getKey())).withLimit(1));
+            List<QRecord> rows = new QueryAction().execute(queryInput).getRecords();
+            if(CollectionUtils.nullSafeIsEmpty(rows))
+            {
+               continue;
+            }
+
+            QRecord row      = rows.get(0);
+            Integer previous = row.getValueInteger("realTimeErrorCount");
+            UpdateInput updateInput = new UpdateInput();
+            updateInput.setTableName(indexTable);
+            updateInput.setRecords(List.of(new QRecord().withValue("id", row.getValue("id"))
+               .withValue("realTimeErrorCount", Math.addExact(previous == null ? 0 : previous, entry.getValue()))));
+            List<QRecord> updated = QuickSearchConfigWrites.asSystem(() -> new UpdateAction().execute(updateInput)).getRecords();
+            if(CollectionUtils.nullSafeIsEmpty(updated) || CollectionUtils.nullSafeHasContents(updated.get(0).getErrors()))
+            {
+               throw (new QException("Counter update returned errors"));
+            }
+         }
+         catch(Exception | LinkageError e)
+         {
+            LOG.warn("Could not increment real-time indexing error count", e, logPair("tableName", entry.getKey()));
+         }
       }
    }
 

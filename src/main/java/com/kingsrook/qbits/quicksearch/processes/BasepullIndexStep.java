@@ -424,6 +424,7 @@ public class BasepullIndexStep extends AbstractIndexingStep
          {
             Map<String, Serializable> values = new HashMap<>();
             values.put("lastBasepullTime", runStart);
+            values.put("realTimeErrorCount", 0);
             Integer documentCount = ReconcileIndexStep.safeCount(client, tableName);
             if(documentCount != null)
             {
