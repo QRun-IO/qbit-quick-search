@@ -20,6 +20,8 @@ package com.kingsrook.qbits.quicksearch.listeners;
 import java.util.ArrayList;
 import java.util.List;
 import com.kingsrook.qqq.backend.core.actions.QBackendTransaction;
+import com.kingsrook.qqq.backend.core.actions.ai.AiFieldMetaData;
+import com.kingsrook.qqq.backend.core.actions.ai.DataClassification;
 import com.kingsrook.qqq.backend.core.actions.tables.DeleteAction;
 import com.kingsrook.qqq.backend.core.actions.tables.InsertAction;
 import com.kingsrook.qqq.backend.core.actions.tables.QueryAction;
@@ -138,6 +140,28 @@ class QuickSearchRecordChangeListenerTest extends BaseQuickSearchTest
       insertInput.setTransaction(transaction);
       insertInput.setRecords(List.of(new QRecord().withValue("name", name).withValue("description", "d")));
       return (new InsertAction().execute(insertInput).getRecords().get(0).getValueInteger("id"));
+   }
+
+
+
+   /*******************************************************************************
+    ** A custom search publisher also receives only allowed values, so it cannot
+    ** bypass the document builder's policy by indexing the event record.
+    *******************************************************************************/
+   @Test
+   void testCustomPublisherReceivesNoClassifiedValues() throws QException
+   {
+      QContext.getQInstance().getTable(TEST_ENTITY_TABLE).getField("description")
+         .withSupplementalMetaData(new AiFieldMetaData().withClassification(DataClassification.PHI));
+      QContext.getQInstance().getTable(TEST_ENTITY_TABLE).withRecordLabelFields("description").withRecordLabelFormat("%s");
+      new InsertAction().execute(new InsertInput(TEST_ENTITY_TABLE).withRecord(new QRecord()
+         .withValue("name", "Public widget").withValue("description", "PHI-CANARY-7f3c")));
+      ArgumentCaptor<List<IndexEvent>> captor = ArgumentCaptor.forClass(List.class);
+      verify(publisher).publishIndexEvents(captor.capture());
+      QRecord record = captor.getValue().get(0).getRecord();
+      assertThat(record.getValues()).containsEntry("name", "Public widget").doesNotContainKey("description");
+      assertThat(record.getDisplayValue("description")).isNull();
+      assertThat(record.getRecordLabel()).isNull();
    }
 
 

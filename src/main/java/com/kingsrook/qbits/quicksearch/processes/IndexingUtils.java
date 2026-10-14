@@ -33,6 +33,7 @@ import com.kingsrook.qqq.backend.core.model.metadata.QInstance;
 import com.kingsrook.qqq.backend.core.model.metadata.tables.QTableMetaData;
 import com.kingsrook.qqq.backend.core.utils.StringUtils;
 import com.kingsrook.qbits.quicksearch.QuickSearchableTableConfig;
+import com.kingsrook.qbits.quicksearch.config.QuickSearchFieldRules;
 import com.kingsrook.qbits.quicksearch.model.QuickSearchFieldRole;
 import com.kingsrook.qbits.quicksearch.opensearch.OpenSearchDocument;
 import static com.kingsrook.qqq.backend.core.logging.LogUtils.logPair;
@@ -103,6 +104,10 @@ public class IndexingUtils
 
       for(String fieldName : fields)
       {
+         if(table != null && !QuickSearchFieldRules.isIndexable(table, fieldName))
+         {
+            continue;
+         }
          String value = displayValue(record, fieldName, maxFieldLength);
          if(value == null)
          {
@@ -157,7 +162,7 @@ public class IndexingUtils
     *******************************************************************************/
    public static OpenSearchDocument buildDocument(QRecord record, String tableName, String primaryKeyField, List<String> fields, Map<String, Integer> fieldWeights, Map<String, Boolean> includeLabels)
    {
-      return (buildDocument(record, tableName, primaryKeyField, fields, includeLabels, lookupTable(tableName), null, null));
+      return (buildDocument(record, tableName, primaryKeyField, fields, includeLabels, lookupTable(tableName), null, null, null));
    }
 
 
@@ -165,13 +170,14 @@ public class IndexingUtils
    /*******************************************************************************
     ** Build a document for a configured table: display values, label fallback,
     ** truncation, and an external version from the basepull timestamp field.
-    ** Returns null when the record has no primary key.
+    ** Returns null when metadata is unavailable or the primary key is missing
+    ** or excluded by the field policy.
     *******************************************************************************/
    public static OpenSearchDocument buildDocument(QRecord record, QuickSearchableTableConfig tableConfig)
    {
       QTableMetaData     table = lookupTable(tableConfig.getTableName());
       OpenSearchDocument doc   = buildDocument(record, tableConfig.getTableName(), tableConfig.getPrimaryKeyField(), tableConfig.getSearchableFields(),
-         tableConfig.getFieldIncludeLabels(), table, tableConfig.getMaxFieldLength(), tableConfig.getBasepullTimestampField());
+         tableConfig.getFieldIncludeLabels(), table, tableConfig.getMaxFieldLength(), tableConfig.getBasepullTimestampField(), tableConfig.getRecordLabelFields());
 
       if(doc != null && tableConfig.getRecordLabelFormat() != null && tableConfig.getRecordLabelFields() != null)
       {
@@ -199,7 +205,7 @@ public class IndexingUtils
     *******************************************************************************/
    static void applyRolesAndAnalyzers(OpenSearchDocument doc, QRecord record, QuickSearchableTableConfig tableConfig, QTableMetaData table)
    {
-      List<String> fields = tableConfig.getSearchableFields() == null ? List.of() : tableConfig.getSearchableFields();
+      List<String> fields = table == null ? List.of() : QuickSearchFieldRules.indexableFields(table, tableConfig.getSearchableFields());
       if(!tableConfig.isAllPlainFields())
       {
          List<String> snippetFields = new ArrayList<>();
@@ -299,8 +305,14 @@ public class IndexingUtils
     **
     *******************************************************************************/
    private static OpenSearchDocument buildDocument(QRecord record, String tableName, String primaryKeyField, List<String> fields, Map<String, Boolean> includeLabels,
-      QTableMetaData table, Integer maxFieldLength, String timestampField)
+      QTableMetaData table, Integer maxFieldLength, String timestampField, List<String> recordLabelFields)
    {
+      if(table == null || primaryKeyField == null || table.getField(primaryKeyField) == null || QuickSearchFieldRules.isProtected(table, primaryKeyField))
+      {
+         QuickSearchFieldRules.warnExcludedFields(table);
+         return (null);
+      }
+      fields = QuickSearchFieldRules.indexableFields(table, fields);
       String recordId = record.getValueString(primaryKeyField);
       if(recordId == null)
       {
@@ -318,7 +330,15 @@ public class IndexingUtils
       }
 
       String recordLabel = record.getRecordLabel();
-      if(!StringUtils.hasContent(recordLabel) && table != null)
+      boolean protectedLabel = table.getRecordLabelFields() != null
+         && table.getRecordLabelFields().stream().anyMatch(f -> QuickSearchFieldRules.isProtected(table, f));
+      if(protectedLabel || (recordLabelFields != null && recordLabelFields.stream().anyMatch(f -> QuickSearchFieldRules.isProtected(table, f))))
+      {
+         recordLabel = null;
+         record = new QRecord(record);
+         record.setRecordLabel(null);
+      }
+      if(!StringUtils.hasContent(recordLabel) && !protectedLabel && table.getRecordLabelFields() != null)
       {
          try
          {
@@ -331,7 +351,7 @@ public class IndexingUtils
       }
 
       Long version = null;
-      if(timestampField != null)
+      if(timestampField != null && !QuickSearchFieldRules.isProtected(table, timestampField))
       {
          try
          {
@@ -361,6 +381,12 @@ public class IndexingUtils
     *******************************************************************************/
    private static String formatLabel(QRecord record, QuickSearchableTableConfig tableConfig, String fallback)
    {
+      QTableMetaData table = lookupTable(tableConfig.getTableName());
+      if(tableConfig.getRecordLabelFields().stream().anyMatch(f -> QuickSearchFieldRules.isProtected(table, f)))
+      {
+         QuickSearchFieldRules.warnExcludedFields(table);
+         return (fallback);
+      }
       try
       {
          Object[] labelValues = new Object[tableConfig.getRecordLabelFields().size()];
@@ -373,9 +399,38 @@ public class IndexingUtils
       }
       catch(Exception e)
       {
-         LOG.warn("recordLabelFormat could not be applied; using default label", e, logPair("tableName", tableConfig.getTableName()));
+         LOG.warn("recordLabelFormat could not be applied; using default label", logPair("tableName", tableConfig.getTableName()));
          return (fallback);
       }
+   }
+
+
+
+   /*******************************************************************************
+    ** Rebuild result presentation from allowed field values, discarding old
+    ** aggregate labels, snippets and display values that may contain secrets.
+    *******************************************************************************/
+   public static OpenSearchDocument filterResult(OpenSearchDocument source, QuickSearchableTableConfig tableConfig)
+   {
+      if(!QuickSearchFieldRules.requiresFieldFiltering(source.getSourceTable()))
+      {
+         return (source);
+      }
+      QTableMetaData table = lookupTable(source.getSourceTable());
+      if(tableConfig == null || QuickSearchFieldRules.isProtected(table, table.getPrimaryKeyField()))
+      {
+         return (null);
+      }
+      QRecord record = new QRecord().withValue(table.getPrimaryKeyField(), source.getRecordId());
+      for(String field : QuickSearchFieldRules.indexableFields(table, tableConfig.getSearchableFields()))
+      {
+         Object value = source.getFieldValues() == null ? null : source.getFieldValues().get(field);
+         if(value instanceof String text)
+         {
+            record.setValue(field, text);
+         }
+      }
+      return (buildDocument(record, tableConfig));
    }
 
 

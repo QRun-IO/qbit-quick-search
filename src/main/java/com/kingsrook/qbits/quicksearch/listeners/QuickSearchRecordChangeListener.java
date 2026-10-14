@@ -117,6 +117,11 @@ public class QuickSearchRecordChangeListener implements RecordChangeListenerInte
       }
 
       String primaryKeyField = tableConfig.getPrimaryKeyField() != null ? tableConfig.getPrimaryKeyField() : "id";
+      if(QuickSearchFieldRules.lookupTable(tableName) == null || QuickSearchFieldRules.isProtected(QuickSearchFieldRules.lookupTable(tableName), primaryKeyField))
+      {
+         QuickSearchFieldRules.warnExcludedFields(QuickSearchFieldRules.lookupTable(tableName));
+         return;
+      }
 
       ///////////////////////////////////////////////////////////////////////////
       // paused: index nothing, but keep the written keys (DEFERRED), which     //
@@ -462,7 +467,17 @@ public class QuickSearchRecordChangeListener implements RecordChangeListenerInte
          {
             continue;
          }
-         events.add(new IndexEvent().withAction(IndexEventAction.INDEX).withTableName(tableName).withRecordId(recordId).withRecord(record));
+         QRecord safeRecord = new QRecord();
+         for(var field : QuickSearchFieldRules.indexableFields(QuickSearchFieldRules.lookupTable(tableName)))
+         {
+            safeRecord.setValue(field.getName(), record.getValue(field.getName()));
+            safeRecord.setDisplayValue(field.getName(), record.getDisplayValue(field.getName()));
+         }
+         if(!QuickSearchFieldRules.requiresFieldFiltering(tableName))
+         {
+            safeRecord.setRecordLabel(record.getRecordLabel());
+         }
+         events.add(new IndexEvent().withAction(IndexEventAction.INDEX).withTableName(tableName).withRecordId(recordId).withRecord(safeRecord));
       }
       return (events);
    }

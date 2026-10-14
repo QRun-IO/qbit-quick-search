@@ -238,8 +238,7 @@ public class QuickSearchConfigPrimer
             }
             if(!QuickSearchFieldRules.isIndexable(table, fieldName))
             {
-               LOG.warn("A field declared searchable in code cannot be indexed; it is not primed: " + QuickSearchFieldRules.whyNotIndexable(table, fieldName),
-                  logPair("tableName", tableName), logPair("fieldName", fieldName));
+               QuickSearchFieldRules.warnExcludedFields(table);
                continue;
             }
             codeFields.add(codeFieldRow(code, fieldName, i));

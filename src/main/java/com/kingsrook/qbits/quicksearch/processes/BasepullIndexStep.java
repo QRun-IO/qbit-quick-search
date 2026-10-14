@@ -46,6 +46,7 @@ import com.kingsrook.qbits.quicksearch.QuickSearchQBitConfig;
 import com.kingsrook.qbits.quicksearch.QuickSearchRuntime;
 import com.kingsrook.qbits.quicksearch.QuickSearchableTableConfig;
 import com.kingsrook.qbits.quicksearch.config.QuickSearchConfigWrites;
+import com.kingsrook.qbits.quicksearch.config.QuickSearchFieldRules;
 import com.kingsrook.qbits.quicksearch.model.QuickSearchFailedEvent;
 import com.kingsrook.qbits.quicksearch.model.QuickSearchIndex;
 import com.kingsrook.qbits.quicksearch.model.QuickSearchIndexRun;
@@ -505,6 +506,11 @@ public class BasepullIndexStep extends AbstractIndexingStep
 
       for(Map.Entry<String, List<QRecord>> entry : deleteByTable.entrySet())
       {
+         if(QuickSearchFieldRules.hasProtectedPrimaryKey(entry.getKey()))
+         {
+            markReplayOutcome(entry.getValue(), false, List.of("The primary key cannot be indexed"), succeeded, failed);
+            continue;
+         }
          List<QRecord> toDelete = entry.getValue();
          try
          {

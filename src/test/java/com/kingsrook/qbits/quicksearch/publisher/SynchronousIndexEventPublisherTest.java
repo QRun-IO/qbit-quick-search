@@ -21,8 +21,13 @@ import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
 import java.util.Map;
+import com.kingsrook.qqq.backend.core.context.QContext;
 import com.kingsrook.qqq.backend.core.exceptions.QException;
 import com.kingsrook.qqq.backend.core.model.data.QRecord;
+import com.kingsrook.qqq.backend.core.model.metadata.fields.QFieldMetaData;
+import com.kingsrook.qqq.backend.core.model.metadata.fields.QFieldType;
+import com.kingsrook.qqq.backend.core.model.metadata.tables.QTableMetaData;
+import com.kingsrook.qbits.quicksearch.BaseQuickSearchTest;
 import com.kingsrook.qbits.quicksearch.QuickSearchableTableConfig;
 import com.kingsrook.qbits.quicksearch.opensearch.BulkIndexResult;
 import com.kingsrook.qbits.quicksearch.opensearch.OpenSearchDocument;
@@ -46,7 +51,7 @@ import static org.mockito.Mockito.when;
 /*******************************************************************************
  ** Tests for SynchronousIndexEventPublisher.
  *******************************************************************************/
-class SynchronousIndexEventPublisherTest
+class SynchronousIndexEventPublisherTest extends BaseQuickSearchTest
 {
    private QuickSearchOpenSearchClient    mockClient;
    private SynchronousIndexEventPublisher publisher;
@@ -61,6 +66,13 @@ class SynchronousIndexEventPublisherTest
    @BeforeEach
    void setUp()
    {
+      QContext.getQInstance().addTable(
+         new QTableMetaData().withName("orders").withPrimaryKeyField("id")
+            .withField(new QFieldMetaData("id", QFieldType.INTEGER))
+            .withField(new QFieldMetaData("orderNumber", QFieldType.STRING))
+            .withField(new QFieldMetaData("customerName", QFieldType.STRING)));
+      QContext.getQInstance().addTable(new QTableMetaData().withName("products").withPrimaryKeyField("id")
+         .withField(new QFieldMetaData("id", QFieldType.INTEGER)).withField(new QFieldMetaData("name", QFieldType.STRING)));
       mockClient = mock(QuickSearchOpenSearchClient.class);
 
       QuickSearchableTableConfig ordersConfig = new QuickSearchableTableConfig()

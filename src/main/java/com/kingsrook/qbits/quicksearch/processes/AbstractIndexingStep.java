@@ -132,7 +132,7 @@ public abstract class AbstractIndexingStep implements BackendStep
    protected List<QuickSearchableTableConfig> getDiscoveredTables()
    {
       List<QuickSearchableTableConfig> tables = QuickSearchQBitContext.getDiscoveredTables();
-      return (tables == null ? Collections.emptyList() : tables);
+      return (tables == null ? Collections.emptyList() : tables.stream().filter(t -> !QuickSearchFieldRules.hasProtectedPrimaryKey(t.getTableName())).toList());
    }
 
 
@@ -142,7 +142,7 @@ public abstract class AbstractIndexingStep implements BackendStep
     *******************************************************************************/
    protected QuickSearchableTableConfig getTableConfig(String tableName)
    {
-      return (QuickSearchQBitContext.getTableConfig(tableName));
+      return (QuickSearchFieldRules.hasProtectedPrimaryKey(tableName) ? null : QuickSearchQBitContext.getTableConfig(tableName));
    }
 
 
