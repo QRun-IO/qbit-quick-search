@@ -28,6 +28,18 @@ import java.util.Set;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule;
+import com.kingsrook.qbits.quicksearch.QuickSearchQBitConfig;
+import com.kingsrook.qbits.quicksearch.QuickSearchRuntime;
+import com.kingsrook.qbits.quicksearch.QuickSearchableTableConfig;
+import com.kingsrook.qbits.quicksearch.diagnostics.DiagnosticsHtml.Level;
+import com.kingsrook.qbits.quicksearch.model.QuickSearchFailedEvent;
+import com.kingsrook.qbits.quicksearch.model.QuickSearchValidationRun;
+import com.kingsrook.qbits.quicksearch.opensearch.OpenSearchDocument;
+import com.kingsrook.qbits.quicksearch.opensearch.QuickSearchDiagnosticsOperations;
+import com.kingsrook.qbits.quicksearch.opensearch.QuickSearchDiagnosticsOperations.RawResponse;
+import com.kingsrook.qbits.quicksearch.opensearch.QuickSearchOpenSearchClient;
+import com.kingsrook.qbits.quicksearch.processes.AbstractIndexingStep;
+import com.kingsrook.qbits.quicksearch.processes.IndexingUtils;
 import com.kingsrook.qqq.backend.core.actions.tables.CountAction;
 import com.kingsrook.qqq.backend.core.actions.tables.InsertAction;
 import com.kingsrook.qqq.backend.core.actions.tables.QueryAction;
@@ -46,18 +58,6 @@ import com.kingsrook.qqq.backend.core.model.data.QRecord;
 import com.kingsrook.qqq.backend.core.model.metadata.QInstance;
 import com.kingsrook.qqq.backend.core.model.session.QSystemUserSession;
 import com.kingsrook.qqq.backend.core.utils.CollectionUtils;
-import com.kingsrook.qbits.quicksearch.QuickSearchQBitConfig;
-import com.kingsrook.qbits.quicksearch.QuickSearchRuntime;
-import com.kingsrook.qbits.quicksearch.QuickSearchableTableConfig;
-import com.kingsrook.qbits.quicksearch.diagnostics.DiagnosticsHtml.Level;
-import com.kingsrook.qbits.quicksearch.model.QuickSearchFailedEvent;
-import com.kingsrook.qbits.quicksearch.model.QuickSearchValidationRun;
-import com.kingsrook.qbits.quicksearch.opensearch.OpenSearchDocument;
-import com.kingsrook.qbits.quicksearch.opensearch.QuickSearchDiagnosticsOperations;
-import com.kingsrook.qbits.quicksearch.opensearch.QuickSearchDiagnosticsOperations.RawResponse;
-import com.kingsrook.qbits.quicksearch.opensearch.QuickSearchOpenSearchClient;
-import com.kingsrook.qbits.quicksearch.processes.AbstractIndexingStep;
-import com.kingsrook.qbits.quicksearch.processes.IndexingUtils;
 import static com.kingsrook.qqq.backend.core.logging.LogUtils.logPair;
 
 
@@ -289,6 +289,16 @@ public class IndexValidator
          case "yellow" -> new Finding(SCOPE_CLUSTER, check, Level.WARN, "yellow: replica shards are unassigned (expected on a single-node cluster when the index asks for replicas).");
          default -> new Finding(SCOPE_CLUSTER, check, Level.FAIL, status + ": primary shards are unassigned; searches and writes may fail.");
       });
+   }
+
+
+
+   /*******************************************************************************
+    ** Shared cluster health interpretation for validation and the host status API.
+    *******************************************************************************/
+   public static Level healthLevel(String status)
+   {
+      return (healthFinding("Health", status).level());
    }
 
 

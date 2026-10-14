@@ -1,6 +1,16 @@
 # Session State
 
-Updated: 2026-10-06
+Updated: 2026-10-13
+
+## Status API worktree (2026-10-13, issue #50 / F10)
+
+- Implemented `api.QuickSearchStatusService.get()`, immutable status values, default app/home constants and a spec-managed status endpoint. Admin permission is checked on every call; saved validation counts avoid source scans. Five-second per-runtime cache, two-second wait, one in-flight worker, existing diagnostics rate limiter, bounded table/backlog reads.
+- Endpoint uses core's permitted `/qqq/v1/qbit/quick-search/status` namespace (`getQuickSearchStatus`). Requested `/quick-search` is rejected by RC.6's established-prefix allowlist. Core and host clones are read-only; no edits there. No previous Quick Search HTTP operations or Next UI callers found.
+- POM targets released-coordinate `4.1.0-RC.6`; local verification uses only `-Dqqq.snapshot.version=4.1.0-ARCHRC6-SNAPSHOT`.
+- Host file/line replacement mapping: `docs/STATUS-API-HOST-MIGRATION.md`. Contract: `src/main/resources/openapi/qqq-v1/quick-search.yaml`.
+- Verification: 468 unit tests (including strict HTTP, contract, bounds, cache isolation, permissions and timeout recovery); JaCoCo passes. All 41 Docker integration tests skip because Docker is unavailable. Final command: `./mvnw.cmd -B verify -Dqqq.snapshot.version=4.1.0-ARCHRC6-SNAPSHOT`.
+- Standalone repository Checkstyle is not green: HEAD has 471 main-source violations; this tree has 438, with zero newly introduced violations. New production files and both new test files pass their style checks. Existing header/import/style cleanup is outside the status API change.
+- No commit, push, merge or deployment authorized. Second-brain vault is outside writable roots; durable notes are retained here for later vault synchronization.
 
 ## Context
 

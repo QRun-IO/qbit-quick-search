@@ -72,6 +72,11 @@
    <dependencies>
       <dependency>
          <groupId>com.kingsrook.qqq</groupId>
+         <artifactId>qqq-middleware-javalin</artifactId>
+      </dependency>
+
+      <dependency>
+         <groupId>com.kingsrook.qqq</groupId>
          <artifactId>qqq-backend-core</artifactId>
       </dependency>
 
@@ -274,7 +279,7 @@
             <activeByDefault>true</activeByDefault>
          </activation>
          <properties>
-            <qqq.snapshot.version>4.1.0-RC.4</qqq.snapshot.version>
+            <qqq.snapshot.version>4.1.0-RC.6</qqq.snapshot.version>
          </properties>
          <dependencyManagement>
             <dependencies>
