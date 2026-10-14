@@ -19,6 +19,12 @@ package com.kingsrook.qbits.quicksearch.diagnostics;
 
 import java.util.ArrayList;
 import java.util.List;
+import com.kingsrook.qbits.quicksearch.QuickSearchQBitConfig;
+import com.kingsrook.qbits.quicksearch.QuickSearchRuntime;
+import com.kingsrook.qbits.quicksearch.config.QuickSearchStatus;
+import com.kingsrook.qbits.quicksearch.diagnostics.DiagnosticsHtml.Level;
+import com.kingsrook.qbits.quicksearch.model.QuickSearchDiagnosticEvent;
+import com.kingsrook.qbits.quicksearch.model.QuickSearchValidationRun;
 import com.kingsrook.qqq.backend.core.actions.dashboard.widgets.AbstractWidgetRenderer;
 import com.kingsrook.qqq.backend.core.actions.tables.QueryAction;
 import com.kingsrook.qqq.backend.core.context.QContext;
@@ -34,12 +40,6 @@ import com.kingsrook.qqq.backend.core.model.actions.widgets.RenderWidgetOutput;
 import com.kingsrook.qqq.backend.core.model.dashboard.widgets.RawHTML;
 import com.kingsrook.qqq.backend.core.model.data.QRecord;
 import com.kingsrook.qqq.backend.core.utils.CollectionUtils;
-import com.kingsrook.qbits.quicksearch.QuickSearchQBitConfig;
-import com.kingsrook.qbits.quicksearch.QuickSearchRuntime;
-import com.kingsrook.qbits.quicksearch.config.QuickSearchStatus;
-import com.kingsrook.qbits.quicksearch.diagnostics.DiagnosticsHtml.Level;
-import com.kingsrook.qbits.quicksearch.model.QuickSearchDiagnosticEvent;
-import com.kingsrook.qbits.quicksearch.model.QuickSearchValidationRun;
 
 
 /*******************************************************************************
@@ -211,18 +211,14 @@ public class QuickSearchDiagnosticsWidgetRenderer extends AbstractWidgetRenderer
 
       try
       {
-         QueryInput queryInput = new QueryInput();
-         queryInput.setTableName(tableName);
-         queryInput.setFilter(new QQueryFilter().withOrderBy(new QFilterOrderBy("id", false)).withLimit(1));
-         List<QRecord> rows = CollectionUtils.nonNullList(new QueryAction().execute(queryInput).getRecords());
-         if(rows.isEmpty())
+         QRecord row = DiagnosticsSupport.latestValidation(config);
+         if(row == null)
          {
             html.paragraph("None yet. Run Validate Search Index from Quick Search Index (Actions)"
                + (config.getValidationCronExpression() == null ? "." : "; it is also scheduled (" + config.getValidationCronExpression() + ")."));
             return;
          }
 
-         QRecord row    = rows.get(0);
          String  status = row.getValueString("status");
          Level   level  = QuickSearchValidationRun.STATUS_PASS.equals(status) ? Level.OK : (QuickSearchValidationRun.STATUS_WARN.equals(status) ? Level.WARN : Level.FAIL);
          html.raw("<p>" + DiagnosticsHtml.badge(level) + " <a href=\"/app/" + DiagnosticsHtml.escape(tableName) + "/" + DiagnosticsHtml.escape(row.getValueString("id")) + "\">"

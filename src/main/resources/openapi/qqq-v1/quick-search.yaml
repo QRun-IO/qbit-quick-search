@@ -1,0 +1,183 @@
+components:
+  schemas:
+    QuickSearchErrorV1:
+      properties:
+        error:
+          description: "Framework error message."
+          nullable: false
+          type: "string"
+      type: "object"
+    QuickSearchIndexStatusV1:
+      properties:
+        countsCheckedAt:
+          description: "Saved validation completion; null when validation counts are\
+            \ unavailable."
+          format: "date-time"
+          nullable: true
+          type: "string"
+        documentCount:
+          description: "Saved validation document count, else last indexing run count;\
+            \ not live."
+          format: "int64"
+          nullable: true
+          type: "integer"
+        enabled:
+          description: "Whether this index is enabled."
+          nullable: false
+          type: "boolean"
+        lastError:
+          description: "Persisted indexing error; null when absent."
+          nullable: true
+          type: "string"
+        lastSuccessfulSync:
+          description: "Newest successful basepull/full-reindex/reconcile watermark."
+          format: "date-time"
+          nullable: true
+          type: "string"
+        realTimeErrorCount:
+          description: "Persisted real-time indexing error count."
+          nullable: true
+          type: "integer"
+        sourceCount:
+          description: "Source count from saved IndexValidator report; null without\
+            \ validation."
+          format: "int64"
+          nullable: true
+          type: "integer"
+        status:
+          description: "Persisted indexing state, such as ACTIVE or NEEDS_REINDEX."
+          nullable: true
+          type: "string"
+        tableName:
+          description: "Indexed source table metadata name."
+          nullable: false
+          type: "string"
+      type: "object"
+    QuickSearchStatusV1:
+      properties:
+        activeShards:
+          description: "Cluster health counter; null when unavailable."
+          nullable: true
+          type: "integer"
+        backlogTruncated:
+          description: "Counts are lower bounds when more than 1000 backlog rows exist."
+          nullable: false
+          type: "boolean"
+        checkedAt:
+          description: "Snapshot completion time; remains unchanged on cache hits."
+          format: "date-time"
+          nullable: false
+          type: "string"
+        clusterHealth:
+          description: "OpenSearch health color; null when unknown."
+          nullable: true
+          type: "string"
+        clusterReachable:
+          description: "Whether OpenSearch answered; null when not probed."
+          nullable: true
+          type: "boolean"
+        exhausted:
+          description: "Exhausted failed events, from the same bounded backlog read."
+          nullable: true
+          type: "integer"
+        homeHref:
+          description: "Quick Search home link, including the configured metadata\
+            \ prefix."
+          nullable: false
+          type: "string"
+        indexes:
+          description: "At most 100 persisted index rows, ordered by id."
+          items:
+            $ref: "#/components/schemas/QuickSearchIndexStatusV1"
+          type: "array"
+        indexingPaused:
+          description: "Indexing is paused; search can still serve."
+          nullable: true
+          type: "boolean"
+        lastError:
+          description: "Last known indexing/search error or snapshot failure; null\
+            \ when absent."
+          nullable: true
+          type: "string"
+        lastSuccessfulSync:
+          description: "Newest successful indexing watermark; not a guarantee all\
+            \ tables are current."
+          format: "date-time"
+          nullable: true
+          type: "string"
+        nodes:
+          description: "Cluster health counter; null when unavailable."
+          nullable: true
+          type: "integer"
+        pending:
+          description: "Pending and awaiting-reindex failed events, from at most 1000\
+            \ backlog rows."
+          nullable: true
+          type: "integer"
+        state:
+          description: "Overall availability; incomplete diagnostics are DEGRADED."
+          enum:
+          - "OK"
+          - "DEGRADED"
+          - "DOWN"
+          - "DISABLED"
+          nullable: false
+          type: "string"
+        tablesTruncated:
+          description: "More than 100 index rows exist."
+          nullable: false
+          type: "boolean"
+        unassignedShards:
+          description: "Cluster health counter; null when unavailable."
+          nullable: true
+          type: "integer"
+      type: "object"
+  securitySchemes:
+    sessionUuidCookie:
+      in: "cookie"
+      name: "sessionUUID"
+      type: "apiKey"
+info:
+  contact:
+    email: "contact@kingsrook.com"
+  description: "Quick Search administrative status"
+  title: "QQQ Middleware API extension: quick-search"
+  version: "1.0.0"
+openapi: "3.0.3"
+paths:
+  /qqq/v1/qbit/quick-search/status:
+    get:
+      description: "Requires Quick Search admin permission. Five-second instance cache;\
+        \ two-second refresh wait. Counts are saved diagnostics, not live source scans.\
+        \ Unknown values are null. Backlog counts are lower bounds when backlogTruncated\
+        \ is true."
+      operationId: "getQuickSearchStatus"
+      responses:
+        400:
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/QuickSearchErrorV1"
+          description: "Diagnostic rate limit exceeded"
+        401:
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/QuickSearchErrorV1"
+          description: "Sign in required"
+        403:
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/QuickSearchErrorV1"
+          description: "Quick Search admin permission required"
+        200:
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/QuickSearchStatusV1"
+          description: "Successful Response"
+      security:
+      - sessionUuidCookie:
+        - "N/A"
+      summary: "Get Quick Search status"

@@ -25,6 +25,14 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Properties;
+import com.kingsrook.qbits.quicksearch.actions.QuickSearchRecordSearchProvider;
+import com.kingsrook.qbits.quicksearch.annotations.QuickSearchField;
+import com.kingsrook.qbits.quicksearch.annotations.QuickSearchable;
+import com.kingsrook.qbits.quicksearch.api.QuickSearchApi;
+import com.kingsrook.qbits.quicksearch.listeners.QuickSearchRecordChangeListener;
+import com.kingsrook.qbits.quicksearch.metadata.QuickSearchAdminAppMetaDataProducer;
+import com.kingsrook.qbits.quicksearch.metadata.QuickSearchDiagnosticsProcessMetaDataHelper;
+import com.kingsrook.qbits.quicksearch.metadata.QuickSearchProcessMetaDataHelper;
 import com.kingsrook.qqq.backend.core.exceptions.QException;
 import com.kingsrook.qqq.backend.core.logging.QLogger;
 import com.kingsrook.qqq.backend.core.model.metadata.MetaDataProducerMultiOutput;
@@ -38,13 +46,7 @@ import com.kingsrook.qqq.backend.core.model.metadata.qbits.QBitMetaDataProducer;
 import com.kingsrook.qqq.backend.core.model.metadata.tables.QTableMetaData;
 import com.kingsrook.qqq.backend.core.utils.CollectionUtils;
 import com.kingsrook.qqq.backend.core.utils.StringUtils;
-import com.kingsrook.qbits.quicksearch.actions.QuickSearchRecordSearchProvider;
-import com.kingsrook.qbits.quicksearch.annotations.QuickSearchField;
-import com.kingsrook.qbits.quicksearch.annotations.QuickSearchable;
-import com.kingsrook.qbits.quicksearch.listeners.QuickSearchRecordChangeListener;
-import com.kingsrook.qbits.quicksearch.metadata.QuickSearchAdminAppMetaDataProducer;
-import com.kingsrook.qbits.quicksearch.metadata.QuickSearchDiagnosticsProcessMetaDataHelper;
-import com.kingsrook.qbits.quicksearch.metadata.QuickSearchProcessMetaDataHelper;
+import com.kingsrook.qqq.middleware.javalin.specs.extensions.MiddlewareSpecExtensionsMetaData;
 import static com.kingsrook.qqq.backend.core.logging.LogUtils.logPair;
 
 
@@ -261,6 +263,9 @@ public class QuickSearchQBitProducer implements QBitMetaDataProducer<QuickSearch
       }
 
       qInstance.withRuntimeService(new QCodeReference(QuickSearchRuntimeService.class));
+
+      MiddlewareSpecExtensionsMetaData.ofOrWithNew(qInstance)
+         .withExtension(QuickSearchApi.extension());
 
       addRecordDiagnosticActions(output, qInstance, discoveredTables);
 

@@ -26,6 +26,13 @@ import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicLong;
+import com.kingsrook.qbits.quicksearch.config.QuickSearchConfigStore;
+import com.kingsrook.qbits.quicksearch.diagnostics.DiagnosticEventRecorder;
+import com.kingsrook.qbits.quicksearch.diagnostics.DiagnosticsRateLimiter;
+import com.kingsrook.qbits.quicksearch.diagnostics.StatusCache;
+import com.kingsrook.qbits.quicksearch.opensearch.QuickSearchOpenSearchClient;
+import com.kingsrook.qbits.quicksearch.publisher.IndexEventPublisher;
+import com.kingsrook.qbits.quicksearch.publisher.SynchronousIndexEventPublisher;
 import com.kingsrook.qqq.backend.core.actions.tables.QueryAction;
 import com.kingsrook.qqq.backend.core.context.QContext;
 import com.kingsrook.qqq.backend.core.exceptions.QException;
@@ -38,12 +45,6 @@ import com.kingsrook.qqq.backend.core.model.data.QRecord;
 import com.kingsrook.qqq.backend.core.model.metadata.QInstance;
 import com.kingsrook.qqq.backend.core.model.metadata.qbits.QBitMetaData;
 import com.kingsrook.qqq.backend.core.model.session.QSystemUserSession;
-import com.kingsrook.qbits.quicksearch.config.QuickSearchConfigStore;
-import com.kingsrook.qbits.quicksearch.diagnostics.DiagnosticEventRecorder;
-import com.kingsrook.qbits.quicksearch.diagnostics.DiagnosticsRateLimiter;
-import com.kingsrook.qbits.quicksearch.opensearch.QuickSearchOpenSearchClient;
-import com.kingsrook.qbits.quicksearch.publisher.IndexEventPublisher;
-import com.kingsrook.qbits.quicksearch.publisher.SynchronousIndexEventPublisher;
 import static com.kingsrook.qqq.backend.core.logging.LogUtils.logPair;
 
 
@@ -71,6 +72,8 @@ public class QuickSearchRuntime
 
    public static final long RECORD_SEARCH_BACKOFF_MILLIS = 30_000L;
 
+   private final StatusCache statusCache = new StatusCache();
+
    private final QuickSearchQBitConfig config;
 
    private List<QuickSearchableTableConfig>        codeTables       = new ArrayList<>();
@@ -96,6 +99,16 @@ public class QuickSearchRuntime
    private volatile Instant                 lastRecordSearchFailureTime;
    private volatile QInstance               startInstance;
    private volatile String                  lastRecordSearchFailureMessage;
+
+
+
+   /*******************************************************************************
+    ** Instance-owned bounded administrative status cache.
+    *******************************************************************************/
+   public StatusCache getStatusCache()
+   {
+      return (statusCache);
+   }
 
 
 
@@ -728,6 +741,7 @@ public class QuickSearchRuntime
          return;
       }
       closed = true;
+      statusCache.close();
 
       if(publisher != null)
       {
