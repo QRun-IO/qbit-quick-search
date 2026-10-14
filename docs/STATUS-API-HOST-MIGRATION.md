@@ -23,26 +23,49 @@ session to bypass `adminPermissionRules`. Cache hits still check permission.
 | Method | Path | operationId |
 | --- | --- | --- |
 | GET | `/qqq/v1/qbit/quick-search/status` | `getQuickSearchStatus` |
+| GET | `/qqq/v1/qbit/quick-search/suggest` | `getQuickSearchSuggestions` |
+
+Suggestions require only a signed-in session, with table READ permissions and
+configured record locks applied to results. Do not gate the typeahead UI on the
+status endpoint's admin permission. Send `q`, optionally `limitPerTable` (default 5,
+maximum 10), `maxTables` (default 8, maximum 20), and comma-separated `tables`.
+The response contains `query`, relevance-ordered `groups` and `truncated`; each
+group has `tableName`, `tableLabel`, `hasMore` and `items` of `recordId`, `label`,
+and nullable `subtitle`. See the [API details](../README.md#typeahead-suggestions)
+for normalization, bounded-batch semantics and empty responses during outages.
 
 Extension: `quick-search`, version `1.0.0`; core dependency: `4.1.0-RC.6`.
 The requested `/quick-search` prefix cannot validate on the supplied RC.6 baseline:
 `MiddlewareSpecExtensionsMetaData.ESTABLISHED_PREFIXES` only admits esb, alerts,
 assistant, and sql-workbench. We use the default namespace without modifying core.
 
-Wire changes against develop: one additive endpoint and its schemas; no existing
-method, path, request, or response changed. Next UI `src/` contains no calls to a
+The suggestions change adds a second endpoint and its schemas; the status
+method, path, request and response are unchanged. Next UI `src/` contains no calls to a
 Quick Search-specific endpoint today; its core `/qqq/v1/search` integration is unchanged.
 Vendor `src/main/resources/openapi/qqq-v1/quick-search.yaml` for clients.
 
 Regenerate the fragment with:
 
 ```powershell
-./mvnw.cmd -B test -Dtest=QuickSearchApiContractTest -Dquicksearch.openapi.update=true -Dqqq.snapshot.version=4.1.0-ARCHRC6-SNAPSHOT
+./mvnw.cmd -B -Dtest=QuickSearchApiContractTest -Dquicksearch.openapi.update=true test
+./mvnw.cmd -B -Dtest=QuickSearchApiContractTest test
 ```
 
-The local verification override is never the committed dependency version.
+The fragment covers both registered specs using the committed dependency version.
 
-## Verification and limits
+## Suggestions verification (2026-10-14)
+
+The two-spec contract regenerates and passes without the update flag. Final
+`CI=true ./mvnw.cmd -B verify` passes 495 unit/guardrail tests, including strict
+HTTP checks for reader access and invalid suggestion parameters. All 9 integration
+classes fail their Docker prerequisite because this sandbox cannot access Docker's
+named pipe; the 3 new suggest integration tests compile but remain unexecuted.
+The configured JaCoCo gates pass when invoked separately with
+`./mvnw.cmd -B jacoco:report jacoco:check@check` (74.38% instruction, 91.88% class).
+New API files and changed tests pass repository Checkstyle; the full source check
+still reports 446 existing violations.
+
+## Original status verification and limits
 
 `./mvnw.cmd -B verify -Dqqq.snapshot.version=4.1.0-ARCHRC6-SNAPSHOT` passes
 468 unit tests and JaCoCo, including strict HTTP server startup, permission checks,
