@@ -347,6 +347,34 @@ configured metadata prefix. `QuickSearchApi.APP_NAME` (`quickSearchAdmin`) and
 navigation. Keep detailed runs, failed events, validation and operator tools in the
 qbit's own home. [kof22 migration mapping](docs/STATUS-API-HOST-MIGRATION.md).
 
+## Health checks
+
+The QBit producer registers these checks with QQQ's central health registry. All use
+component `quick_search`, category `SEARCH`, a 60-second interval and a 5-second timeout.
+
+| Name | Kind | Interval | Reports |
+| --- | --- | --- | --- |
+| `quick_search.opensearch` | DEPENDENCY | 60s | Cluster reachability and colour: red is DOWN, yellow is DEGRADED, disabled is UNKNOWN. |
+| `quick_search.backlog` | DEPENDENCY | 60s | DEGRADED for any exhausted events, more than 100 pending events, or paused indexing. |
+| `quick_search.index.<indexName>` | DEPENDENCY | 60s | One check per persisted index row; non-active status, count mismatch, last error or real-time errors are DEGRADED. Disabled indexes are UNKNOWN. |
+
+Index names come from the row's table name, normalized to lowercase health identifiers.
+The supplier refreshes the set through core's normal discovery cycle. Checks reuse the
+five-second status cache and saved validation counts, with waits bounded by the runner's
+deadline. Incomplete measurements never become zero; indexes absent from the bounded
+100-row status snapshot report UNKNOWN. Backlog truncation reports DEGRADED.
+Details contain counts, timestamps and flags, never stored error text or credentials.
+
+The status endpoint, diagnostics widget and record developer panel remain available.
+This integration requires the central health SPI currently installed as QQQ
+`4.1.0-SNAPSHOT`; the POM's released QQQ version is unchanged. For local offline verification:
+
+```powershell
+./mvnw.cmd -o verify -Dqqq.snapshot.version=4.1.0-SNAPSHOT -Denforcer.skipRules=requireReleaseDeps
+```
+
+The final flag exempts only the release-dependency rule for this unreleased core API.
+
 ## Classified data
 
 Quick Search excludes fields classified as **PII** or **PHI**, including fields

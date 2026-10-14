@@ -4,12 +4,13 @@ All notable changes to this project are documented here. The format follows Keep
 
 ## [Unreleased]
 
-Requires QQQ 4.1.0-RC.6 or later (the spec-managed UI API extension contract).
+Requires QQQ's central health SPI (currently local `4.1.0-SNAPSHOT`); the POM's released QQQ pin remains unchanged pending release.
 
 ### Fixed
 - Real-time indexing failures now increase the table's error count by the number of failed events. Successful basepulls and full reindexes reset the count. Counter update failures are logged without failing the source write.
 
 ### Added
+- Central health checks `quick_search.opensearch`, `quick_search.backlog` and the dynamic `quick_search.index.<indexName>` supplier, all SEARCH/DEPENDENCY checks every 60 seconds. Reuses cached diagnostics with deadline-bounded waits and safe count/flag details. Includes registration, state, deadline and credential-sentinel tests.
 - Supported host status API (`api.QuickSearchStatusService.get()`), immutable status values, and `QuickSearchApi` home navigation constants (issue #50/F10). Permission-checked, bounded diagnostics refreshes share a short per-runtime cache and reuse saved validation counts. New spec-managed `GET /qqq/v1/qbit/quick-search/status` (`getQuickSearchStatus`) with committed OpenAPI fragment and strict HTTP/contract tests. RC.6 requires the default `/qbit/quick-search` prefix; `/quick-search` is not permitted by core. Existing routes and wire shapes are unchanged.
 - Record developer panel: `QuickSearchDeveloperPanelProvider` (id `quickSearch`) adds a "Quick Search" panel to the developer view of every record of an indexed table (`/app/{table}/{id}/dev` in the Next UI), for users who may read Quick Search Index. It shows the table's index row (enabled, status, record count, last basepull and full reindex, searchable fields), the latest index run, the record's indexed document compared field by field with the database (Inspect Search Document's comparison; needs `debugPermissionRules`), the record's failed index events, the Inspect Search Document and Reindex in Search actions the user may run, and links to the admin app and the index row. An unreachable OpenSearch shows a warning in the panel. Registered by `QuickSearchDeveloperPanelsMetaDataProducer`.
 
@@ -18,6 +19,9 @@ Requires QQQ 4.1.0-RC.6 or later (the spec-managed UI API extension contract).
 - Admin processes with review and result steps (record or table actions, never in the nav): Add Search Index (the valid create: eligible-table picker, estimated record count, default fields), Apply Search Index Changes (previews field changes, then rebuilds), Disable Search Index and Remove Search Index (delete or keep documents), Cancel Index Run (cooperative cancel between batches; runs end `CANCELLED` with counts), Pause Indexing and Resume Indexing (global pause in the new `quick_search_settings`; search keeps serving, changes are deferred and replayed).
 - `QuickSearchResult.subtitle` and `displayValues` (from `SUBTITLE` and `DISPLAY` fields); document objects `fieldValuesWord`, `fieldValuesEnglish`, `fieldValuesExact`, added to existing indexes' mapping at startup.
 - Possible-value sources `quick_search_eligible_table`, `quick_search_indexable_field`, `quick_search_timestamp_field`, `quick_search_field_role`, `quick_search_field_analyzer`, `quick_search_documents_choice`, `quick_search_config_source`; the join `quick_search_index_join_quick_search_index_field` and the Searchable Fields widget on the index record. Config tables are audited at field level.
+
+### Removed
+- None for central health integration; the status API, diagnostics widget and developer panel are retained.
 
 ### Changed
 - Distinguish protected fields from fields that simply cannot be searched. Boolean, blob and hidden fields no longer trigger result rebuilding or erase record labels. Labels are suppressed only when their source fields are protected; unprotected hidden primary keys and timestamps remain usable.
