@@ -33,6 +33,7 @@ import com.kingsrook.qbits.quicksearch.config.QuickSearchFieldRules;
 import com.kingsrook.qbits.quicksearch.listeners.QuickSearchRecordChangeListener;
 import com.kingsrook.qbits.quicksearch.metadata.QuickSearchAdminAppMetaDataProducer;
 import com.kingsrook.qbits.quicksearch.metadata.QuickSearchDiagnosticsProcessMetaDataHelper;
+import com.kingsrook.qbits.quicksearch.metadata.QuickSearchHelp;
 import com.kingsrook.qbits.quicksearch.metadata.QuickSearchProcessMetaDataHelper;
 import com.kingsrook.qqq.backend.core.exceptions.QException;
 import com.kingsrook.qqq.backend.core.logging.QLogger;
@@ -217,6 +218,11 @@ public class QuickSearchQBitProducer implements QBitMetaDataProducer<QuickSearch
 
       MetaDataProducerMultiOutput output = QBitMetaDataProducer.super.produce(qInstance);
       output.addSelfToInstance(qInstance);
+
+      //////////////////////////////////////////////////////////////////////////
+      // after the tables and app are in the instance: fill their empty help  //
+      //////////////////////////////////////////////////////////////////////////
+      QuickSearchHelp.apply(qInstance, qBitConfig);
 
       return (new MetaDataProducerMultiOutput());
    }
