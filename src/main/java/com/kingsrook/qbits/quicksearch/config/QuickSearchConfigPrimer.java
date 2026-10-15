@@ -412,8 +412,12 @@ public class QuickSearchConfigPrimer
       }
       else
       {
+         ///////////////////////////////////////////////////////////////////////
+         // Only the priming outcome (lastPrimedAt, summary) changes here, on  //
+         // every startup: bookkeeping, not a settings change, so not audited. //
+         ///////////////////////////////////////////////////////////////////////
          values.withValue("id", rows.get(0).getValue("id"));
-         updateAll(settingsTable, List.of(values));
+         updateAll(settingsTable, List.of(values), true);
       }
    }
 
@@ -478,6 +482,17 @@ public class QuickSearchConfigPrimer
     *******************************************************************************/
    public static void updateAll(String tableName, List<QRecord> records) throws QException
    {
+      updateAll(tableName, records, false);
+   }
+
+
+
+   /*******************************************************************************
+    ** Update rows, failing on any record error; omitAudit skips the DML audit
+    ** for runtime bookkeeping writes.
+    *******************************************************************************/
+   public static void updateAll(String tableName, List<QRecord> records, boolean omitAudit) throws QException
+   {
       if(records.isEmpty())
       {
          return;
@@ -485,6 +500,7 @@ public class QuickSearchConfigPrimer
       UpdateInput updateInput = new UpdateInput();
       updateInput.setTableName(tableName);
       updateInput.setRecords(records);
+      updateInput.setOmitDmlAudit(omitAudit);
       for(QRecord record : CollectionUtils.nonNullList(new UpdateAction().execute(updateInput).getRecords()))
       {
          if(CollectionUtils.nullSafeHasContents(record.getErrors()))

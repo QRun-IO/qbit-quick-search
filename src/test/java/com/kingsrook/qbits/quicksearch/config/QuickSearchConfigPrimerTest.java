@@ -21,7 +21,9 @@ import java.util.List;
 import java.util.Map;
 import com.kingsrook.qqq.backend.core.actions.tables.DeleteAction;
 import com.kingsrook.qqq.backend.core.actions.tables.UpdateAction;
+import com.kingsrook.qqq.backend.core.context.QContext;
 import com.kingsrook.qqq.backend.core.exceptions.QException;
+import com.kingsrook.qqq.backend.core.model.audits.AuditsMetaDataProvider;
 import com.kingsrook.qqq.backend.core.model.actions.tables.delete.DeleteInput;
 import com.kingsrook.qqq.backend.core.model.actions.tables.update.UpdateInput;
 import com.kingsrook.qqq.backend.core.model.data.QRecord;
@@ -73,6 +75,38 @@ class QuickSearchConfigPrimerTest extends BaseDataDrivenTest
       assertThat(again.summary()).startsWith("No changes");
       assertThat(rows(QuickSearchIndex.TABLE_NAME)).hasSize(1);
       assertThat(fieldRows(TEST_ENTITY_TABLE)).hasSize(2);
+   }
+
+
+
+   /*******************************************************************************
+    ** Re-priming only records the priming outcome on the settings row: that is
+    ** not audited. An admin settings edit still is.
+    *******************************************************************************/
+   @Test
+   void testRepriming_settingsBookkeepingIsNotAudited() throws QException
+   {
+      new AuditsMetaDataProvider().defineAll(QContext.getQInstance(), TEST_BACKEND_NAME, null);
+      new QuickSearchConfigPrimer(runtime).prime();
+      long afterFirst = settingsEditAudits();
+      new QuickSearchConfigPrimer(runtime).prime();
+      assertThat(settingsEditAudits()).as("re-priming is not audited").isEqualTo(afterFirst);
+
+      new UpdateAction().execute(new UpdateInput().withTableName(QuickSearchSettings.TABLE_NAME)
+         .withRecord(new QRecord().withValue("id", QuickSearchSettings.SETTINGS_ID).withValue("indexingPaused", true)));
+      assertThat(settingsEditAudits()).as("an admin settings edit is audited").isEqualTo(afterFirst + 1);
+   }
+
+
+
+   /*******************************************************************************
+    ** Audit rows recording an edit of the settings row.
+    *******************************************************************************/
+   private long settingsEditAudits() throws QException
+   {
+      return (rows(AuditsMetaDataProvider.TABLE_NAME_AUDIT).stream()
+         .filter(audit -> audit.getValueString("message") != null && audit.getValueString("message").contains("Edited"))
+         .count());
    }
 
 

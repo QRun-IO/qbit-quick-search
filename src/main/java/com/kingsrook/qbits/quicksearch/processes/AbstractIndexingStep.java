@@ -493,7 +493,10 @@ public abstract class AbstractIndexingStep implements BackendStep
 
 
    /*******************************************************************************
-    ** Update fields on a quick_search_index row.
+    ** Update runtime state on a quick_search_index row (status, last run, last
+    ** basepull time, document count). Indexing bookkeeping, not a configuration
+    ** change: it is not record-audited, or every basepull tick would write an
+    ** audit row. Admin edits to the row go through the table and stay audited.
     *******************************************************************************/
    protected void updateIndexRow(Integer indexId, Map<String, ? extends Serializable> values) throws QException
    {
@@ -506,6 +509,7 @@ public abstract class AbstractIndexingStep implements BackendStep
       UpdateInput updateInput = new UpdateInput();
       updateInput.setTableName(getConfig().getQuickSearchIndexTableName());
       updateInput.setRecords(List.of(record));
+      updateInput.setOmitDmlAudit(true);
       QuickSearchConfigWrites.asSystem(() -> new UpdateAction().execute(updateInput));
    }
 

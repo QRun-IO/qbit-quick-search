@@ -7,6 +7,7 @@ All notable changes to this project are documented here. The format follows Keep
 Requires QQQ 4.1.0-RC.8 or later (central health checks, help bundles and the spec-managed UI API extension contract).
 
 ### Fixed
+- Indexing bookkeeping is no longer record-audited: the `quick_search_index` runtime fields written by basepull, full reindex and real-time indexing (status, last basepull time, document count, last run, real-time error count) and the settings row's priming outcome (`lastPrimedAt`, summary) are written with `omitDmlAudit`. On a production host these wrote about 470 "Record was Edited during process: Update search index" audit rows an hour. Admin edits to an index, its fields or the settings are still audited.
 - Real-time indexing failures now increase the table's error count by the number of failed events. Successful basepulls and full reindexes reset the count. Counter update failures are logged without failing the source write.
 
 ### Added
