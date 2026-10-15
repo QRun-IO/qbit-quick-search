@@ -2,6 +2,10 @@
 
 All notable changes to this project are documented here. The format follows Keep a Changelog; versions follow semantic versioning.
 
+## Release note correction (1.1.0-RC.11)
+
+1.1.0-RC.11 (Maven Central, 2026-10-15 13:05Z) was built from release/1.1 `2e2501d` and contains #61 only. The `v1.1.0-RC.11` tag mistakenly points at `6028a66`; use `2e2501d` as RC.11's source. Cluster caches (#62) first ship in 1.1.0-RC.12.
+
 ## [Unreleased]
 
 Requires QQQ 4.1.0-RC.8 or later (central health checks, help bundles and the spec-managed UI API extension contract), and a QQQ 4.1 build with `ClusterCaches` for multi-node deployments (the pom builds against 4.1.0-SNAPSHOT until the next QQQ RC; a release must pin that RC).
