@@ -362,6 +362,14 @@ class QuickSearchStatusTest
          assertThat(anonymous.statusCode()).as(anonymous.body()).isEqualTo(403);
          var denied = client.send(HttpRequest.newBuilder(URI.create(url)).header("Cookie", "sessionUUID=reader-" + suffix).GET().build(), HttpResponse.BodyHandlers.ofString());
          assertThat(denied.statusCode()).as(denied.body()).isEqualTo(403);
+         for(var forbidden : List.of(anonymous, denied))
+         {
+            var error = new ObjectMapper().readTree(forbidden.body());
+            assertThat(error.path("error").asText()).isNotBlank();
+            assertThat(error.path("message")).isEqualTo(error.path("error"));
+            assertThat(error.path("code").asText()).isEqualTo("PERMISSION_DENIED");
+            assertThat(error.path("traceId").asText()).isNotBlank();
+         }
          String suggestUrl = "http://127.0.0.1:" + port + "/qqq/v1/qbit/quick-search/suggest";
          for(String query : List.of("?q=x", "?q=%20x%20", "?q=wi&tables=unknown", "?q=wi&tables=", "?q=wi"))
          {
@@ -378,7 +386,11 @@ class QuickSearchStatusTest
             var invalid = client.send(HttpRequest.newBuilder(URI.create(suggestUrl + query))
                .header("Cookie", "sessionUUID=reader-" + suffix).GET().build(), HttpResponse.BodyHandlers.ofString());
             assertThat(invalid.statusCode()).as(invalid.body()).isEqualTo(400);
-            assertThat(new ObjectMapper().readTree(invalid.body()).path("error").isTextual()).isTrue();
+            var error = new ObjectMapper().readTree(invalid.body());
+            assertThat(error.path("error").asText()).isNotBlank();
+            assertThat(error.path("message")).isEqualTo(error.path("error"));
+            assertThat(error.path("code").asText()).isEqualTo("BAD_REQUEST");
+            assertThat(error.path("traceId").asText()).isNotBlank();
          }
          var openapi = client.send(HttpRequest.newBuilder(URI.create("http://127.0.0.1:" + port + "/qqq/v1/openapi.yaml")).GET().build(), HttpResponse.BodyHandlers.ofString());
          assertThat(openapi.body()).contains("/qqq/v1/qbit/quick-search/status", "QuickSearchStatusV1",

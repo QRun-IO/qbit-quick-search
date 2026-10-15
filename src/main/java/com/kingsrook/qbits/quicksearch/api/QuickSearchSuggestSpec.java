@@ -27,6 +27,7 @@ import java.util.TreeMap;
 import com.kingsrook.qqq.middleware.javalin.specs.BasicOperation;
 import com.kingsrook.qqq.middleware.javalin.specs.BasicResponse;
 import com.kingsrook.qqq.middleware.javalin.specs.extensions.AbstractJsonEndpointSpec;
+import com.kingsrook.qqq.middleware.javalin.specs.v1.responses.BasicErrorResponseV1;
 import com.kingsrook.qqq.openapi.model.HttpMethod;
 import com.kingsrook.qqq.openapi.model.In;
 import com.kingsrook.qqq.openapi.model.Method;
@@ -115,9 +116,9 @@ public class QuickSearchSuggestSpec extends AbstractJsonEndpointSpec
    @Override
    public List<BasicResponse> defineAdditionalBasicResponses()
    {
-      return (List.of(new BasicResponse(HttpStatus.BAD_REQUEST, "Missing q, normalized term longer than 100 characters, or invalid limits", "QuickSearchErrorV1"),
-         new BasicResponse(HttpStatus.UNAUTHORIZED, "Sign in required", "QuickSearchErrorV1"),
-         new BasicResponse(HttpStatus.FORBIDDEN, "Session permission denied", "QuickSearchErrorV1")));
+      return (List.of(new BasicResponse(HttpStatus.BAD_REQUEST, "Missing q, normalized term longer than 100 characters, or invalid limits", BasicErrorResponseV1.class.getSimpleName()),
+         new BasicResponse(HttpStatus.UNAUTHORIZED, "Sign in required", BasicErrorResponseV1.class.getSimpleName()),
+         new BasicResponse(HttpStatus.FORBIDDEN, "Session permission denied", BasicErrorResponseV1.class.getSimpleName())));
    }
 
 
