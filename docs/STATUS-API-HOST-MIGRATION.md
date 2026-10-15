@@ -34,7 +34,7 @@ group has `tableName`, `tableLabel`, `hasMore` and `items` of `recordId`, `label
 and nullable `subtitle`. See the [API details](../README.md#typeahead-suggestions)
 for normalization, bounded-batch semantics and empty responses during outages.
 
-Extension: `quick-search`, version `1.0.0`; core dependency: `4.1.0-RC.6`.
+Extension: `quick-search`, version `1.1.0`; core dependency: `4.1.0-RC.14` (UI API `1.6.0`).
 The requested `/quick-search` prefix cannot validate on the supplied RC.6 baseline:
 `MiddlewareSpecExtensionsMetaData.ESTABLISHED_PREFIXES` only admits esb, alerts,
 assistant, and sql-workbench. We use the default namespace without modifying core.

@@ -358,7 +358,7 @@ String homeHref = status.homeHref();
 ```
 
 UI clients use **`GET /qqq/v1/qbit/quick-search/status`**, operationId
-`getQuickSearchStatus`, extension `quick-search` version `1.0.0`. The endpoint returns
+`getQuickSearchStatus`, extension `quick-search` version `1.1.0` (requires QQQ `4.1.0-RC.14`, UI API `1.6.0`). The endpoint returns
 that same immutable value as JSON; it requires the Quick Search app's configured
 `adminPermissionRules` (default `quick_search_admin.hasAccess`). Permission is checked
 before every read, including cache hits. No additional source-table permissions are

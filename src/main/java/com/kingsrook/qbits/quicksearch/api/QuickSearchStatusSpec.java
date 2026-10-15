@@ -27,6 +27,7 @@ import java.util.TreeMap;
 import com.kingsrook.qqq.middleware.javalin.specs.BasicOperation;
 import com.kingsrook.qqq.middleware.javalin.specs.BasicResponse;
 import com.kingsrook.qqq.middleware.javalin.specs.extensions.AbstractJsonEndpointSpec;
+import com.kingsrook.qqq.middleware.javalin.specs.v1.responses.BasicErrorResponseV1;
 import com.kingsrook.qqq.openapi.model.HttpMethod;
 import com.kingsrook.qqq.openapi.model.Method;
 import com.kingsrook.qqq.openapi.model.Parameter;
@@ -103,9 +104,9 @@ public class QuickSearchStatusSpec extends AbstractJsonEndpointSpec
    @Override
    public List<BasicResponse> defineAdditionalBasicResponses()
    {
-      return (List.of(new BasicResponse(HttpStatus.BAD_REQUEST, "Diagnostic rate limit exceeded", "QuickSearchErrorV1"),
-         new BasicResponse(HttpStatus.UNAUTHORIZED, "Sign in required", "QuickSearchErrorV1"),
-         new BasicResponse(HttpStatus.FORBIDDEN, "Quick Search admin permission required", "QuickSearchErrorV1")));
+      return (List.of(new BasicResponse(HttpStatus.BAD_REQUEST, "Diagnostic rate limit exceeded", BasicErrorResponseV1.class.getSimpleName()),
+         new BasicResponse(HttpStatus.UNAUTHORIZED, "Sign in required", BasicErrorResponseV1.class.getSimpleName()),
+         new BasicResponse(HttpStatus.FORBIDDEN, "Quick Search admin permission required", BasicErrorResponseV1.class.getSimpleName())));
    }
 
 
@@ -147,7 +148,8 @@ public class QuickSearchStatusSpec extends AbstractJsonEndpointSpec
       row.put("lastError", field(Type.STRING, "Persisted indexing error; null when absent.", true));
       row.put("realTimeErrorCount", field(Type.INTEGER, "Persisted real-time indexing error count.", true));
       return (Map.of("QuickSearchStatusV1", object(status), "QuickSearchIndexStatusV1", object(row),
-         "QuickSearchErrorV1", object(Map.of("error", field(Type.STRING, "Framework error message.", false)))));
+         "QuickSearchErrorV1", object(Map.of("error", field(Type.STRING, "Framework error message.", false)))
+            .withDescription("Deprecated since 1.1.0: errors use BasicErrorResponseV1.")));
    }
 
 
