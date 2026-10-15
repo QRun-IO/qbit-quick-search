@@ -4,7 +4,7 @@
 
 - [x] Bump `quick-search` extension to 1.1.0, retain deprecated `QuickSearchErrorV1`, and use core `BasicErrorResponseV1` for errors; preserve operation IDs and success payloads.
 - [x] Regenerate the two-operation contract with `-Dquicksearch.openapi.update=true`, then pass the contract test without regeneration; no dangling references or separate baseline were found.
-- [x] Set the release BOM default to QQQ `4.1.0-RC.14`; validate offline against the locally installed `4.1.99-SNAPSHOT` using `./mvnw.cmd -o test -Dqqq.snapshot.version=4.1.99-SNAPSHOT -Denforcer.skipRules=requireReleaseDeps` (540 tests, no failures/errors/skips). The command-line exception is needed only because the requested local core is a SNAPSHOT; other guardrails remain enabled.
+- [x] Set the release BOM default to QQQ `4.1.0-RC.15`; validate offline against the locally installed `4.1.99-SNAPSHOT` using `./mvnw.cmd -o test -Dqqq.snapshot.version=4.1.99-SNAPSHOT -Denforcer.skipRules=requireReleaseDeps` (540 tests, no failures/errors/skips). The command-line exception is needed only because the requested local core is a SNAPSHOT; other guardrails remain enabled.
 - [x] Verify strengthened HTTP error-body assertions: 8 status/HTTP tests passed after the full suite.
 - [ ] Run Docker integration tests through `verify` in CI; this migration ran the requested `test` lifecycle.
 
