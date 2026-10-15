@@ -334,6 +334,8 @@ public class QuickSearchRecordChangeListener implements RecordChangeListenerInte
             updateInput.setTableName(indexTable);
             updateInput.setRecords(List.of(new QRecord().withValue("id", row.getValue("id"))
                .withValue("realTimeErrorCount", Math.addExact(previous == null ? 0 : previous, entry.getValue()))));
+            // A runtime counter, not a configuration change: not record-audited.
+            updateInput.setOmitDmlAudit(true);
             List<QRecord> updated = QuickSearchConfigWrites.asSystem(() -> new UpdateAction().execute(updateInput)).getRecords();
             if(CollectionUtils.nullSafeIsEmpty(updated) || CollectionUtils.nullSafeHasContents(updated.get(0).getErrors()))
             {
