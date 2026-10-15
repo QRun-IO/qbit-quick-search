@@ -8,7 +8,7 @@ All notable changes to this project are documented here. The format follows Keep
 
 ## [Unreleased]
 
-Requires QQQ 4.1.0-RC.8 or later (central health checks, help bundles and the spec-managed UI API extension contract), and a QQQ 4.1 build with `ClusterCaches` for multi-node deployments (the pom builds against 4.1.0-SNAPSHOT until the next QQQ RC; a release must pin that RC).
+Requires QQQ 4.1.0-RC.15 or later (central health checks, help bundles, the spec-managed UI API extension contract, and `ClusterCaches` for multi-node deployments).
 
 ### Fixed
 - Multi-node deployments: a Quick Search config change (an index row, its fields or the settings row, from the admin UI or a config process) now clears the cached config on every node, not only the node that made the change. The runtime's config cache (the config store snapshot and settings, and the per-table enabled flags) is registered with QQQ `ClusterCaches` as `qbit-quick-search.config`, and `QuickSearchRuntime.invalidateConfig()` publishes a cluster invalidation. The 30 s and 60 s TTLs remain as the safety net. `QuickSearchFieldRules`' warn-once table set is registered as node-local. `QuickSearchClusterCachesTest` audits the package for unregistered static caches and covers a remote invalidation.
@@ -16,6 +16,7 @@ Requires QQQ 4.1.0-RC.8 or later (central health checks, help bundles and the sp
 - Real-time indexing failures now increase the table's error count by the number of failed events. Successful basepulls and full reindexes reset the count. Counter update failures are logged without failing the source write.
 
 ### Added
+- UI API extension quick-search 1.1.0 (requires QQQ 4.1.0-RC.15, UI API 1.6.0): operationIds, standard error responses with BasicErrorResponseV1, extension tags, and retained deprecated QuickSearchErrorV1 schema. Existing operationIds and success payloads are preserved.
 - Central health checks `quick_search.opensearch`, `quick_search.backlog` and the dynamic `quick_search.index.<indexName>` supplier, all SEARCH/DEPENDENCY checks every 60 seconds. Reuses cached diagnostics with deadline-bounded waits and safe count/flag details. Includes registration, state, deadline and credential-sentinel tests.
 - Host-neutral `help/qbit-quick-search.yaml` bundle, registered through QQQ help bundles, with coverage and no-help-table tests. Replaces the temporary inline help loader; hosts can override entries with a HOST bundle.
 - Every `quick_search_*` table and the Quick Search Admin app carry help that says what the table is for and how its rows get created (`help/quick-search.yaml`, QQQ help-bundle format, applied by `QuickSearchHelp` as a stand-in for core help bundles; host help is never overridden). `QuickSearchTablesGuardrailTest` fails when a table is unused by runtime code, neither primed nor listed as starting empty, or has no such help; `QuickSearchSeededDefaultsTest` proves priming populates the config tables on a fresh backend, is idempotent and keeps admin edits.
