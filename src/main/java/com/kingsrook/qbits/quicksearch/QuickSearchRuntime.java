@@ -23,6 +23,8 @@ import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
+import java.util.WeakHashMap;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicLong;
@@ -34,6 +36,7 @@ import com.kingsrook.qbits.quicksearch.opensearch.QuickSearchOpenSearchClient;
 import com.kingsrook.qbits.quicksearch.publisher.IndexEventPublisher;
 import com.kingsrook.qbits.quicksearch.publisher.SynchronousIndexEventPublisher;
 import com.kingsrook.qqq.backend.core.actions.tables.QueryAction;
+import com.kingsrook.qqq.backend.core.cluster.ClusterCaches;
 import com.kingsrook.qqq.backend.core.context.QContext;
 import com.kingsrook.qqq.backend.core.exceptions.QException;
 import com.kingsrook.qqq.backend.core.logging.QLogger;
@@ -69,6 +72,17 @@ public class QuickSearchRuntime
    private static final QLogger LOG = QLogger.getLogger(QuickSearchRuntime.class);
 
    private static final long ENABLED_CACHE_TTL_MILLIS = 60_000L;
+
+   /*******************************************************************************
+    ** Cluster cache name for every runtime's config cache (the config store's
+    ** snapshot and settings, and the enabled flags). A config row edited on
+    ** one node clears it on every node; the TTLs remain the safety net.
+    *******************************************************************************/
+   public static final String CONFIG_CACHE_NAME = "qbit-quick-search.config";
+
+   private static final Set<QuickSearchRuntime> RUNTIMES = ClusterCaches.shared(CONFIG_CACHE_NAME,
+      Collections.synchronizedSet(Collections.newSetFromMap(new WeakHashMap<>())),
+      QuickSearchRuntime::invalidateAllLocal, null);
 
    public static final long RECORD_SEARCH_BACKOFF_MILLIS = 30_000L;
 
@@ -128,6 +142,7 @@ public class QuickSearchRuntime
    {
       this.config      = config;
       this.configStore = new QuickSearchConfigStore(this);
+      RUNTIMES.add(this);
    }
 
 
@@ -261,12 +276,43 @@ public class QuickSearchRuntime
 
 
    /*******************************************************************************
-    ** Drop every cached config (a config row changed).
+    ** Drop every cached config (a config row changed): on this node now, and
+    ** on the other nodes through the cluster bus.
     *******************************************************************************/
    public void invalidateConfig()
    {
+      invalidateConfigLocal();
+      ClusterCaches.invalidate(CONFIG_CACHE_NAME);
+   }
+
+
+
+   /*******************************************************************************
+    ** Drop this runtime's cached config on this node only.
+    *******************************************************************************/
+   void invalidateConfigLocal()
+   {
       configStore.invalidate();
       enabledCache.clear();
+   }
+
+
+
+   /*******************************************************************************
+    ** Drop the cached config of every live runtime on this node (a cluster
+    ** invalidation arrived).
+    *******************************************************************************/
+   private static void invalidateAllLocal()
+   {
+      List<QuickSearchRuntime> runtimes;
+      synchronized(RUNTIMES)
+      {
+         runtimes = new ArrayList<>(RUNTIMES);
+      }
+      for(QuickSearchRuntime runtime : runtimes)
+      {
+         runtime.invalidateConfigLocal();
+      }
    }
 
 
@@ -418,6 +464,16 @@ public class QuickSearchRuntime
    public void clearBuildFailure(String tableName)
    {
       buildFailures.remove(tableName);
+   }
+
+
+
+   /*******************************************************************************
+    ** How many enabled flags are cached (for tests).
+    *******************************************************************************/
+   int getCachedEnabledFlagCount()
+   {
+      return (enabledCache.size());
    }
 
 
@@ -741,6 +797,7 @@ public class QuickSearchRuntime
          return;
       }
       closed = true;
+      RUNTIMES.remove(this);
       statusCache.close();
 
       if(publisher != null)

@@ -4,9 +4,10 @@ All notable changes to this project are documented here. The format follows Keep
 
 ## [Unreleased]
 
-Requires QQQ 4.1.0-RC.8 or later (central health checks, help bundles and the spec-managed UI API extension contract).
+Requires QQQ 4.1.0-RC.8 or later (central health checks, help bundles and the spec-managed UI API extension contract), and a QQQ 4.1 build with `ClusterCaches` for multi-node deployments (the pom builds against 4.1.0-SNAPSHOT until the next QQQ RC; a release must pin that RC).
 
 ### Fixed
+- Multi-node deployments: a Quick Search config change (an index row, its fields or the settings row, from the admin UI or a config process) now clears the cached config on every node, not only the node that made the change. The runtime's config cache (the config store snapshot and settings, and the per-table enabled flags) is registered with QQQ `ClusterCaches` as `qbit-quick-search.config`, and `QuickSearchRuntime.invalidateConfig()` publishes a cluster invalidation. The 30 s and 60 s TTLs remain as the safety net. `QuickSearchFieldRules`' warn-once table set is registered as node-local. `QuickSearchClusterCachesTest` audits the package for unregistered static caches and covers a remote invalidation.
 - Indexing bookkeeping is no longer record-audited: the `quick_search_index` runtime fields written by basepull, full reindex and real-time indexing (status, last basepull time, document count, last run, real-time error count) and the settings row's priming outcome (`lastPrimedAt`, summary) are written with `omitDmlAudit`. On a production host these wrote about 470 "Record was Edited during process: Update search index" audit rows an hour. Admin edits to an index, its fields or the settings are still audited.
 - Real-time indexing failures now increase the table's error count by the number of failed events. Successful basepulls and full reindexes reset the count. Counter update failures are logged without failing the source write.
 
