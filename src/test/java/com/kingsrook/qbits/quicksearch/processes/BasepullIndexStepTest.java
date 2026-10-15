@@ -29,6 +29,7 @@ import com.kingsrook.qqq.backend.core.actions.tables.InsertAction;
 import com.kingsrook.qqq.backend.core.actions.tables.QueryAction;
 import com.kingsrook.qqq.backend.core.actions.tables.UpdateAction;
 import com.kingsrook.qqq.backend.core.context.QContext;
+import com.kingsrook.qqq.backend.core.model.audits.AuditsMetaDataProvider;
 import com.kingsrook.qqq.backend.core.exceptions.QException;
 import com.kingsrook.qqq.backend.core.logging.QCollectingLogger;
 import com.kingsrook.qqq.backend.core.logging.QLogger;
@@ -320,6 +321,45 @@ class BasepullIndexStepTest extends BaseQuickSearchTest
       QueryInput input = new QueryInput();
       input.setTableName(QuickSearchIndex.TABLE_NAME);
       assertThat(new QueryAction().execute(input).getRecords().get(0).getValueInteger("realTimeErrorCount")).isZero();
+   }
+
+
+
+   /*******************************************************************************
+    ** Basepull bookkeeping on the index row (status, lastBasepullTime,
+    ** documentCount, last run) writes no audit; an admin edit of the same row
+    ** is still audited.
+    *******************************************************************************/
+   @Test
+   void testBasepullBookkeeping_isNotAudited_adminEditIs() throws QException
+   {
+      if(QContext.getQInstance().getTable(AuditsMetaDataProvider.TABLE_NAME_AUDIT) == null)
+      {
+         new AuditsMetaDataProvider().defineAll(QContext.getQInstance(), TEST_BACKEND_NAME, null);
+      }
+      insertTestEntities(3);
+      QRecord row = insertIndexRow(TEST_ENTITY_TABLE, true, null, 5);
+      when(mockClient.countDocumentsForTable(TEST_ENTITY_TABLE)).thenReturn(3L);
+
+      new BasepullIndexStep().run(new RunBackendStepInput(), new RunBackendStepOutput());
+      assertThat(queryAll(QuickSearchIndex.TABLE_NAME).get(0).getValueInteger("documentCount")).isEqualTo(3);
+      assertThat(indexRowEditAudits()).as("basepull bookkeeping is not audited").isZero();
+
+      new UpdateAction().execute(new UpdateInput().withTableName(QuickSearchIndex.TABLE_NAME)
+         .withRecord(new QRecord().withValue("id", row.getValue("id")).withValue("basepullIntervalMinutes", 15)));
+      assertThat(indexRowEditAudits()).as("an admin configuration edit is audited").isEqualTo(1);
+   }
+
+
+
+   /*******************************************************************************
+    ** Audit rows recording an edit of a quick_search_index row.
+    *******************************************************************************/
+   private long indexRowEditAudits() throws QException
+   {
+      return (queryAll(AuditsMetaDataProvider.TABLE_NAME_AUDIT).stream()
+         .filter(audit -> audit.getValueString("message") != null && audit.getValueString("message").contains("Edited"))
+         .count());
    }
 
 
