@@ -29,6 +29,7 @@ import com.kingsrook.qqq.backend.core.actions.ai.AiDataClassifications;
 import com.kingsrook.qqq.backend.core.actions.ai.DataClassification;
 import com.kingsrook.qqq.backend.core.actions.permissions.PermissionsHelper;
 import com.kingsrook.qqq.backend.core.actions.permissions.TablePermissionSubType;
+import com.kingsrook.qqq.backend.core.cluster.ClusterCaches;
 import com.kingsrook.qqq.backend.core.context.QContext;
 import com.kingsrook.qqq.backend.core.logging.QLogger;
 import com.kingsrook.qqq.backend.core.model.actions.tables.query.QueryInput;
@@ -59,7 +60,8 @@ import com.kingsrook.qbits.quicksearch.model.QuickSearchFieldRole;
 public final class QuickSearchFieldRules
 {
    private static final QLogger LOG = QLogger.getLogger(QuickSearchFieldRules.class);
-   private static final WeakHashMap<QTableMetaData, Boolean> WARNED_TABLES = new WeakHashMap<>();
+   private static final WeakHashMap<QTableMetaData, Boolean> WARNED_TABLES = ClusterCaches.nodeLocal(new WeakHashMap<>(),
+      "warn-once log de-duplication for this node's table metadata objects");
 
    public static final int MAX_DEFAULT_FIELDS = 20;
    public static final int TITLE_WEIGHT       = 3;
