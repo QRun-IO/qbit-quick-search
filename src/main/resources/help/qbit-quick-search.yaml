@@ -1,0 +1,552 @@
+bundle: qbit-quick-search
+version: ${project.version}
+layer: QBIT
+entries:
+- key: app:quickSearchAdmin;slot:help
+  summary: Control which tables feed the site search, how their fields are weighted, and whether the search index is healthy.
+  content: |
+    Quick Search keeps a copy of chosen tables and fields in a search engine so the global search box finds records fast and ranks them by relevance. Search applies your table permissions and, when enabled by your application, record security checks.
+
+    Use **{{label:quick_search_index}}** to add or disable tables, **{{label:quick_search_index_field}}** to tune which fields count and how much, and the run, failed-event and diagnostic tables to see how indexing is going. Tools such as Search Playground and Validate Search Index are actions on the index list.
+
+    Your application controls whether indexing and validation run on a schedule. You can also run these actions manually.
+- key: table:quick_search_index;slot:help
+  summary: One row per table that the site search covers, with its schedule, status and when it was last updated.
+  content: |
+    **How rows get created:** automatically. On startup the qbit adds a row for every table declared searchable in code (from your application settings) and queues its first build. Add a table yourself with the Add Search Index action; Disable or Remove Search Index stops indexing it. A table you removed is remembered (Removed Config) and not added back. Change the interval or the fields, then run Apply Search Index Changes to rebuild.
+
+    This is the control panel for search. Each row says whether a table is searchable, how often it is checked for changes, and where indexing stands (for example up to date, building, or needing a rebuild).
+
+    Use the list actions to **{{label:quickSearchAddIndex}}**, and on selected rows **{{label:quickSearchApplyIndexChanges}}**, **{{label:quickSearchDisableIndex}}** or **{{label:quickSearchRemoveIndex}}**. Diagnostic tools such as **{{label:quickSearchPlayground}}**, **{{label:quickSearchValidateIndex}}** and **{{label:quickSearchAnalyzeText}}** also start here. You cannot create or delete rows with the standard screens.
+
+    **Searchable Fields** (on the record) lists which fields count and how heavily; **Recent Runs** lists the latest indexing runs.
+
+    Edit access needs the Quick Search permissions; diagnostics are read-only except rebuilding a record's search entry.
+- key: table:quick_search_index;section:identity
+  summary: The table, whether it is searchable, its status and how often it is checked for changes.
+- key: table:quick_search_index;section:fields
+  summary: The fields of this table that are searched, each with its weight and matching style.
+- key: table:quick_search_index;section:runs
+  summary: The most recent indexing runs for this table.
+- key: table:quick_search_index;section:activity
+  summary: When the table was last updated, reconciled and rebuilt, plus record and document counts and errors.
+- key: table:quick_search_index;section:origin
+  summary: Whether this row came from the code defaults or was added by an owner, and the fields as last built.
+- key: table:quick_search_index;field:tableName
+  summary: The table whose records are searchable.
+  content: |
+    Set when the index is created and cannot be changed afterwards. Remove the index and add it again to switch tables.
+- key: table:quick_search_index;field:enabled
+  summary: Turns search on or off for this table.
+  content: |
+    Turning it off stops indexing straight away. Turning a disabled table back on queues a fresh build. For a one-off clean-up use **{{label:quickSearchDisableIndex}}**, which also lets you choose whether to delete the search documents.
+- key: table:quick_search_index;field:basepullIntervalMinutes
+  summary: The least time, in minutes, between scheduled checks for changed records in this table.
+  content: |
+    When scheduled updates are enabled, a table is checked only after this interval has passed. Real-time indexing, when enabled, also sends new and changed records after they are saved.
+- key: table:quick_search_index;field:basepullTimestampField
+  summary: The date field used to find records changed since the last check; usually the modified date.
+  content: |
+    Leave it blank if the table has no such field. You can keep it current with reconciliation and, when enabled, real-time updates instead of incremental checks.
+- key: table:quick_search_index;field:source
+  summary: Where this row came from.
+  content: |
+    - **Code default**: seeded from the application's built-in search settings.
+    - **Added by owner**: created with **{{label:quickSearchAddIndex}}**.
+- key: table:quick_search_index;field:ownerEdited
+  summary: Yes once an owner has changed this row, so the built-in defaults never overwrite it.
+- key: table:quick_search_index;field:searchableFieldsJson
+  summary: The field list that was in force when this table's search was last built, for spotting changes since.
+  content: |
+    Read-only. If it differs from **Searchable Fields**, the table needs **{{label:quickSearchApplyIndexChanges}}**.
+- key: table:quick_search_index;field:lastBasepullTime
+  summary: When the scheduled change check last ran for this table.
+- key: table:quick_search_index;field:lastFullReindexTime
+  summary: When this table was last completely rebuilt.
+- key: table:quick_search_index;field:lastReconcileTime
+  summary: When the last reconcile finished, which re-indexes everything and removes documents whose record is gone.
+- key: table:quick_search_index_field;slot:help
+  summary: One searchable field of an index, with its weight, role and matching style.
+  content: |
+    **How rows get created:** automatically, with the index row, from the field annotations or the host's field list. Edit a weight to make matches in that field rank higher, or add a field by hand; your edits are kept and never overwritten by startup. Run Apply Search Index Changes so existing search documents reflect your changes.
+
+    Add, edit or remove fields from the **Searchable Fields** list on a **{{label:quick_search_index}}** record. A field must exist on the table, be indexable (hidden and sensitive fields never are) and appear only once per index.
+
+    Changes affect new searches and real-time updates at once, and mark the index as needing a rebuild so existing documents catch up. Run **{{label:quickSearchApplyIndexChanges}}** to preview and rebuild. Deleting a field is remembered, so the built-in defaults do not bring it back.
+- key: table:quick_search_index_field;section:identity
+  summary: Which index and field this is, and how much it counts and in what role.
+- key: table:quick_search_index_field;section:matching
+  summary: How the field is analyzed, whether it shows in snippets, and its display order.
+- key: table:quick_search_index_field;section:origin
+  summary: Whether the field came from code defaults or an owner, and when it was created and changed.
+- key: table:quick_search_index_field;field:quickSearchIndexId
+  summary: The index this field belongs to.
+- key: table:quick_search_index_field;field:fieldName
+  summary: The table field to search. Only indexable, non-sensitive fields are offered.
+  content: |
+    Required. Each field can be listed once per index.
+- key: table:quick_search_index_field;field:weight
+  summary: How much a match in this field counts toward ranking, from 1 to 1000. Higher ranks higher.
+  content: |
+    Defaults to {{default:quick_search_index_field.weight}}. Give titles and names higher weights than long body text.
+- key: table:quick_search_index_field;field:role
+  summary: What the field is used for in search results.
+  content: |
+    - **T1 display**: shown as the hit's short details.
+    - **Title**: becomes the hit's main label.
+    - **Subtitle**: shown under the title.
+    - **Body**: ordinary searchable text. Default: {{default:quick_search_index_field.role}}.
+    - **Keyword**: matched on its own and kept out of the highlighted snippet.
+    - **Exact**: matched on its own, as an exact value, and kept out of the snippet.
+- key: table:quick_search_index_field;field:analyzer
+  summary: How the field's text is split up for matching; leave blank to choose by role.
+  content: |
+    - **Prefix (as you type)**: matches the start of words, so partial words find results.
+    - **Whole words**: only complete words match.
+    - **English (stemmed)**: also matches word forms, such as plural and singular.
+    - **Exact value**: the whole value must match.
+    Changing it marks the table for a rebuild.
+- key: table:quick_search_index_field;field:includeInSnippet
+  summary: Whether matches in this field are shown in the highlighted snippet; blank follows the role.
+  content: |
+    Keyword and Exact fields stay out of snippets by default.
+- key: table:quick_search_index_field;field:includeLabel
+  summary: Adds the field's label to its text when indexed, so searching for the label also finds the record.
+  content: |
+    Default {{default:quick_search_index_field.includeLabel}}.
+- key: table:quick_search_index_field;field:sortOrder
+  summary: The order the fields are listed and combined in. Lower numbers come first.
+- key: table:quick_search_index_field;field:source
+  summary: Where this field row came from.
+  content: |
+    - **Code default**: seeded from the application's built-in search settings.
+    - **Added by owner**: added by an administrator.
+- key: table:quick_search_index_field;field:ownerEdited
+  summary: Yes once an owner has changed this field, so built-in defaults never overwrite it.
+- key: table:quick_search_index_run;slot:help
+  summary: 'A history entry for one indexing run: what kind it was, how it ended and how many records it handled.'
+  content: |
+    **How rows get created:** automatically. Each Full Reindex, Basepull (the scheduled refresh) and Reconcile writes a row, and the first build of a new index writes the first one. Nothing to set up. Cancel Index Run stops one that is still running. Old rows are purged after the run history retention period.
+
+    Runs are written by the system as indexing happens and are purged after the configured history retention period. A run can be an update (changed records), a reconcile (re-index everything and remove leftovers) or a full rebuild.
+
+    To stop a rebuild that is still running, select the run and use **{{label:quickSearchCancelRun}}**. It stops after its current batch and ends as Cancelled with its counts.
+- key: table:quick_search_index_run;section:run
+  summary: Which index, what kind of run, its status and when it started and ended.
+- key: table:quick_search_index_run;section:counts
+  summary: How many records were processed, indexed and failed, and any error text.
+- key: table:quick_search_index_run;section:cancel
+  summary: Whether a cancel was requested for this run and by whom.
+- key: table:quick_search_index_run;section:dates
+  summary: When the run was created and when it last reported progress.
+- key: table:quick_search_index_run;field:quickSearchIndexId
+  summary: The index (table) this run worked on.
+- key: table:quick_search_index_run;field:runType
+  summary: What kind of run it was.
+  content: |
+    - **Update (basepull)**: re-indexes records changed since the last check and retries failed events.
+    - **Reconcile**: re-indexes everything in place, then removes documents whose record is gone.
+    - **Full reindex / build**: builds the table from scratch, either into a fresh index or as a first build.
+- key: table:quick_search_index_run;field:status
+  summary: How the run is going or ended.
+  content: |
+    - **Running**: in progress.
+    - **Completed**: finished.
+    - **Failed**: stopped by an error (see Error).
+    - **Cancelled**: stopped by an owner using Cancel Index Run.
+- key: table:quick_search_index_run;field:startTime
+  summary: When the run started.
+- key: table:quick_search_index_run;field:endTime
+  summary: When the run finished; blank while it is still running.
+- key: table:quick_search_index_run;field:recordsProcessed
+  summary: How many source records the run looked at.
+- key: table:quick_search_index_run;field:recordsIndexed
+  summary: How many records were written to the search engine.
+- key: table:quick_search_index_run;field:errorCount
+  summary: How many records failed to index in this run.
+- key: table:quick_search_index_run;field:errorMessage
+  summary: The error text when the run failed or had record errors.
+- key: table:quick_search_index_run;field:cancelRequested
+  summary: Yes once someone asked to cancel this run; the run stops after its current batch.
+- key: table:quick_search_index_run;field:cancelRequestedBy
+  summary: The person who asked to cancel the run, filled in by Cancel Index Run.
+- key: table:quick_search_failed_event;slot:help
+  summary: A record change that could not be sent to search, kept so the system can retry it.
+  content: |
+    **How rows get created:** by the qbit. When saving a record cannot update OpenSearch, the change is recorded here and the next refresh replays it. This table is normally empty, which is the healthy state. Rows that stay here mean OpenSearch is unreachable or rejecting a document; check the home status.
+
+    When a save or delete fails to reach the search engine, it is noted here and the scheduled update retries it, up to 10 times. After that it is marked as exhausted and stops being retried.
+
+    Open a row to compare the record with its search entry using **{{label:quickSearchInspect_quick_search_failed_event}}**, or use **{{label:quickSearchReindexRecords_quick_search_failed_event}}** to rebuild the entry yourself. Successful retries remove the row, so an empty list is healthy.
+- key: table:quick_search_failed_event;section:event
+  summary: Which table and record the failed change was for, the action and its status.
+- key: table:quick_search_failed_event;section:error
+  summary: The error text and how many times it was retried.
+- key: table:quick_search_failed_event;section:dates
+  summary: When the failure was first recorded and last updated.
+- key: table:quick_search_failed_event;field:tableName
+  summary: The table the failed change belongs to.
+- key: table:quick_search_failed_event;field:recordId
+  summary: The id of the record whose search entry could not be updated.
+- key: table:quick_search_failed_event;field:action
+  summary: What was being done to the search entry.
+  content: |
+    - **Index**: add or update the record's search entry.
+    - **Delete**: remove the record's search entry.
+- key: table:quick_search_failed_event;field:errorMessage
+  summary: Why the update failed, as reported by the search engine or the system.
+- key: table:quick_search_failed_event;field:attempts
+  summary: How many times the scheduled update has retried this change. It gives up at 10.
+- key: table:quick_search_failed_event;field:status
+  summary: Where the retry stands.
+  content: |
+    - **Pending (retried by the next update)**: will be tried again.
+    - **Exhausted (gave up)**: failed 10 times; needs a manual **{{label:quickSearchReindexRecords_quick_search_failed_event}}**.
+    - **Awaiting full reindex**: a delete made while a full rebuild runs; applied after the rebuild finishes.
+    - **Deferred (indexing paused)**: held while indexing is paused; indexed after resume.
+- key: table:quick_search_diagnostic_event;slot:help
+  summary: A log of search problems and diagnostic tool runs, to help find out why search misbehaved.
+  content: |
+    **How rows get created:** by the qbit. A search that hits an OpenSearch error or timeout writes a row (core search then falls back to its own), and so does each run of a diagnostic tool such as Search Playground. Rows are read-only. An empty table means no search has failed.
+
+    Rows are written when a search request to the search engine fails or times out (the site then falls back to its own simpler search), when an administrator runs a diagnostic tool or a Reindex in Search, and when a tool run is refused for going over the rate limit.
+
+    A failed search stores only the length of the term, never the term itself. Rows are read-only.
+- key: table:quick_search_diagnostic_event;section:identity
+  summary: When it happened, what kind of event it was, where it came from and the outcome.
+- key: table:quick_search_diagnostic_event;section:request
+  summary: Who triggered it, which tables, the search term, how long it took and which server handled it.
+- key: table:quick_search_diagnostic_event;section:error
+  summary: The error class, message and any extra detail.
+- key: table:quick_search_diagnostic_event;field:eventType
+  summary: What kind of event this is.
+  content: |
+    - **SEARCH_FAILED**: a search request to the search engine failed or timed out.
+    - **TOOL_RUN**: a diagnostic tool was run.
+    - **REINDEX**: records were re-indexed with Reindex in Search.
+    - **RATE_LIMITED**: a tool run was refused because it was run too often.
+- key: table:quick_search_diagnostic_event;field:source
+  summary: 'What raised the event: the global search, the Quick Search search, or the name of the tool that was run.'
+- key: table:quick_search_diagnostic_event;field:outcome
+  summary: 'How it ended: OK, ERROR, or REFUSED when the run was blocked.'
+- key: table:quick_search_diagnostic_event;field:userName
+  summary: The person who triggered the event, when there is one.
+- key: table:quick_search_diagnostic_event;field:tableNames
+  summary: The tables involved in the search or tool run, as a list.
+- key: table:quick_search_diagnostic_event;field:searchTerm
+  summary: The term typed into a diagnostic tool, up to 100 characters. Blank for failed searches.
+- key: table:quick_search_diagnostic_event;field:durationMillis
+  summary: How long the request or tool run took, in milliseconds.
+- key: table:quick_search_diagnostic_event;field:errorClass
+  summary: The technical type of the error, useful when reporting a problem.
+- key: table:quick_search_diagnostic_event;field:errorMessage
+  summary: The error text returned by the search engine or the system.
+- key: table:quick_search_diagnostic_event;field:detail
+  summary: Extra context for the event, such as what the tool did or the term length for a failed search. Up to 4,000 characters.
+- key: table:quick_search_diagnostic_event;field:hostName
+  summary: The server that recorded the event, which helps when several servers run the site.
+- key: table:quick_search_config_tombstone;slot:help
+  summary: A reminder that an owner removed a searchable table or field, so built-in defaults do not add it back.
+  content: |
+    **How rows get created:** this table starts empty on purpose. A row appears when you Remove Search Index or remove a field that code still declares as searchable. Delete a row to let the code defaults add that table or field again on the next startup.
+
+    **{{label:quickSearchRemoveIndex}}** and deleting an index field each write one of these. At startup the application's built-in search settings skip anything listed here.
+
+    Delete the row if you want the default to be seeded again on the next start. Rows are created automatically; you normally never edit them.
+- key: table:quick_search_config_tombstone;field:tableName
+  summary: The table that was removed from search, or whose field was removed.
+- key: table:quick_search_config_tombstone;field:fieldName
+  summary: The removed field; blank means the whole table was removed.
+- key: table:quick_search_config_tombstone;field:removedBy
+  summary: The person who removed it.
+- key: table:quick_search_config_tombstone;field:reason
+  summary: An optional note on why it was removed.
+- key: table:quick_search_index;field:lastRunStatus
+  summary: The outcome of the most recent index run for this table, such as "Update Completed" or "Full reindex Failed".
+  content: |
+    You see the run kind followed by its outcome. Filled in automatically at the end of every run. A failed run is flagged as a warning in **{{label:quickSearchValidateIndex}}** and counts as needing attention on the Quick Search home.
+- key: table:quick_search_index;field:lastErrorMessage
+  summary: Why the most recent run failed for this table; blank when it went fine.
+  content: |
+    Filled in automatically at the end of each run and cut off at 4,000 characters. A successful run clears it. See **Recent Runs** on this record for the full run history.
+- key: table:quick_search_index;field:recordCount
+  summary: How many records of this table the last full rebuild or reconcile read from the database.
+  content: |
+    Updated automatically by **Rebuild Search Index** and **Reconcile Search Index**. Compare it with **Document Count** to spot gaps.
+- key: table:quick_search_index;field:documentCount
+  summary: How many search documents this table had in the index after the last rebuild or reconcile.
+  content: |
+    This is a saved number, not a live count, so it can lag behind recent edits. The Quick Search home and **{{label:quickSearchValidateIndex}}** compare live counts with the database.
+- key: table:quick_search_index;field:realTimeErrorCount
+  summary: Count of errors from instant (per-change) indexing; any value above zero marks the index as needing attention.
+  content: |
+    This count increases when real-time changes fail to reach search. A successful update or full rebuild clears it.
+- key: table:quick_search_index;field:status
+  summary: Where this table's index is in its life cycle.
+  content: |
+    Set automatically; you cannot edit it. Values:
+    - **ACTIVE**: indexed and in use.
+    - **PENDING_BUILD**: queued for its first build or a rebuild; starts with the next update.
+    - **BUILDING**: the first build is running.
+    - **REBUILDING**: a full rebuild is running; search keeps using the old documents until it finishes.
+    - **Needs Reindex**: the searchable fields changed since the last build. Run **{{label:quickSearchApplyIndexChanges}}** to rebuild.
+- key: table:quick_search_settings;slot:help
+  summary: The one-row switch that pauses or resumes all search indexing, plus a record of the last automatic self-priming.
+  content: |
+    **How rows get created:** the application creates the settings row on first startup; you do not need to add it. Use the Pause Indexing and Resume Indexing actions to stop and restart all indexing while search keeps answering from the existing index. The priming fields are written automatically and are read-only.
+
+    Open the single row to pause indexing (set **{{label:quick_search_settings.indexingPaused}}**, with an optional reason) or resume it. You can also use the **{{label:quickSearchPauseIndexing}}** and **{{label:quickSearchResumeIndexing}}** actions.
+
+    While paused, search keeps serving the current index, instant and scheduled indexing stop on every server, and a running rebuild stops after its current batch. Changes made while paused are kept and indexed after you resume. Rows cannot be added or deleted here. Needs the Quick Search admin permission.
+- key: table:quick_search_settings;section:pause
+  summary: Whether indexing is paused, why, and who paused it.
+- key: table:quick_search_settings;section:priming
+  summary: What the last automatic self-priming added to the index list.
+- key: table:quick_search_settings;section:dates
+  summary: When this settings row was created and last changed.
+- key: table:quick_search_settings;field:indexingPaused
+  summary: Turn on to stop all search indexing on every server; turn off to resume.
+  content: |
+    When turned on, **{{label:quick_search_settings.pausedAt}}** and **{{label:quick_search_settings.pausedBy}}** are filled in. When turned off, they and the reason are cleared, and changes made while paused are queued to be indexed by the next update. Search keeps working on the existing index in the meantime.
+- key: table:quick_search_settings;field:pauseReason
+  summary: An optional note on why indexing was paused, shown to other admins.
+  content: |
+    Cleared automatically when indexing resumes.
+- key: table:quick_search_settings;field:pausedAt
+  summary: When indexing was paused; filled in automatically and blank while indexing is running.
+- key: table:quick_search_settings;field:pausedBy
+  summary: The user who paused indexing; filled in automatically and blank while indexing is running.
+- key: table:quick_search_settings;field:lastPrimedAt
+  summary: When Quick Search last checked the code defaults and added missing indexes and fields.
+  content: |
+    Self-priming runs automatically at startup. It only adds what is missing; it never deletes anything and never changes a row you edited.
+- key: table:quick_search_settings;field:lastPrimingSummary
+  summary: A plain-language summary of what the last self-priming added or changed.
+  content: |
+    Filled in automatically.
+- key: table:quick_search_settings;field:lastPrimingNewTables
+  summary: How many new tables the last self-priming added to the search index list.
+  content: |
+    Filled in automatically.
+- key: table:quick_search_validation_run;slot:help
+  summary: Saved reports from Validate Search Index, each one a health check of the search index against the database.
+  content: |
+    **How rows get created:** run the Validate Search Index action from the Search Indexes table (it can also run on a schedule); each run writes one row with its status and report. It starts empty until someone validates. Rows are kept as history and purged after the run history retention period.
+
+    A report is saved every time **{{label:quickSearchValidateIndex}}** runs, either by you or on the configured schedule. Open a run to read the checks in plain language, with the raw data below.
+
+    The check covers cluster and index health, the field mapping, database rows against indexed documents, and a sample of records for missing, stale and orphaned documents. Validation only reads; it changes nothing. Reports are read-only and cannot be edited or deleted here.
+- key: table:quick_search_validation_run;section:identity
+  summary: The outcome of this validation, when it ran and how it was started.
+- key: table:quick_search_validation_run;section:scope
+  summary: Who ran it, which tables and how many records were checked, and the counts of failures and warnings.
+- key: table:quick_search_validation_run;section:report
+  summary: The full validation report, check by check.
+- key: table:quick_search_validation_run;section:data
+  summary: The same report as raw JSON, for copying or deeper inspection.
+- key: table:quick_search_validation_run;field:status
+  summary: 'The overall verdict: PASS, WARN or FAIL.'
+  content: |
+    FAIL means at least one check failed, WARN means no failures but at least one warning, and PASS means everything checked out.
+- key: table:quick_search_validation_run;field:triggerType
+  summary: Whether a person started this run (MANUAL) or the configured schedule did (SCHEDULED).
+- key: table:quick_search_validation_run;field:userName
+  summary: The user who started a manual run; blank for scheduled runs.
+- key: table:quick_search_validation_run;field:tableNames
+  summary: The tables this run checked, comma separated.
+- key: table:quick_search_validation_run;field:sampleSize
+  summary: How many records and documents were sampled per table (at most 1,000).
+- key: table:quick_search_validation_run;field:tablesChecked
+  summary: How many tables were checked.
+- key: table:quick_search_validation_run;field:failCount
+  summary: Number of checks that failed.
+- key: table:quick_search_validation_run;field:warnCount
+  summary: Number of checks that raised a warning.
+- key: table:quick_search_validation_run;field:summary
+  summary: 'One-line result, such as "WARN: 14 table(s), 0 failed check(s), 2 warning(s)."'
+- key: table:quick_search_validation_run;field:reportHtml
+  summary: 'The readable report: each check with its result and what to do about it.'
+- key: table:quick_search_validation_run;field:reportJson
+  summary: The same report as machine-readable JSON.
+- key: table:quick_search_validation_run;field:startTime
+  summary: When the validation started.
+- key: table:quick_search_validation_run;field:endTime
+  summary: When the validation finished.
+- key: process:quickSearchBasepullIndex;slot:help
+  summary: Catch the search index up with recent database changes for the tables you select.
+  content: |
+    Re-indexes records changed since the last update, using each table's timestamp field. It also retries failed instant updates and builds any index that is queued. If your application enables scheduled updates, this also runs automatically at its configured interval. Tables without a timestamp field are covered by **Reconcile Search Index** instead. Does nothing while indexing is paused. Needs the Quick Search admin permission.
+- key: process:quickSearchAddIndex;slot:help
+  summary: Start searching a table that is not in the search index yet.
+  content: |
+    Pick a table you can read that is not indexed. The review step shows which fields the index starts with and about how many records its first build will index. Sensitive and hidden fields are never indexed. The new index is queued and its first build starts with the next update. Afterwards, change which fields are searched under **Searchable Fields** on the index and run **{{label:quickSearchApplyIndexChanges}}**. Needs the Quick Search admin permission.
+- key: process:quickSearchAddIndex;field:searchTableName
+  summary: The table to make searchable; only tables you can read and that are not indexed yet are listed.
+- key: process:quickSearchAddIndex;field:basepullIntervalMinutes
+  summary: How often, in minutes, changes to this table are picked up; 0 means on every update run.
+  content: |
+    When real-time indexing is enabled, saved changes are also sent after commit. Cannot be negative. The standard interval is already filled in.
+- key: process:quickSearchAddIndex;field:basepullTimestampField
+  summary: The date-time field used to spot changed records; leave blank to let Quick Search pick one.
+  content: |
+    If the table has no suitable field, you can use **Reconcile Search Index** and, when enabled, real-time indexing to keep it current.
+- key: process:quickSearchAddIndex;field:enabled
+  summary: Turn off to add the table without indexing it yet.
+  content: |
+    If off, nothing is indexed until you enable it, and enabling it queues the build.
+- key: process:quickSearchDisableIndex;slot:help
+  summary: Stop indexing the selected tables and hide them from search, keeping the setup so you can turn them back on.
+  content: |
+    Choose whether to keep the search documents or delete them. Enabling the index again rebuilds it. Tables already disabled are skipped. Needs the Quick Search admin permission.
+- key: process:quickSearchDisableIndex;field:documents
+  summary: Whether to keep the table's search documents or delete them from the search index; the default is Keep.
+- key: process:quickSearchRemoveIndex;slot:help
+  summary: Take the selected tables out of Quick Search for good, deleting their index setup.
+  content: |
+    Indexing stops now, and the index row, its field rows and its pending failed events are deleted. The removal is remembered under **{{label:quick_search_config_tombstone}}**, so tables declared in code are not added back by the automatic self-priming. Choose whether to delete the search documents or keep them (the reconcile removes documents of removed tables). Needs the Quick Search admin permission.
+- key: process:quickSearchRemoveIndex;field:documents
+  summary: Whether to delete the table's search documents from the search index or keep them; the default is Delete.
+- key: process:quickSearchApplyIndexChanges;slot:help
+  summary: Rebuild the selected tables so field changes you made take effect in search.
+  content: |
+    The review shows what was added, changed or removed since the last build. Disabled tables must be enabled first, and tables already queued or building are skipped. Rebuilds start with the next update. Search stays available while the table is rebuilt in place; results can change during the rebuild. Needs the Quick Search admin permission.
+- key: process:quickSearchCancelRun;slot:help
+  summary: Ask a running index run to stop after its current batch.
+  content: |
+    Only runs that are still running can be cancelled; the run ends as Cancelled. Work already done stays in the index. Needs the Quick Search admin permission.
+- key: process:quickSearchPauseIndexing;slot:help
+  summary: Pause all search indexing on every server until you resume it.
+  content: |
+    Search keeps serving the current index. Instant and scheduled indexing stop, and a running rebuild stops after its current batch. Changes made meanwhile are kept and indexed after you resume. Needs the Quick Search admin permission. See also **{{label:quickSearchResumeIndexing}}**.
+- key: process:quickSearchPauseIndexing;field:pauseReason
+  summary: A short note for other admins on why you are pausing; shown on the Quick Search Settings screen.
+- key: process:quickSearchResumeIndexing;slot:help
+  summary: Start search indexing again after a pause.
+  content: |
+    Changes made while paused are queued and indexed by the next update. Needs the Quick Search admin permission.
+- key: process:quickSearchPlayground;slot:help
+  summary: Try a search term and see exactly how the global search handles it, table by table, without changing anything.
+  content: |
+    Runs the term as you, so locks and permissions apply. For each table you see the path it takes, the results you would see, and the underlying query, scores and matched fields. Leave **Tables** blank to search every searchable table. To understand one result, paste its document id (for example customer:42) into **Explain hit**. Limited in how often it can be run. Needs the Quick Search debug permission.
+- key: process:quickSearchPlayground;field:searchTerm
+  summary: The words to search for, exactly as someone would type them in the search box.
+- key: process:quickSearchPlayground;field:tableNames
+  summary: Limit the test to these tables; leave blank to try all searchable tables.
+  content: |
+    Use the table names separated by commas. If you started the action from selected indexes, they are filled in for you.
+- key: process:quickSearchPlayground;field:limitPerTable
+  summary: How many results to show from each table; the default is 5.
+  content: |
+    The search settings cap how many one table can return.
+- key: process:quickSearchPlayground;field:explainHit
+  summary: 'Optional: a document id, written as table name, colon, record id, to see why it scored as it did.'
+  content: |
+    Copy the id from a result shown above. Example: customer:42.
+- key: process:quickSearchValidateIndex;slot:help
+  summary: Check the search index for problems and save a report you can read later.
+  content: |
+    Checks the search cluster and index health, field mapping and analyzers, database rows against indexed documents, and a sample of records and documents for missing, stale and orphaned ones. It only reads. The result is saved on **{{label:quick_search_validation_run}}**. Your application can schedule validation for all tables. Select indexes first to check only those tables. Only one validation runs at a time per server. Needs the Quick Search debug permission.
+- key: process:quickSearchValidateIndex;field:sampleSize
+  summary: How many records and documents to spot-check per table; at most 1,000.
+  content: |
+    Larger samples find more problems but take longer. Your application supplies the initial sample size.
+- key: process:quickSearchAnalyzeText;slot:help
+  summary: See how the search index would break a piece of text into searchable words, and whether a search term would match it.
+  content: |
+    Type text as it would be stored in a field. You get the tokens each analyzer produces for it. Add a search term to check whether every word of the term is among the text's tokens, which is how a document's searchable text matches. Changes nothing. Needs the Quick Search debug permission.
+- key: process:quickSearchAnalyzeText;field:analyzeText
+  summary: The text to analyze, as it would appear in a record field.
+- key: process:quickSearchAnalyzeText;field:analyzeQuery
+  summary: Optional search term to test against the text above.
+- key: process:quickSearchInspect_quick_search_failed_event;slot:help
+  summary: Compare the record behind this failed event with its search document, and see why a term does or does not match.
+  content: |
+    Shows the document in the search index next to the database record. Add a search term to get a match analysis. Read-only, up to 10 records at a time. Needs the Quick Search debug permission.
+- key: process:quickSearchInspect_quick_search_failed_event;field:searchTerm
+  summary: 'Optional: a word or phrase you expected to find this record with; the result explains whether and why it matches.'
+- key: process:quickSearchReindexRecords_quick_search_failed_event;slot:help
+  summary: Rebuild the search documents for the records behind the selected events, straight from the database.
+  content: |
+    Records that no longer exist have their documents removed. The records themselves are not changed. Up to 500 records at a time; you confirm before it runs. The run is logged in **{{label:quick_search_diagnostic_event}}**. Needs the Quick Search admin permission.
+- key: process:quickSearchFullReindex;slot:help
+  summary: Rebuild the search index from the database, for every table or just one.
+  content: |
+    Leave **Table** blank to rebuild every enabled table into a fresh index and swap it in when all succeed, so search keeps serving the old documents until then. This also picks up field-mapping changes. If the rebuild fails before the swap, search continues using the previous index. With a table chosen, only that table is rebuilt in place. Only one full rebuild runs at a time. Your application may also schedule rebuilds. Does nothing while indexing is paused. Needs the Quick Search admin permission.
+- key: process:quickSearchFullReindex;field:searchTableName
+  summary: Pick one table to rebuild just it; leave blank to rebuild every table.
+- key: process:quickSearchReconcileIndex;slot:help
+  summary: Make the search index match the database exactly, re-indexing every record and removing leftover documents.
+  content: |
+    Leave **Table** blank to reconcile every enabled table and also delete documents of tables no longer configured. Documents are only deleted if every record indexed successfully. Use it as the safety net for tables without a timestamp field; your application may schedule it. Does nothing while indexing is paused. Needs the Quick Search admin permission.
+- key: process:quickSearchReconcileIndex;field:searchTableName
+  summary: Pick one table to reconcile just it; leave blank to reconcile every table.
+- key: widget:quickSearchIndexFields;slot:label
+  summary: The fields searched for this table, with their weight, role and analyzer; add or change them here.
+  content: |
+    After you change fields, the index shows Needs Reindex until you run **{{label:quickSearchApplyIndexChanges}}**.
+- key: widget:quickSearchIndexRuns;slot:label
+  summary: The 10 latest index runs for this table, with status, times and counts.
+- key: widget:quickSearchDiagnostics;slot:label
+  summary: 'Search health at a glance: this server''s search state, recent search failures and the latest validation run.'
+- key: possibleValueSource:quick_search_searchable_table;slot:help
+  summary: The tables that are currently set up for Quick Search, listed by their labels.
+- key: possibleValueSource:quick_search_eligible_table;slot:help
+  summary: 'Tables you could add to Quick Search: readable by you, not indexed yet, and not internal or secret.'
+- key: possibleValueSource:quick_search_indexable_field;slot:help
+  summary: The fields of the chosen table that can be searched; sensitive and hidden fields are not offered.
+- key: possibleValueSource:quick_search_timestamp_field;slot:help
+  summary: The date-time fields of the chosen table, which can be used to spot changed records.
+- key: possibleValueSource:quick_search_field_role;slot:help
+  summary: What a searched field is used for.
+  content: |
+    - **T1 display**: shown with each search result, labeled with the field's name.
+    - **Title**: the result's title, used in place of the record label.
+    - **Subtitle**: the line under the title.
+    - **Body**: ordinary searchable text, also used for the matched snippet.
+    - **Keyword**: matched as whole words, and kept out of the snippet.
+    - **Exact**: matched only when the search is the whole value (for codes and ids); kept out of the snippet.
+- key: possibleValueSource:quick_search_field_analyzer;slot:help
+  summary: How a field's text is broken up for matching.
+  content: |
+    - **Prefix (as you type)**: matches the start of words, so partial typing finds results. The usual default.
+    - **Whole words**: matches complete words only. The default for keyword fields.
+    - **English (stemmed)**: also matches related word forms, such as plurals.
+    - **Exact value**: matches the whole value, ignoring case and extra spaces. The default for exact fields.
+- key: possibleValueSource:quick_search_documents_choice;slot:help
+  summary: What to do with a table's search documents when you stop indexing it.
+  content: |
+    - **Delete the documents from the search index**: the table disappears from results.
+    - **Keep the documents**: they stay in the index but are no longer updated.
+- key: possibleValueSource:quick_search_run_type;slot:help
+  summary: Which kind of index run this was.
+  content: |
+    - **Update (basepull)**: the regular catch-up that picks up recent changes.
+    - **Reconcile**: a full comparison that fixes any difference with the database.
+    - **Full reindex / build**: a complete rebuild of the index.
+- key: possibleValueSource:quick_search_run_status;slot:help
+  summary: How an index run ended.
+  content: |
+    - **Running**: still in progress.
+    - **Completed**: finished.
+    - **Failed**: stopped by an error.
+    - **Cancelled**: stopped on request.
+- key: possibleValueSource:quick_search_failed_event_status;slot:help
+  summary: Where a change that could not be indexed stands.
+  content: |
+    - **Pending**: will be retried by the next update.
+    - **Exhausted**: retried the maximum number of times and given up; look at the error.
+    - **Awaiting full reindex**: recorded during a rebuild and applied when it finishes.
+    - **Deferred**: held while indexing is paused, and queued again when you resume.
+- key: possibleValueSource:quick_search_failed_event_action;slot:help
+  summary: What was being done to the search document when it failed.
+  content: |
+    - **Index**: adding or updating the document.
+    - **Delete**: removing the document.
+- key: possibleValueSource:quick_search_config_source;slot:help
+  summary: Where an index setup came from.
+  content: |
+    - **Code default**: created automatically from the application's built-in list.
+    - **Added by owner**: added by an admin with **{{label:quickSearchAddIndex}}**.
+
+- key: possibleValueSource:quick_search_index;slot:help
+  summary: Choose the search index whose fields or runs you want to view.

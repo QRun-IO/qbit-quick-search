@@ -8,7 +8,7 @@
 
 Annotate entity classes or declare tables in config, point the QBit at an OpenSearch cluster, produce it into your `QInstance`, and you get real-time indexing of committed writes, a scheduled catch-up and reconcile, a blackout-free full rebuild, and a permission-aware search API with relevance scoring, typeahead, highlights and pagination.
 
-Requires QQQ 4.1 (the QBit uses 4.1's record-change listeners, after-commit callbacks and runtime services). Serving core search (`POST /qqq/v1/search`, below) needs QQQ 4.1.0-RC.2 or later, the first release that carries the record-search provider SPI. The record developer panel (below) needs QQQ 4.1.0-RC.4 or later, which carries the developer panel contract; the 1.1 line builds against 4.1.0-RC.4 from the next release candidate on.
+Requires QQQ 4.1 (the QBit uses 4.1's record-change listeners, after-commit callbacks and runtime services). Serving core search (`POST /qqq/v1/search`, below) needs QQQ 4.1.0-RC.2 or later, the first release that carries the record-search provider SPI. The record developer panel (below) needs QQQ 4.1.0-RC.4 or later, which carries the developer panel contract; the current build requires QQQ 4.1.0-RC.7 for help bundles.
 
 ## What it does
 
@@ -259,7 +259,7 @@ The panel's status is Indexed, Stale, Not indexed, Disabled (the table is turned
 
 ### Starter defaults and empty-state help
 
-This qbit ships no DDL and no seed changelog: startup self-priming (`QuickSearchConfigPrimer`) is its seed mechanism. On a fresh database it writes a `quick_search_index` row and `quick_search_index_field` rows for every table the code declares searchable, and the single `quick_search_settings` row (id 1). `quick_search_config_tombstone` and the five log and history tables start empty by design (rows appear when an admin removes a table or field, or when the qbit runs). Every table and the Quick Search Admin app carry help (`help/quick-search.yaml`, applied by `QuickSearchHelp` without overriding help the host set) that says what the table is for and how its rows get created, so an empty table explains itself. No host change is needed.
+This qbit ships no DDL and no seed changelog: startup self-priming (`QuickSearchConfigPrimer`) is its seed mechanism. On a fresh database it writes a `quick_search_index` row and `quick_search_index_field` rows for every table the code declares searchable, and the single `quick_search_settings` row (id 1). `quick_search_config_tombstone` and the five log and history tables start empty by design (rows appear when an admin removes a table or field, or when the qbit runs).
 
 Real-time error counts on Quick Search Index show failures since the last successful full reindex or basepull. Each failed event increases the count; deferred changes while indexing is paused do not. Counter updates are best effort and serialized across listeners in one JVM; concurrent application nodes can still race because QQQ has no arithmetic update API.
 
@@ -275,7 +275,7 @@ CI=true ./mvnw verify                       # plus Testcontainers integration te
 ./mvnw verify -Dopensearch.test.image=opensearchproject/opensearch:3.9.0
 ```
 
-Use the wrapper: Maven 3.10 cannot read the published parent POM. The build imports qqq 4.1.0-RC.4 through the default-active `qqq-snapshot` profile until `qbit-build-parent` 2.1.0 ships (override with `-Dqqq.snapshot.version=...`). Without Docker the integration tests are skipped locally; with `CI=true` they fail instead.
+Use the wrapper: Maven 3.10 cannot read the published parent POM. The build imports QQQ 4.1.0-RC.8 through the default-active `qqq-snapshot` profile ahead of the parent BOM (override only with a compatible released version using `-Dqqq.snapshot.version=...`). Without Docker the integration tests are skipped locally; with `CI=true` they fail instead.
 
 ## Upgrading from 1.0
 
@@ -399,6 +399,31 @@ configured metadata prefix. `QuickSearchApi.APP_NAME` (`quickSearchAdmin`) and
 navigation. Keep detailed runs, failed events, validation and operator tools in the
 qbit's own home. [kof22 migration mapping](docs/STATUS-API-HOST-MIGRATION.md).
 
+## Health checks
+
+The QBit producer registers these checks with QQQ's central health registry. All use
+component `quick_search`, category `SEARCH`, a 60-second interval and a 5-second timeout.
+
+| Name | Kind | Interval | Reports |
+| --- | --- | --- | --- |
+| `quick_search.opensearch` | DEPENDENCY | 60s | Cluster reachability and colour: red is DOWN, yellow is DEGRADED, disabled is UNKNOWN. |
+| `quick_search.backlog` | DEPENDENCY | 60s | DEGRADED for any exhausted events, more than 100 pending events, or paused indexing. |
+| `quick_search.index.<indexName>` | DEPENDENCY | 60s | One check per persisted index row; non-active status, count mismatch, last error or real-time errors are DEGRADED. Disabled indexes are UNKNOWN. |
+
+Index names come from the row's table name, normalized to lowercase health identifiers.
+The supplier refreshes the set through core's normal discovery cycle. Checks reuse the
+five-second status cache and saved validation counts, with waits bounded by the runner's
+deadline. Incomplete measurements never become zero; indexes absent from the bounded
+100-row status snapshot report UNKNOWN. Backlog truncation reports DEGRADED.
+Details contain counts, timestamps and flags, never stored error text or credentials.
+
+The status endpoint, diagnostics widget and record developer panel remain available.
+This integration requires QQQ 4.1.0-RC.8 or later, which includes the central health SPI. The POM pins that release. For local offline verification:
+
+```powershell
+./mvnw.cmd -o verify
+```
+
 ## Classified data
 
 Quick Search excludes fields classified as **PII** or **PHI**, including fields
@@ -428,6 +453,26 @@ Diagnostic views also omit protected values and the raw response for these table
 This does not purge old OpenSearch backups or retained physical indexes; apply your
 host's retention policy to those copies.
 
-This release uses the APIs in QQQ **4.1.0-RC.6**. Support for the host's
+This release builds against QQQ **4.1.0-RC.7**. Support for the host's
 `AuditValueProtector` classification (`ClassifiedValues`, qqq#1182) and
 `FieldAccessHelper.getLockTier` (qqq#1172) is deferred until the qbit moves to RC.7.
+
+## In-app help
+
+The producer registers [help/qbit-quick-search.yaml](src/main/resources/help/qbit-quick-search.yaml)
+with QQQ's help registry (requires QQQ 4.1.0-RC.7 or later). The bundle covers
+Quick Search's own app, tables, actions, widgets and possible-value sources.
+Registration is metadata-only and works without a `helpContent` table. Hosts
+with help enabled load help content and call `HelpBundles.syncOnStartup(qInstance)`
+after producing all metadata; QQQ guards sync when the help table is absent.
+
+To customize wording or document deployment schedules, register your own
+`layer: HOST` bundle with the same entry keys and roles using
+`HelpBundles.register(qInstance, "help/my-host.yaml")`. HOST text takes precedence
+over QBIT text; edits made by users are preserved by sync. Host-specific record
+actions (Inspect Search Document and Reindex in Search on host tables) belong in
+the host bundle. Keep the bundle's literal version aligned with the POM revision.
+
+`QuickSearchTablesGuardrailTest.helpBundleIsComplete` uses `HelpBundleAssertions`
+to check owned objects, non-trivial fields, summary length and live references.
+The same test class checks registration without the help subsystem.

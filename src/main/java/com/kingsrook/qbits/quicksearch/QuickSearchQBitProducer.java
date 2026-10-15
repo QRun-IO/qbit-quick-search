@@ -30,10 +30,10 @@ import com.kingsrook.qbits.quicksearch.annotations.QuickSearchField;
 import com.kingsrook.qbits.quicksearch.annotations.QuickSearchable;
 import com.kingsrook.qbits.quicksearch.api.QuickSearchApi;
 import com.kingsrook.qbits.quicksearch.config.QuickSearchFieldRules;
+import com.kingsrook.qbits.quicksearch.health.QuickSearchHealthChecks;
 import com.kingsrook.qbits.quicksearch.listeners.QuickSearchRecordChangeListener;
 import com.kingsrook.qbits.quicksearch.metadata.QuickSearchAdminAppMetaDataProducer;
 import com.kingsrook.qbits.quicksearch.metadata.QuickSearchDiagnosticsProcessMetaDataHelper;
-import com.kingsrook.qbits.quicksearch.metadata.QuickSearchHelp;
 import com.kingsrook.qbits.quicksearch.metadata.QuickSearchProcessMetaDataHelper;
 import com.kingsrook.qqq.backend.core.exceptions.QException;
 import com.kingsrook.qqq.backend.core.logging.QLogger;
@@ -42,6 +42,7 @@ import com.kingsrook.qqq.backend.core.model.metadata.QBackendMetaData;
 import com.kingsrook.qqq.backend.core.model.metadata.QInstance;
 import com.kingsrook.qqq.backend.core.model.metadata.code.QCodeReference;
 import com.kingsrook.qqq.backend.core.model.metadata.fields.QFieldMetaData;
+import com.kingsrook.qqq.backend.core.model.metadata.help.bundles.HelpBundles;
 import com.kingsrook.qqq.backend.core.model.metadata.processes.QProcessMetaData;
 import com.kingsrook.qqq.backend.core.model.metadata.qbits.QBitMetaData;
 import com.kingsrook.qqq.backend.core.model.metadata.qbits.QBitMetaDataProducer;
@@ -220,9 +221,9 @@ public class QuickSearchQBitProducer implements QBitMetaDataProducer<QuickSearch
       output.addSelfToInstance(qInstance);
 
       //////////////////////////////////////////////////////////////////////////
-      // after the tables and app are in the instance: fill their empty help  //
+      // Metadata only; core guards startup sync when helpContent is absent. //
       //////////////////////////////////////////////////////////////////////////
-      QuickSearchHelp.apply(qInstance, qBitConfig);
+      HelpBundles.register(qInstance, "help/qbit-quick-search.yaml");
 
       return (new MetaDataProducerMultiOutput());
    }
@@ -263,6 +264,7 @@ public class QuickSearchQBitProducer implements QBitMetaDataProducer<QuickSearch
       QuickSearchRuntime runtime = new QuickSearchRuntime(qBitConfig);
       runtime.setDiscoveredTables(discoveredTables);
       qBitConfig.setRuntime(runtime);
+      QuickSearchHealthChecks.register(qInstance);
 
       if(Boolean.TRUE.equals(qBitConfig.getEnableRealTimeIndexing()))
       {

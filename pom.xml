@@ -170,6 +170,7 @@
             <directory>src/main/resources</directory>
             <filtering>true</filtering>
             <includes>
+               <include>help/*.yaml</include>
                <include>quick-search.properties</include>
             </includes>
          </resource>
@@ -177,6 +178,7 @@
             <directory>src/main/resources</directory>
             <filtering>false</filtering>
             <excludes>
+               <exclude>help/*.yaml</exclude>
                <exclude>quick-search.properties</exclude>
             </excludes>
          </resource>
@@ -281,7 +283,7 @@
             <activeByDefault>true</activeByDefault>
          </activation>
          <properties>
-            <qqq.snapshot.version>4.1.0-RC.6</qqq.snapshot.version>
+            <qqq.snapshot.version>4.1.0-RC.8</qqq.snapshot.version>
          </properties>
          <dependencyManagement>
             <dependencies>
