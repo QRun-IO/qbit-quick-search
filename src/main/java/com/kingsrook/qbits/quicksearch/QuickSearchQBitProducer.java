@@ -42,6 +42,7 @@ import com.kingsrook.qqq.backend.core.model.metadata.QBackendMetaData;
 import com.kingsrook.qqq.backend.core.model.metadata.QInstance;
 import com.kingsrook.qqq.backend.core.model.metadata.code.QCodeReference;
 import com.kingsrook.qqq.backend.core.model.metadata.fields.QFieldMetaData;
+import com.kingsrook.qqq.backend.core.model.metadata.help.bundles.HelpBundles;
 import com.kingsrook.qqq.backend.core.model.metadata.processes.QProcessMetaData;
 import com.kingsrook.qqq.backend.core.model.metadata.qbits.QBitMetaData;
 import com.kingsrook.qqq.backend.core.model.metadata.qbits.QBitMetaDataProducer;
@@ -218,6 +219,11 @@ public class QuickSearchQBitProducer implements QBitMetaDataProducer<QuickSearch
 
       MetaDataProducerMultiOutput output = QBitMetaDataProducer.super.produce(qInstance);
       output.addSelfToInstance(qInstance);
+
+      //////////////////////////////////////////////////////////////////////////
+      // Metadata only; core guards startup sync when helpContent is absent. //
+      //////////////////////////////////////////////////////////////////////////
+      HelpBundles.register(qInstance, "help/qbit-quick-search.yaml");
 
       return (new MetaDataProducerMultiOutput());
    }

@@ -228,6 +228,10 @@ MySQL: use `INT AUTO_INCREMENT` for the ids, `DATETIME` for the timestamps and `
 - `quick_search_searchable_table` is now a custom possible-value source over the effective tables (it was an enum of the code-declared ones).
 - Tables added at runtime get core `searchFields` (for the global search) when they have none, but the per-table Inspect Search Document and Reindex in Search record actions appear only after the next restart.
 
+### Table help (no action needed)
+
+The qbit now sets bundle help (`help/quick-search.yaml`) on the Quick Search Admin app and each `quick_search_*` table, so an empty table says what it is for and how its rows get created. It fills only empty `help` slots; help a host already set on these tables is kept. There is no DDL change and no host include.
+
 ### Checklist for data-driven configuration
 
 1. Add the DDL above (it is additive).

@@ -1,5 +1,10 @@
 # TODO
 
+## In-app help bundle (2026-10-14)
+
+- [x] Pin QQQ RC.7, register the host-neutral QBIT bundle, replace the temporary loader, document HOST overrides, and add coverage/no-help-table checks.
+- [ ] Host adoption: enable QQQ help startup sync and keep deployment schedules and host-table record actions in HOST bundles.
+
 ## Real-time error counter
 
 - [x] Count failed real-time events after commit, serialize concurrent listeners within a JVM, tolerate counter-write failures, and reset after successful basepull/full reindex; add regression tests and field/documentation help.

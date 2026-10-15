@@ -54,7 +54,13 @@ class QuickSearchApiContractTest
          "mvnw.cmd -Dtest=QuickSearchApiContractTest -Dquicksearch.openapi.update=true test")).isEmpty();
       var model = version.generateExtensionOpenAPIModel("qqq", extension);
       assertThat(model.getComponents().getSchemas().keySet()).allMatch(name -> name.startsWith("QuickSearch"));
-      assertThat(model.getPaths().keySet()).containsExactly("/qqq/v1/qbit/quick-search/status");
-      assertThat(extension.getSpecs()).hasSize(1);
+      assertThat(model.getPaths().keySet()).containsExactlyInAnyOrder("/qqq/v1/qbit/quick-search/status", "/qqq/v1/qbit/quick-search/suggest");
+      assertThat(extension.getSpecs()).hasSize(2);
+      assertThat(generated).contains("getQuickSearchSuggestions", "QuickSearchSuggestV1", "QuickSearchSuggestGroupV1", "QuickSearchSuggestItemV1");
+      var schemas = model.getComponents().getSchemas();
+      assertThat(schemas.get("QuickSearchSuggestV1").getProperties()).containsOnlyKeys("query", "groups", "truncated");
+      assertThat(schemas.get("QuickSearchSuggestGroupV1").getProperties()).containsOnlyKeys("tableName", "tableLabel", "hasMore", "items");
+      assertThat(schemas.get("QuickSearchSuggestItemV1").getProperties()).containsOnlyKeys("recordId", "label", "subtitle");
+      assertThat(schemas.get("QuickSearchSuggestItemV1").getProperties().get("subtitle").getNullable()).isTrue();
    }
 }
