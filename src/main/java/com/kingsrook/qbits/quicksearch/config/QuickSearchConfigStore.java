@@ -60,8 +60,9 @@ import static com.kingsrook.qqq.backend.core.logging.LogUtils.logPair;
  ** before 1.1.0-RC.3.
  **
  ** Reads are cached for CACHE_TTL_MILLIS and dropped at once by the config
- ** tables' customizers when a row changes on this server; other servers pick
- ** the change up when their cache expires.
+ ** tables' customizers when a row changes, on every server: the runtime
+ ** publishes a cluster cache invalidation (QuickSearchRuntime.CONFIG_CACHE_NAME).
+ ** The TTL remains the safety net when the cluster bus is down.
  *******************************************************************************/
 public class QuickSearchConfigStore
 {
