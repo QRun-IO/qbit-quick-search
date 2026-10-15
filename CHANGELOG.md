@@ -4,12 +4,13 @@ All notable changes to this project are documented here. The format follows Keep
 
 ## [Unreleased]
 
-Requires QQQ 4.1.0-RC.6 or later (the spec-managed UI API extension contract).
+Requires QQQ 4.1.0-RC.7 or later (help bundles and the spec-managed UI API extension contract).
 
 ### Fixed
 - Real-time indexing failures now increase the table's error count by the number of failed events. Successful basepulls and full reindexes reset the count. Counter update failures are logged without failing the source write.
 
 ### Added
+- Host-neutral `help/qbit-quick-search.yaml` bundle, registered through QQQ help bundles, with coverage and no-help-table tests. Replaces the temporary inline help loader; hosts can override entries with a HOST bundle.
 - Every `quick_search_*` table and the Quick Search Admin app carry help that says what the table is for and how its rows get created (`help/quick-search.yaml`, QQQ help-bundle format, applied by `QuickSearchHelp` as a stand-in for core help bundles; host help is never overridden). `QuickSearchTablesGuardrailTest` fails when a table is unused by runtime code, neither primed nor listed as starting empty, or has no such help; `QuickSearchSeededDefaultsTest` proves priming populates the config tables on a fresh backend, is idempotent and keeps admin edits.
 - Session-only typeahead: `GET /qqq/v1/qbit/quick-search/suggest` (`getQuickSearchSuggestions`) and `QuickSearchSuggestService.suggest(...)`. Reuses the permission-aware search action with one bounded candidate batch per table; groups expose only record IDs, filtered labels/subtitles, `hasMore` and `truncated`. Defaults to 5 items across 8 tables (maximum 10/20); short terms and unavailable search return empty groups. The existing UI extension and generated contract now carry both status and suggestions.
 - Supported host status API (`api.QuickSearchStatusService.get()`), immutable status values, and `QuickSearchApi` home navigation constants (issue #50/F10). Permission-checked, bounded diagnostics refreshes share a short per-runtime cache and reuse saved validation counts. New spec-managed `GET /qqq/v1/qbit/quick-search/status` (`getQuickSearchStatus`) with committed OpenAPI fragment and strict HTTP/contract tests. RC.6 requires the default `/qbit/quick-search` prefix; `/quick-search` is not permitted by core. Existing routes and wire shapes are unchanged.

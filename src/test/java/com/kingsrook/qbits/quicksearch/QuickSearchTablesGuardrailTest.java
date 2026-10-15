@@ -28,7 +28,7 @@ import java.util.regex.Pattern;
 import java.util.stream.Stream;
 import com.kingsrook.qbits.quicksearch.annotations.QuickSearchField;
 import com.kingsrook.qbits.quicksearch.annotations.QuickSearchable;
-import com.kingsrook.qbits.quicksearch.metadata.QuickSearchHelp;
+import com.kingsrook.qqq.backend.core.actions.help.HelpTargetCatalog;
 import com.kingsrook.qqq.backend.core.context.QContext;
 import com.kingsrook.qqq.backend.core.exceptions.QException;
 import com.kingsrook.qqq.backend.core.model.metadata.QAuthenticationType;
@@ -37,11 +37,12 @@ import com.kingsrook.qqq.backend.core.model.metadata.QInstance;
 import com.kingsrook.qqq.backend.core.model.metadata.authentication.QAuthenticationMetaData;
 import com.kingsrook.qqq.backend.core.model.metadata.fields.QFieldMetaData;
 import com.kingsrook.qqq.backend.core.model.metadata.fields.QFieldType;
-import com.kingsrook.qqq.backend.core.model.metadata.help.QHelpContent;
+import com.kingsrook.qqq.backend.core.model.metadata.help.bundles.HelpBundles;
 import com.kingsrook.qqq.backend.core.model.metadata.tables.QTableMetaData;
 import com.kingsrook.qqq.backend.core.model.session.QSession;
 import com.kingsrook.qqq.backend.core.modules.backend.implementations.memory.MemoryBackendModule;
 import com.kingsrook.qqq.backend.core.modules.backend.implementations.memory.MemoryRecordStore;
+import com.kingsrook.qqq.backend.core.testing.HelpBundleAssertions;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -168,41 +169,53 @@ class QuickSearchTablesGuardrailTest
 
 
    /*******************************************************************************
-    ** Every table and the app have bundle help that says how rows get created.
+    ** Bundle coverage includes every owned object and its non-trivial fields.
     *******************************************************************************/
    @Test
-   void everyTableHasEmptyStateHelp() throws Exception
+   void helpBundleIsComplete()
    {
       QInstance qInstance = producedInstance();
-      assertThat(QuickSearchHelp.entries()).allSatisfy((key, entry) -> assertThat(entry.path("summary").asText().length()).as(key).isLessThanOrEqualTo(120));
-      for(String table : quickSearchTables())
+      // Record actions attached to host tables belong in the host bundle.
+      // This gate owns the fixed qbit objects, including its failed-event actions.
+      HelpBundleAssertions.forInstance(qInstance)
+         .bundles("help/qbit-quick-search.yaml")
+         .owning(target -> (target.name().startsWith("quick_search_") || target.name().startsWith("quickSearch"))
+            && (target.table() == null || target.table().startsWith("quick_search_")))
+         .assertComplete();
+
+      var entries = HelpBundles.of(qInstance).getBundles().get(0).getEntries();
+      assertThat(entries).extracting(entry -> entry.getKey()).doesNotHaveDuplicates();
+      for(var target : HelpTargetCatalog.collect(qInstance))
       {
-         QTableMetaData     meta = qInstance.getTable(table);
-         List<QHelpContent> help = meta.getHelpContent() == null ? null : meta.getHelpContent().get(QuickSearchHelp.SLOT);
-         assertThat(help).as(table + " table help").isNotEmpty();
-         assertThat(help.get(0).getContent()).as(table + " help says how rows get created").contains("How rows get created");
+         if(List.of("widget", "possibleValueSource").contains(target.kind())
+            && (target.name().startsWith("quick_search_") || target.name().startsWith("quickSearch")))
+         {
+            assertThat(entries).anySatisfy(entry -> assertThat(entry.getKey()).startsWith(target.kind() + ":" + target.name() + ";slot:"));
+         }
       }
-      assertThat(qInstance.getApp("quickSearchAdmin").getHelpContent()).containsKey(QuickSearchHelp.SLOT);
-      assertThat(QuickSearchHelp.entries().keySet()).allMatch(key -> !key.startsWith("table:") || qInstance.getTable(key.substring(6, key.indexOf(';'))) != null,
-         "help names only real tables");
+      assertThat(entries).filteredOn(entry -> entry.getKey().endsWith(";slot:help")
+         && (entry.getKey().startsWith("table:") || entry.getKey().startsWith("app:") || entry.getKey().startsWith("process:")))
+         .allSatisfy(entry -> assertThat(entry.getContent()).as(entry.getKey()).isNotBlank());
+      assertThat(entries).filteredOn(entry -> entry.getKey().startsWith("table:") && entry.getKey().endsWith(";slot:help"))
+         .allSatisfy(entry -> assertThat(entry.getContent()).as(entry.getKey()).contains("How rows get created"));
    }
 
 
 
    /*******************************************************************************
-    ** Help a host already wrote is kept; the bundle only fills empty slots.
+    ** Registration remains metadata-only on hosts without the help subsystem.
     *******************************************************************************/
    @Test
-   void hostHelpIsNotOverridden() throws Exception
+   void helpRegistersWithoutHelpContentTable()
    {
-      QInstance      qInstance = producedInstance();
-      QTableMetaData table     = qInstance.getTable("quick_search_index");
-      table.getHelpContent().remove(QuickSearchHelp.SLOT);
-      table.withHelpContent(QuickSearchHelp.SLOT, new QHelpContent("host words"));
-
-      QuickSearchHelp.apply(qInstance, new QuickSearchQBitConfig());
-
-      assertThat(table.getHelpContent().get(QuickSearchHelp.SLOT).get(0).getContent()).isEqualTo("host words");
+      QInstance qInstance = producedInstance();
+      assertThat(qInstance.getTable("helpContent")).isNull();
+      assertThat(HelpBundles.of(qInstance).getBundles()).singleElement().satisfies(bundle ->
+      {
+         assertThat(bundle.getId()).isEqualTo("qbit-quick-search");
+         assertThat(bundle.getVersion()).isEqualTo(QuickSearchQBitProducer.getVersion());
+      });
+      HelpBundles.syncOnStartup(qInstance);
    }
 
 
