@@ -275,7 +275,7 @@ CI=true ./mvnw verify                       # plus Testcontainers integration te
 ./mvnw verify -Dopensearch.test.image=opensearchproject/opensearch:3.9.0
 ```
 
-Use the wrapper: Maven 3.10 cannot read the published parent POM. The build imports QQQ 4.1.0-RC.7 through the default-active `qqq-snapshot` profile ahead of the parent BOM (override only with a compatible released version using `-Dqqq.snapshot.version=...`). Without Docker the integration tests are skipped locally; with `CI=true` they fail instead.
+Use the wrapper: Maven 3.10 cannot read the published parent POM. The build imports QQQ 4.1.0-RC.8 through the default-active `qqq-snapshot` profile ahead of the parent BOM (override only with a compatible released version using `-Dqqq.snapshot.version=...`). Without Docker the integration tests are skipped locally; with `CI=true` they fail instead.
 
 ## Upgrading from 1.0
 
@@ -398,6 +398,31 @@ configured metadata prefix. `QuickSearchApi.APP_NAME` (`quickSearchAdmin`) and
 `QuickSearchApi.HOME_HREF` (`/app/quickSearchAdmin`) are available for default-name
 navigation. Keep detailed runs, failed events, validation and operator tools in the
 qbit's own home. [kof22 migration mapping](docs/STATUS-API-HOST-MIGRATION.md).
+
+## Health checks
+
+The QBit producer registers these checks with QQQ's central health registry. All use
+component `quick_search`, category `SEARCH`, a 60-second interval and a 5-second timeout.
+
+| Name | Kind | Interval | Reports |
+| --- | --- | --- | --- |
+| `quick_search.opensearch` | DEPENDENCY | 60s | Cluster reachability and colour: red is DOWN, yellow is DEGRADED, disabled is UNKNOWN. |
+| `quick_search.backlog` | DEPENDENCY | 60s | DEGRADED for any exhausted events, more than 100 pending events, or paused indexing. |
+| `quick_search.index.<indexName>` | DEPENDENCY | 60s | One check per persisted index row; non-active status, count mismatch, last error or real-time errors are DEGRADED. Disabled indexes are UNKNOWN. |
+
+Index names come from the row's table name, normalized to lowercase health identifiers.
+The supplier refreshes the set through core's normal discovery cycle. Checks reuse the
+five-second status cache and saved validation counts, with waits bounded by the runner's
+deadline. Incomplete measurements never become zero; indexes absent from the bounded
+100-row status snapshot report UNKNOWN. Backlog truncation reports DEGRADED.
+Details contain counts, timestamps and flags, never stored error text or credentials.
+
+The status endpoint, diagnostics widget and record developer panel remain available.
+This integration requires QQQ 4.1.0-RC.8 or later, which includes the central health SPI. The POM pins that release. For local offline verification:
+
+```powershell
+./mvnw.cmd -o verify
+```
 
 ## Classified data
 

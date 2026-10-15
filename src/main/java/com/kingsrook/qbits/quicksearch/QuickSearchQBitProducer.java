@@ -30,6 +30,7 @@ import com.kingsrook.qbits.quicksearch.annotations.QuickSearchField;
 import com.kingsrook.qbits.quicksearch.annotations.QuickSearchable;
 import com.kingsrook.qbits.quicksearch.api.QuickSearchApi;
 import com.kingsrook.qbits.quicksearch.config.QuickSearchFieldRules;
+import com.kingsrook.qbits.quicksearch.health.QuickSearchHealthChecks;
 import com.kingsrook.qbits.quicksearch.listeners.QuickSearchRecordChangeListener;
 import com.kingsrook.qbits.quicksearch.metadata.QuickSearchAdminAppMetaDataProducer;
 import com.kingsrook.qbits.quicksearch.metadata.QuickSearchDiagnosticsProcessMetaDataHelper;
@@ -263,6 +264,7 @@ public class QuickSearchQBitProducer implements QBitMetaDataProducer<QuickSearch
       QuickSearchRuntime runtime = new QuickSearchRuntime(qBitConfig);
       runtime.setDiscoveredTables(discoveredTables);
       qBitConfig.setRuntime(runtime);
+      QuickSearchHealthChecks.register(qInstance);
 
       if(Boolean.TRUE.equals(qBitConfig.getEnableRealTimeIndexing()))
       {

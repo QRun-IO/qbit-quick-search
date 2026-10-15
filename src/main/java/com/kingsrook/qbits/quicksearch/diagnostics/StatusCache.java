@@ -21,12 +21,15 @@
 package com.kingsrook.qbits.quicksearch.diagnostics;
 
 
+import java.time.Duration;
+import java.time.Instant;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
+import java.util.concurrent.locks.ReentrantLock;
 import com.kingsrook.qbits.quicksearch.QuickSearchRuntime;
 import com.kingsrook.qbits.quicksearch.api.QuickSearchApi;
 import com.kingsrook.qbits.quicksearch.api.QuickSearchStatus;
@@ -42,6 +45,7 @@ import com.kingsrook.qqq.backend.core.model.session.QSystemUserSession;
  *******************************************************************************/
 public class StatusCache implements AutoCloseable
 {
+   private final ReentrantLock lock = new ReentrantLock();
    private final ExecutorService executor = Executors.newSingleThreadExecutor(runnable ->
    {
       Thread thread = new Thread(runnable, "quick-search-status");
@@ -58,7 +62,47 @@ public class StatusCache implements AutoCloseable
     ** Authorization belongs to the public service, before reaching this cache.
     ** Only refreshes consume the existing per-user diagnostic rate limit.
     *******************************************************************************/
-   public synchronized QuickSearchStatus get(QuickSearchRuntime runtime) throws QException
+   public QuickSearchStatus get(QuickSearchRuntime runtime) throws QException
+   {
+      return (get(runtime, Instant.now().plusSeconds(2)));
+   }
+
+
+
+   /*******************************************************************************
+    ** Bound both lock contention and the shared refresh wait by the caller's deadline.
+    *******************************************************************************/
+   public QuickSearchStatus get(QuickSearchRuntime runtime, Instant deadline) throws QException
+   {
+      try
+      {
+         long remaining = Duration.between(Instant.now(), deadline).toNanos();
+         if(remaining <= 0 || !lock.tryLock(remaining, TimeUnit.NANOSECONDS))
+         {
+            throw (new QException("Status deadline exceeded"));
+         }
+         try
+         {
+            return (read(runtime, deadline));
+         }
+         finally
+         {
+            lock.unlock();
+         }
+      }
+      catch(InterruptedException e)
+      {
+         Thread.currentThread().interrupt();
+         throw (new QException("Status refresh interrupted", e));
+      }
+   }
+
+
+
+   /*******************************************************************************
+    ** Read or refresh while holding the deadline-aware cache lock.
+    *******************************************************************************/
+   private QuickSearchStatus read(QuickSearchRuntime runtime, Instant deadline) throws QException
    {
       if(cached != null && System.nanoTime() < expiresAt)
       {
@@ -90,7 +134,8 @@ public class StatusCache implements AutoCloseable
       }
       try
       {
-         cached = refresh.get(2, TimeUnit.SECONDS);
+         long remaining = Math.max(0, Duration.between(Instant.now(), deadline).toNanos());
+         cached = refresh.get(Math.min(TimeUnit.SECONDS.toNanos(2), remaining), TimeUnit.NANOSECONDS);
          refresh = null;
       }
       catch(TimeoutException e)

@@ -4,12 +4,13 @@ All notable changes to this project are documented here. The format follows Keep
 
 ## [Unreleased]
 
-Requires QQQ 4.1.0-RC.7 or later (help bundles and the spec-managed UI API extension contract).
+Requires QQQ 4.1.0-RC.8 or later (central health checks, help bundles and the spec-managed UI API extension contract).
 
 ### Fixed
 - Real-time indexing failures now increase the table's error count by the number of failed events. Successful basepulls and full reindexes reset the count. Counter update failures are logged without failing the source write.
 
 ### Added
+- Central health checks `quick_search.opensearch`, `quick_search.backlog` and the dynamic `quick_search.index.<indexName>` supplier, all SEARCH/DEPENDENCY checks every 60 seconds. Reuses cached diagnostics with deadline-bounded waits and safe count/flag details. Includes registration, state, deadline and credential-sentinel tests.
 - Host-neutral `help/qbit-quick-search.yaml` bundle, registered through QQQ help bundles, with coverage and no-help-table tests. Replaces the temporary inline help loader; hosts can override entries with a HOST bundle.
 - Every `quick_search_*` table and the Quick Search Admin app carry help that says what the table is for and how its rows get created (`help/quick-search.yaml`, QQQ help-bundle format, applied by `QuickSearchHelp` as a stand-in for core help bundles; host help is never overridden). `QuickSearchTablesGuardrailTest` fails when a table is unused by runtime code, neither primed nor listed as starting empty, or has no such help; `QuickSearchSeededDefaultsTest` proves priming populates the config tables on a fresh backend, is idempotent and keeps admin edits.
 - Session-only typeahead: `GET /qqq/v1/qbit/quick-search/suggest` (`getQuickSearchSuggestions`) and `QuickSearchSuggestService.suggest(...)`. Reuses the permission-aware search action with one bounded candidate batch per table; groups expose only record IDs, filtered labels/subtitles, `hasMore` and `truncated`. Defaults to 5 items across 8 tables (maximum 10/20); short terms and unavailable search return empty groups. The existing UI extension and generated contract now carry both status and suggestions.
@@ -21,6 +22,9 @@ Requires QQQ 4.1.0-RC.7 or later (help bundles and the spec-managed UI API exten
 - Admin processes with review and result steps (record or table actions, never in the nav): Add Search Index (the valid create: eligible-table picker, estimated record count, default fields), Apply Search Index Changes (previews field changes, then rebuilds), Disable Search Index and Remove Search Index (delete or keep documents), Cancel Index Run (cooperative cancel between batches; runs end `CANCELLED` with counts), Pause Indexing and Resume Indexing (global pause in the new `quick_search_settings`; search keeps serving, changes are deferred and replayed).
 - `QuickSearchResult.subtitle` and `displayValues` (from `SUBTITLE` and `DISPLAY` fields); document objects `fieldValuesWord`, `fieldValuesEnglish`, `fieldValuesExact`, added to existing indexes' mapping at startup.
 - Possible-value sources `quick_search_eligible_table`, `quick_search_indexable_field`, `quick_search_timestamp_field`, `quick_search_field_role`, `quick_search_field_analyzer`, `quick_search_documents_choice`, `quick_search_config_source`; the join `quick_search_index_join_quick_search_index_field` and the Searchable Fields widget on the index record. Config tables are audited at field level.
+
+### Removed
+- None for central health integration; the status API, diagnostics widget and developer panel are retained.
 
 ### Changed
 - Distinguish protected fields from fields that simply cannot be searched. Boolean, blob and hidden fields no longer trigger result rebuilding or erase record labels. Labels are suppressed only when their source fields are protected; unprotected hidden primary keys and timestamps remain usable.
