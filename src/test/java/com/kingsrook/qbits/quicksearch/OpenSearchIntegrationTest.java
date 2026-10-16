@@ -48,6 +48,7 @@ import com.kingsrook.qbits.quicksearch.annotations.QuickSearchField;
 import com.kingsrook.qbits.quicksearch.annotations.QuickSearchable;
 import com.kingsrook.qbits.quicksearch.opensearch.BulkIndexResult;
 import com.kingsrook.qbits.quicksearch.opensearch.OpenSearchDocument;
+import com.kingsrook.qbits.quicksearch.opensearch.QuickSearchDiagnosticsOperations;
 import com.kingsrook.qbits.quicksearch.opensearch.QuickSearchOpenSearchClient;
 import com.kingsrook.qbits.quicksearch.processes.FullReindexStep;
 import com.kingsrook.qbits.quicksearch.processes.ReconcileIndexStep;
@@ -218,6 +219,14 @@ class OpenSearchIntegrationTest
       assertThat(physicalIndexes.iterator().next()).startsWith(INDEX_NAME + "-v" + QuickSearchOpenSearchClient.MAPPING_VERSION + "-");
       assertThat(client().isMappingOutdated()).isFalse();
       assertThat(client().isHealthy()).isTrue();
+
+      ////////////////////////////////////////////////////////////////////
+      // zero config on a single node: no replica, so the index is green //
+      ////////////////////////////////////////////////////////////////////
+      String physicalIndex = physicalIndexes.iterator().next();
+      QuickSearchDiagnosticsOperations operations = new QuickSearchDiagnosticsOperations(client());
+      assertThat(operations.settings().body().path(physicalIndex).path("settings").path("index").path("number_of_replicas").asText()).isEqualTo("0");
+      assertThat(operations.clusterHealth().body().path("status").asText()).isEqualTo("green");
    }
 
 
@@ -516,6 +525,27 @@ class OpenSearchIntegrationTest
       assertThat(output.getResults()).isNotEmpty();
       assertThat(output.getResults()).extracting(QuickSearchResult::getTableLabel).containsOnly(TABLE_LABEL);
       assertThat(output.getResults()).extracting(QuickSearchResult::getRecordLabel).allMatch(label -> label != null && !label.isBlank());
+   }
+
+
+
+   /*******************************************************************************
+    ** Test 12: an index left with a replica it cannot place on one node (yellow)
+    ** is brought back to 0 replicas (green) by the startup reconcile, once.
+    *******************************************************************************/
+   @Test
+   @Order(12)
+   void testReconcileReplicas_singleNodeDropsUnassignableReplica() throws Exception
+   {
+      String                           physicalIndex = client().getPhysicalIndexes().iterator().next();
+      QuickSearchDiagnosticsOperations operations    = new QuickSearchDiagnosticsOperations(client());
+      assertThat(operations.raw("PUT", "/" + physicalIndex + "/_settings", "{\"index\":{\"number_of_replicas\":1}}").isOk()).isTrue();
+      assertThat(operations.clusterHealth().body().path("status").asText()).isEqualTo("yellow");
+
+      assertThat(client().reconcileReplicas()).isEqualTo(new QuickSearchOpenSearchClient.ReplicaStatus(0, 1, 1, false));
+      assertThat(operations.settings().body().path(physicalIndex).path("settings").path("index").path("number_of_replicas").asText()).isEqualTo("0");
+      assertThat(operations.clusterHealth().body().path("status").asText()).isEqualTo("green");
+      assertThat(client().reconcileReplicas()).isEqualTo(new QuickSearchOpenSearchClient.ReplicaStatus(0, 1, 0, false));
    }
 
 

@@ -227,6 +227,8 @@ The panel's status is Indexed, Stale, Not indexed, Disabled (the table is turned
 | `runHistoryRetentionDays` | 30 | Purge run records older than this; null keeps them |
 | `fullReindexStaleMinutes` | 30 | A running full reindex that shows no sign of life for this long is treated as stopped: it no longer blocks a new one, and basepull recovers its tables. Keep it well above the time one page of `sourceBatchSize` records takes; null means the default |
 | `bulkBatchSize`, `maxBulkRequestBytes`, `sourceBatchSize` | 500, 5 MiB, 1000 | Batch sizes |
+| `indexReplicas` | null (automatic) | Index `number_of_replicas`; null means `min(maxAutoReplicas, data nodes - 1)`, so a single node gets 0 and stays green. Set on new indexes, reconciled on existing ones at startup |
+| `maxAutoReplicas` | 1 | Most replicas automatic sizing asks for |
 | `maxFieldLength` | 10000 | Truncate each indexed value |
 | `maxSearchLimit` | 100 | Largest page size |
 | `applyRecordSecurityLocks` | `true` | Re-read hits through `QueryAction` |

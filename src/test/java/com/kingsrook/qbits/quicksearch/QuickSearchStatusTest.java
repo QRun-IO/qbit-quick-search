@@ -80,6 +80,7 @@ class QuickSearchStatusTest
    private QuickSearchQBitConfig config;
    private QInstance instance;
    private volatile String health = "green";
+   private volatile String extraHealth = ",\"number_of_nodes\":1,\"active_shards\":1,\"unassigned_shards\":0";
    private volatile int requests;
    private CountDownLatch blocked;
 
@@ -106,7 +107,7 @@ class QuickSearchStatusTest
                Thread.currentThread().interrupt();
             }
          }
-         byte[] body = ("{\"status\":\"" + health + "\",\"number_of_nodes\":1,\"active_shards\":1,\"unassigned_shards\":0}").getBytes(StandardCharsets.UTF_8);
+         byte[] body = ("{\"status\":\"" + health + "\"" + extraHealth + "}").getBytes(StandardCharsets.UTF_8);
          exchange.getResponseHeaders().add("Content-Type", "application/json");
          exchange.sendResponseHeaders(200, body.length);
          exchange.getResponseBody().write(body);
@@ -210,6 +211,36 @@ class QuickSearchStatusTest
       QuickSearchStatus down = StatusDiagnostics.read(config.getRuntime());
       assertThat(down.state()).isEqualTo(QuickSearchStatus.State.DOWN);
       assertThat(down.clusterReachable()).isFalse();
+   }
+
+
+
+   /*******************************************************************************
+    ** Yellow from replicas a single node cannot hold is OK; an inactive primary
+    ** or a second node keeps it DEGRADED.
+    *******************************************************************************/
+   @Test
+   void singleNodeReplicaYellow() throws Exception
+   {
+      health = "yellow";
+      String index = ",\"indices\":{\"status-test-v2-1\":{\"number_of_shards\":1,\"active_primary_shards\":%d}}";
+      extraHealth = ",\"number_of_nodes\":1,\"active_shards\":1,\"unassigned_shards\":1,\"initializing_shards\":0" + index.formatted(1);
+      QuickSearchStatus single = StatusDiagnostics.read(config.getRuntime());
+      assertThat(single.state()).isEqualTo(QuickSearchStatus.State.OK);
+      assertThat(single.unassignedReplicaShards()).isEqualTo(1);
+
+      extraHealth = ",\"number_of_nodes\":1,\"active_shards\":0,\"unassigned_shards\":2,\"initializing_shards\":0" + index.formatted(0);
+      QuickSearchStatus primaryMissing = StatusDiagnostics.read(config.getRuntime());
+      assertThat(primaryMissing.state()).isEqualTo(QuickSearchStatus.State.DEGRADED);
+      assertThat(primaryMissing.unassignedReplicaShards()).isNull();
+
+      extraHealth = ",\"number_of_nodes\":1,\"active_shards\":0,\"unassigned_shards\":1,\"initializing_shards\":1" + index.formatted(1);
+      assertThat(StatusDiagnostics.read(config.getRuntime()).unassignedReplicaShards()).isNull();
+
+      extraHealth = ",\"number_of_nodes\":2,\"active_shards\":1,\"unassigned_shards\":1,\"initializing_shards\":0" + index.formatted(1);
+      QuickSearchStatus multi = StatusDiagnostics.read(config.getRuntime());
+      assertThat(multi.state()).isEqualTo(QuickSearchStatus.State.DEGRADED);
+      assertThat(multi.unassignedReplicaShards()).isEqualTo(1);
    }
 
 

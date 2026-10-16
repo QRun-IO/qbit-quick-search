@@ -30,11 +30,41 @@ import com.kingsrook.qqq.openapi.model.Schema;
 /*******************************************************************************
  ** Immutable administrative snapshot. Null measurements are unknown, never zero.
  ** Counts come from persisted diagnostics; countsCheckedAt identifies their age.
+ **
+ ** unassignedReplicaShards is the unassigned shard count when every primary is
+ ** active (so all unassigned shards are replicas), else null; targetReplicas and
+ ** replicaSettingsFailed report the index replica sizing (null when unknown).
  *******************************************************************************/
 public record QuickSearchStatus(State state, Boolean clusterReachable, String clusterHealth, Integer nodes, Integer activeShards, Integer unassignedShards,
+                                Integer unassignedReplicaShards, Integer targetReplicas, Boolean replicaSettingsFailed,
                                 Boolean indexingPaused, List<IndexRow> indexes, Integer pending, Integer exhausted, Boolean backlogTruncated,
                                 Boolean tablesTruncated, Instant lastSuccessfulSync, String lastError, Instant checkedAt, String homeHref) implements ToSchema
 {
+   /*******************************************************************************
+    ** The 1.1.0-RC.14 shape, without the replica measurements (all unknown).
+    *******************************************************************************/
+   public QuickSearchStatus(State state, Boolean clusterReachable, String clusterHealth, Integer nodes, Integer activeShards, Integer unassignedShards,
+                            Boolean indexingPaused, List<IndexRow> indexes, Integer pending, Integer exhausted, Boolean backlogTruncated,
+                            Boolean tablesTruncated, Instant lastSuccessfulSync, String lastError, Instant checkedAt, String homeHref)
+   {
+      this(state, clusterReachable, clusterHealth, nodes, activeShards, unassignedShards, null, null, null, indexingPaused, indexes, pending, exhausted,
+         backlogTruncated, tablesTruncated, lastSuccessfulSync, lastError, checkedAt, homeHref);
+   }
+
+
+
+   /*******************************************************************************
+    ** Yellow only because replicas cannot be placed on a single-node cluster:
+    ** one node, every primary active and every unassigned shard a replica.
+    ** Such a cluster cannot do better, so it is healthy rather than degraded.
+    *******************************************************************************/
+   public static boolean isSingleNodeReplicaYellow(String clusterHealth, Integer nodes, Integer unassignedReplicaShards)
+   {
+      return ("yellow".equals(clusterHealth) && Integer.valueOf(1).equals(nodes) && unassignedReplicaShards != null && unassignedReplicaShards > 0);
+   }
+
+
+
    /*******************************************************************************
     ** Published wire schema for the same immutable value used by Java hosts.
     *******************************************************************************/

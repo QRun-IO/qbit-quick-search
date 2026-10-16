@@ -169,6 +169,28 @@ class QuickSearchHealthChecksTest extends BaseQuickSearchTest
 
 
    /*******************************************************************************
+    ** Yellow is healthy only on one node with every unassigned shard a replica.
+    *******************************************************************************/
+   @ParameterizedTest
+   @CsvSource({"yellow,1,1,UP", "yellow,1,0,DEGRADED", "yellow,1,,DEGRADED", "yellow,2,1,DEGRADED", "yellow,,1,DEGRADED",
+      "green,1,0,UP", "red,1,1,DOWN"})
+   void singleNodeReplicas(String color, Integer nodes, Integer unassignedReplicas, HealthStatus expected) throws Exception
+   {
+      when(cache.get(eq(runtime), any(Instant.class))).thenReturn(new QuickSearchStatus(State.OK, true, color, nodes, 1, 1, unassignedReplicas, 0, false,
+         false, List.of(row(true, "ACTIVE", 12L, 12L, null, 0)), 0, 0, false, false, null, SENTINEL, Instant.now(), "/unused"));
+      HealthCheckOutcome outcome = run("opensearch");
+      assertThat(outcome.getStatus()).isEqualTo(expected);
+      assertThat(outcome.getDetails().toJson()).contains("\"targetReplicas\":0", "\"replicaSettingsFailed\":false");
+      if(expected == HealthStatus.UP && "yellow".equals(color))
+      {
+         assertThat(outcome.getDetails().toJson()).contains("\"unassignedReplicaShards\":1", "replicas cannot be assigned on a single-node cluster");
+      }
+      assertClean(outcome);
+   }
+
+
+
+   /*******************************************************************************
     ** Boundary values, exhausted events, pause, truncation and missing measurements.
     *******************************************************************************/
    @ParameterizedTest
