@@ -758,7 +758,7 @@ public class QuickSearchRuntime
          {
             return;
          }
-         QContext.init(qInstance, new QSystemUserSession());
+         QContext.init(qInstance, new QSystemUserSession(qInstance));
          try
          {
             configStore.tryPrime();

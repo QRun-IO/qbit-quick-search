@@ -30,6 +30,7 @@ import com.kingsrook.qqq.backend.core.model.data.QRecord;
 import com.kingsrook.qqq.backend.core.model.metadata.QInstance;
 import com.kingsrook.qqq.backend.core.model.metadata.code.QCodeReference;
 import com.kingsrook.qqq.backend.core.model.metadata.qbits.QBitMetaData;
+import com.kingsrook.qqq.backend.core.model.session.QSystemUserSession;
 import com.kingsrook.qbits.quicksearch.model.QuickSearchIndex;
 import com.kingsrook.qbits.quicksearch.model.QuickSearchIndexField;
 import com.kingsrook.qbits.quicksearch.publisher.IndexEventPublisher;
@@ -221,6 +222,33 @@ class QuickSearchRuntimeTest extends BaseQuickSearchTest
          .hasMessageNotContaining("startupMode=DEGRADED")
          .hasCauseInstanceOf(NoClassDefFoundError.class);
       failFast.close();
+   }
+
+
+
+   /*******************************************************************************
+    ** Priming at startup without a QContext builds the system session with the
+    ** start instance (so it has the all-access keys), not from the empty context.
+    *******************************************************************************/
+   @Test
+   void primeConfigWithoutAContextGivesTheSystemSessionItsInstance()
+   {
+      QInstance          qInstance        = QContext.getQInstance();
+      QuickSearchRuntime runtime          = new QuickSearchRuntime(new QuickSearchQBitConfig().withBackendName(TEST_BACKEND_NAME).withOpensearchHost("127.0.0.1").withOpensearchPort(1).withOpensearchIndexName("t"));
+      QCollectingLogger  collectingLogger = QLogger.activateCollectingLoggerForClass(QSystemUserSession.class);
+      try
+      {
+         runtime.setStartInstance(qInstance);
+         QContext.clear();
+         runtime.primeConfig();
+      }
+      finally
+      {
+         QLogger.deactivateCollectingLoggerForClass(QSystemUserSession.class);
+         QContext.init(qInstance, new QSystemUserSession(qInstance));
+         runtime.close();
+      }
+      assertThat(collectingLogger.getCollectedMessages()).noneSatisfy(m -> assertThat(m.getMessage()).contains("QInstance was not supplied"));
    }
 
 }

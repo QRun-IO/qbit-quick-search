@@ -124,7 +124,7 @@ public class DiagnosticEventRecorder implements AutoCloseable
     *******************************************************************************/
    private void insert(QInstance qInstance, String tableName, QuickSearchDiagnosticEvent event)
    {
-      QSession session = new QSystemUserSession();
+      QSession session = new QSystemUserSession(qInstance);
       try
       {
          QContext.init(qInstance, session);
