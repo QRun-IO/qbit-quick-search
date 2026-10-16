@@ -81,6 +81,7 @@ public class QuickSearchQBitConfig implements QBitConfig
    public static final int    DEFAULT_VALIDATION_SAMPLE_SIZE       = 50;
    public static final int    MAX_VALIDATION_SAMPLE_SIZE           = 1000;
    public static final int    DEFAULT_DIAGNOSTIC_RUNS_PER_MINUTE   = 30;
+   public static final int    DEFAULT_MAX_AUTO_REPLICAS            = 1;
 
    ///////////////////////////////////////////////////////////////////////////////
    // a live full reindex refreshes its run record after every page; a page is  //
@@ -113,6 +114,8 @@ public class QuickSearchQBitConfig implements QBitConfig
    private Integer responseTimeoutMillis = 60000;
    private Integer maxConnections = 30;
    private Integer maxBulkRequestBytes = 5 * 1024 * 1024;
+   private Integer indexReplicas;
+   private Integer maxAutoReplicas = DEFAULT_MAX_AUTO_REPLICAS;
    private QCodeReference transportCustomizer;
    private QuickSearchStartupMode startupMode = QuickSearchStartupMode.FAIL_FAST;
    private Boolean enableRealTimeIndexing = true;
@@ -442,6 +445,16 @@ public class QuickSearchQBitConfig implements QBitConfig
       if(basepullOverlapSeconds != null && basepullOverlapSeconds < 0)
       {
          errors.add("basepullOverlapSeconds must not be negative for QuickSearchQBit");
+      }
+
+      if(indexReplicas != null && indexReplicas < 0)
+      {
+         errors.add("indexReplicas must not be negative for QuickSearchQBit");
+      }
+
+      if(maxAutoReplicas != null && maxAutoReplicas < 0)
+      {
+         errors.add("maxAutoReplicas must not be negative for QuickSearchQBit");
       }
    }
 
@@ -1492,6 +1505,73 @@ public class QuickSearchQBitConfig implements QBitConfig
       return (this);
    }
 
+
+
+
+   /*******************************************************************************
+    ** Getter for indexReplicas: number_of_replicas for the Quick Search index.
+    ** Null (the default) means automatic: min(maxAutoReplicas, data nodes - 1),
+    ** so a single-node cluster gets 0 replicas and stays green. Applied when a
+    ** physical index is created and reconciled on existing indexes at startup.
+    ** Ignored for OpenSearch Serverless (awsServiceName aoss).
+    *******************************************************************************/
+   public Integer getIndexReplicas()
+   {
+      return (this.indexReplicas);
+   }
+
+
+
+   /*******************************************************************************
+    ** Setter for indexReplicas
+    *******************************************************************************/
+   public void setIndexReplicas(Integer indexReplicas)
+   {
+      this.indexReplicas = indexReplicas;
+   }
+
+
+
+   /*******************************************************************************
+    ** Fluent setter for indexReplicas
+    *******************************************************************************/
+   public QuickSearchQBitConfig withIndexReplicas(Integer indexReplicas)
+   {
+      this.indexReplicas = indexReplicas;
+      return (this);
+   }
+
+
+
+   /*******************************************************************************
+    ** Getter for maxAutoReplicas: the most replicas automatic mode (indexReplicas
+    ** null) asks for; it never asks for more than data nodes - 1. Default 1.
+    *******************************************************************************/
+   public Integer getMaxAutoReplicas()
+   {
+      return (this.maxAutoReplicas);
+   }
+
+
+
+   /*******************************************************************************
+    ** Setter for maxAutoReplicas
+    *******************************************************************************/
+   public void setMaxAutoReplicas(Integer maxAutoReplicas)
+   {
+      this.maxAutoReplicas = maxAutoReplicas;
+   }
+
+
+
+   /*******************************************************************************
+    ** Fluent setter for maxAutoReplicas
+    *******************************************************************************/
+   public QuickSearchQBitConfig withMaxAutoReplicas(Integer maxAutoReplicas)
+   {
+      this.maxAutoReplicas = maxAutoReplicas;
+      return (this);
+   }
 
 
 

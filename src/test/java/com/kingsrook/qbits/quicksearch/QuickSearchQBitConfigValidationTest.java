@@ -348,7 +348,11 @@ class QuickSearchQBitConfigValidationTest
          .withBasepullOverlapSeconds(-5)
          .withRunHistoryRetentionDays(0)
          .withFullReindexStaleMinutes(0)
-         .withMaxFieldLength(0));
+         .withMaxFieldLength(0)
+         .withIndexReplicas(-1)
+         .withMaxAutoReplicas(-1));
+      assertThat(errors).anyMatch(e -> e.startsWith("indexReplicas"));
+      assertThat(errors).anyMatch(e -> e.startsWith("maxAutoReplicas"));
       assertThat(errors).anyMatch(e -> e.startsWith("connectTimeoutMillis"));
       assertThat(errors).anyMatch(e -> e.startsWith("responseTimeoutMillis"));
       assertThat(errors).anyMatch(e -> e.startsWith("maxConnections"));

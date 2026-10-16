@@ -135,6 +135,9 @@ public final class StatusDiagnostics
       Integer nodes = null;
       Integer active = null;
       Integer unassigned = null;
+      Integer unassignedReplicas = null;
+      Integer targetReplicas = null;
+      Boolean replicaSettingsFailed = null;
       State state = degraded ? State.DEGRADED : State.OK;
       if(!truncated && !indexes.isEmpty() && indexes.stream().noneMatch(row -> Boolean.TRUE.equals(row.enabled())))
       {
@@ -152,7 +155,15 @@ public final class StatusDiagnostics
             nodes = number(body, "number_of_nodes");
             active = number(body, "active_shards");
             unassigned = number(body, "unassigned_shards");
-            if(IndexValidator.healthLevel(health) != DiagnosticsHtml.Level.OK || body.path("timed_out").asBoolean())
+            unassignedReplicas = unassignedReplicaShards(body, unassigned);
+            var replicaStatus = runtime.getClient().getReplicaStatus();
+            if(replicaStatus != null)
+            {
+               targetReplicas = replicaStatus.targetReplicas();
+               replicaSettingsFailed = replicaStatus.failed();
+            }
+            boolean singleNodeReplicas = QuickSearchStatus.isSingleNodeReplicaYellow(health, nodes, unassignedReplicas);
+            if((IndexValidator.healthLevel(health) != DiagnosticsHtml.Level.OK && !singleNodeReplicas) || body.path("timed_out").asBoolean())
             {
                state = "red".equals(health) ? State.DOWN : State.DEGRADED;
             }
@@ -167,7 +178,8 @@ public final class StatusDiagnostics
             lastError = "OpenSearch health is unavailable; see Quick Search diagnostics.";
          }
       }
-      return (new QuickSearchStatus(state, reachable, health, nodes, active, unassigned, paused, indexes, pending, exhausted, backlog.size() > MAX_BACKLOG,
+      return (new QuickSearchStatus(state, reachable, health, nodes, active, unassigned, unassignedReplicas, targetReplicas, replicaSettingsFailed,
+         paused, indexes, pending, exhausted, backlog.size() > MAX_BACKLOG,
          truncated, lastSync, lastError, Instant.now(), homeHref));
    }
 
@@ -189,6 +201,30 @@ public final class StatusDiagnostics
    private static List<QRecord> query(String tableName, QQueryFilter filter) throws QException
    {
       return (CollectionUtils.nonNullList(new QueryAction().execute(new QueryInput(tableName).withFilter(filter)).getRecords()));
+   }
+
+
+
+   /*******************************************************************************
+    ** From index-level cluster health: the unassigned shards when nothing is
+    ** initializing and every index has all its primaries active (so every
+    ** unassigned shard is a replica); null otherwise or when unknown.
+    *******************************************************************************/
+   static Integer unassignedReplicaShards(JsonNode body, Integer unassigned)
+   {
+      if(unassigned == null || !body.path("indices").isObject() || !Integer.valueOf(0).equals(number(body, "initializing_shards")))
+      {
+         return (null);
+      }
+      for(JsonNode index : body.path("indices"))
+      {
+         Integer primaries = number(index, "number_of_shards");
+         if(primaries == null || !primaries.equals(number(index, "active_primary_shards")))
+         {
+            return (null);
+         }
+      }
+      return (unassigned);
    }
 
 

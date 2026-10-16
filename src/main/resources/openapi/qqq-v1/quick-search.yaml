@@ -154,6 +154,11 @@ components:
             \ backlog rows."
           nullable: true
           type: "integer"
+        replicaSettingsFailed:
+          description: "Sizing or applying the index replicas failed at startup; null\
+            \ when not attempted."
+          nullable: true
+          type: "boolean"
         state:
           description: "Overall availability; incomplete diagnostics are DEGRADED."
           enum:
@@ -167,6 +172,16 @@ components:
           description: "More than 100 index rows exist."
           nullable: false
           type: "boolean"
+        targetReplicas:
+          description: "number_of_replicas Quick Search applies to its index; null\
+            \ when unknown or not managed (Serverless)."
+          nullable: true
+          type: "integer"
+        unassignedReplicaShards:
+          description: "Unassigned shards when every primary is active (all are replicas);\
+            \ null when unknown or a primary is not active."
+          nullable: true
+          type: "integer"
         unassignedShards:
           description: "Cluster health counter; null when unavailable."
           nullable: true
