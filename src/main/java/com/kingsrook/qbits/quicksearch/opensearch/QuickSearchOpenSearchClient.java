@@ -34,6 +34,8 @@ import com.fasterxml.jackson.databind.SerializationFeature;
 import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule;
 import com.kingsrook.qqq.backend.core.exceptions.QException;
 import com.kingsrook.qqq.backend.core.logging.QLogger;
+import com.fasterxml.jackson.databind.JsonNode;
+import com.kingsrook.qbits.quicksearch.QuickSearchAuthMode;
 import com.kingsrook.qbits.quicksearch.QuickSearchQBitConfig;
 import com.kingsrook.qbits.quicksearch.QuickSearchableTableConfig;
 import com.kingsrook.qbits.quicksearch.config.QuickSearchFieldRules;
@@ -127,11 +129,26 @@ public class QuickSearchOpenSearchClient implements Closeable
    private final String                indexName;
    private final int                   maxBulkRequestBytes;
    private final ObjectMapper          sizingMapper;
+   private final Integer               indexReplicas;
+   private final Integer               maxAutoReplicas;
+   private final Boolean               replicasManaged;
 
    private volatile Boolean mappingOutdated = false;
    private volatile Boolean indexCreated    = false;
    private volatile Instant indexCreatedAt;
    private          Boolean closed          = false;
+   private volatile ReplicaStatus replicaStatus;
+
+
+
+   /*******************************************************************************
+    ** Outcome of the latest replica sizing: the target number_of_replicas, the
+    ** data nodes it was sized for (null when explicitly configured), how many
+    ** physical indexes were changed, and whether applying it failed.
+    *******************************************************************************/
+   public record ReplicaStatus(Integer targetReplicas, Integer dataNodes, Integer updatedIndexes, Boolean failed)
+   {
+   }
 
 
 
@@ -146,6 +163,9 @@ public class QuickSearchOpenSearchClient implements Closeable
       this.indexName           = config.getOpensearchIndexName();
       this.maxBulkRequestBytes = config.getMaxBulkRequestBytes() == null ? 5 * 1024 * 1024 : config.getMaxBulkRequestBytes();
       this.sizingMapper        = new ObjectMapper().registerModule(new JavaTimeModule()).disable(SerializationFeature.WRITE_DATES_AS_TIMESTAMPS);
+      this.indexReplicas       = config.getIndexReplicas();
+      this.maxAutoReplicas     = config.getMaxAutoReplicas() == null ? QuickSearchQBitConfig.DEFAULT_MAX_AUTO_REPLICAS : config.getMaxAutoReplicas();
+      this.replicasManaged     = !(config.getEffectiveAuthMode() == QuickSearchAuthMode.AWS_SIGV4 && "aoss".equals(config.getEffectiveAwsServiceName()));
    }
 
 
@@ -172,6 +192,7 @@ public class QuickSearchOpenSearchClient implements Closeable
                LOG.info("OpenSearch index already exists", logPair("indexName", indexName));
                extendMapping();
             }
+            reconcileReplicas();
             return;
          }
 
@@ -314,19 +335,148 @@ public class QuickSearchOpenSearchClient implements Closeable
    {
       try
       {
+         Integer replicas = replicasForNewIndex();
          client.indices().create(CreateIndexRequest.of(r -> r
             .index(physicalIndex)
-            .settings(s -> s
-               .analysis(a -> a
+            .settings(s ->
+            {
+               s.analysis(a -> a
                   .analyzer(INDEX_ANALYZER, an -> an.custom(c -> c.tokenizer("standard").filter("lowercase", "edge_ngram_filter")))
                   .analyzer(SEARCH_ANALYZER, an -> an.custom(c -> c.tokenizer("standard").filter("lowercase")))
-                  .filter("edge_ngram_filter", f -> f.definition(d -> d.edgeNgram(en -> en.minGram(2).maxGram(20))))))
+                  .filter("edge_ngram_filter", f -> f.definition(d -> d.edgeNgram(en -> en.minGram(2).maxGram(20)))));
+               if(replicas != null)
+               {
+                  s.numberOfReplicas(replicas);
+               }
+               return (s);
+            })
             .mappings(buildMapping())));
       }
       catch(OpenSearchException | java.io.IOException e)
       {
          throw wrap("Failed to create index [" + physicalIndex + "]", e);
       }
+   }
+
+
+
+   /*******************************************************************************
+    ** Replicas a new physical index should ask for; null leaves the server
+    ** default (Serverless, or the cluster could not be sized; logged).
+    *******************************************************************************/
+   private Integer replicasForNewIndex()
+   {
+      if(!Boolean.TRUE.equals(replicasManaged))
+      {
+         return (null);
+      }
+      try
+      {
+         ReplicaStatus target = targetReplicas();
+         replicaStatus = new ReplicaStatus(target.targetReplicas(), target.dataNodes(), 0, false);
+         return (target.targetReplicas());
+      }
+      catch(Exception e)
+      {
+         replicaStatus = new ReplicaStatus(null, null, 0, true);
+         LOG.warn("Could not size Quick Search index replicas; the new index uses the server default", e, logPair("indexName", indexName));
+         return (null);
+      }
+   }
+
+
+
+   /*******************************************************************************
+    ** The configured indexReplicas, else min(maxAutoReplicas, data nodes - 1)
+    ** from cluster health, so a single-node cluster gets 0 and stays green.
+    *******************************************************************************/
+   ReplicaStatus targetReplicas() throws QException
+   {
+      if(indexReplicas != null)
+      {
+         return (new ReplicaStatus(indexReplicas, null, 0, false));
+      }
+      QuickSearchDiagnosticsOperations.RawResponse health = new QuickSearchDiagnosticsOperations(this).raw("GET", "/_cluster/health", null);
+      QuickSearchDiagnosticsOperations.requireOk(health, "Cluster health unavailable");
+      JsonNode dataNodes = health.body() == null ? null : health.body().path("number_of_data_nodes");
+      if(dataNodes == null || !dataNodes.isNumber())
+      {
+         throw (new QException("Cluster health did not report number_of_data_nodes"));
+      }
+      return (new ReplicaStatus(autoReplicas(dataNodes.intValue(), maxAutoReplicas), dataNodes.intValue(), 0, false));
+   }
+
+
+
+   /*******************************************************************************
+    ** Automatic replica count: a replica can only be assigned to a different
+    ** data node than its primary, so never more than data nodes - 1.
+    *******************************************************************************/
+   static int autoReplicas(int dataNodes, int maxAutoReplicas)
+   {
+      return (Math.max(0, Math.min(maxAutoReplicas, dataNodes - 1)));
+   }
+
+
+
+   /*******************************************************************************
+    ** Bring number_of_replicas of the physical index(es) behind the alias to
+    ** the target. Idempotent (only differing indexes are updated) and failure
+    ** tolerant: a failure is logged and kept in {@link #getReplicaStatus()},
+    ** never thrown, so it cannot block startup. Indexes with
+    ** auto_expand_replicas set are left to OpenSearch. Null on Serverless.
+    *******************************************************************************/
+   public ReplicaStatus reconcileReplicas()
+   {
+      if(!Boolean.TRUE.equals(replicasManaged))
+      {
+         return (null);
+      }
+      Integer target = null;
+      Integer nodes  = null;
+      try
+      {
+         ReplicaStatus sized = targetReplicas();
+         target = sized.targetReplicas();
+         nodes  = sized.dataNodes();
+         QuickSearchDiagnosticsOperations             operations = new QuickSearchDiagnosticsOperations(this);
+         QuickSearchDiagnosticsOperations.RawResponse settings   = operations.raw("GET", "/" + QuickSearchDiagnosticsOperations.encode(indexName) + "/_settings", null);
+         QuickSearchDiagnosticsOperations.requireOk(settings, "Index settings unavailable");
+         int updated = 0;
+         for(Map.Entry<String, JsonNode> entry : settings.body().properties())
+         {
+            JsonNode index      = entry.getValue().path("settings").path("index");
+            String   current    = index.path("number_of_replicas").asText(null);
+            String   autoExpand = index.path("auto_expand_replicas").asText("false");
+            if(!"false".equalsIgnoreCase(autoExpand) || String.valueOf(target).equals(current))
+            {
+               continue;
+            }
+            QuickSearchDiagnosticsOperations.RawResponse put = operations.raw("PUT", "/" + QuickSearchDiagnosticsOperations.encode(entry.getKey()) + "/_settings",
+               "{\"index\":{\"number_of_replicas\":" + target + "}}");
+            QuickSearchDiagnosticsOperations.requireOk(put, "Updating number_of_replicas failed");
+            updated++;
+            LOG.info("Updated Quick Search index replicas", logPair("physicalIndex", entry.getKey()), logPair("from", current),
+               logPair("to", target), logPair("dataNodes", nodes));
+         }
+         replicaStatus = new ReplicaStatus(target, nodes, updated, false);
+      }
+      catch(Exception e)
+      {
+         LOG.warn("Could not reconcile Quick Search index replicas; continuing", e, logPair("indexName", indexName), logPair("targetReplicas", target));
+         replicaStatus = new ReplicaStatus(target, nodes, 0, true);
+      }
+      return (replicaStatus);
+   }
+
+
+
+   /*******************************************************************************
+    ** The latest replica sizing outcome; null before any (or on Serverless).
+    *******************************************************************************/
+   public ReplicaStatus getReplicaStatus()
+   {
+      return (replicaStatus);
    }
 
 

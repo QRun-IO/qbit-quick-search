@@ -126,6 +126,9 @@ public class QuickSearchStatusSpec extends AbstractJsonEndpointSpec
       {
          status.put(name, field(Type.INTEGER, "Cluster health counter; null when unavailable.", true));
       }
+      status.put("unassignedReplicaShards", field(Type.INTEGER, "Unassigned shards when every primary is active (all are replicas); null when unknown or a primary is not active.", true));
+      status.put("targetReplicas", field(Type.INTEGER, "number_of_replicas Quick Search applies to its index; null when unknown or not managed (Serverless).", true));
+      status.put("replicaSettingsFailed", field(Type.BOOLEAN, "Sizing or applying the index replicas failed at startup; null when not attempted.", true));
       status.put("indexingPaused", field(Type.BOOLEAN, "Indexing is paused; search can still serve.", true));
       status.put("indexes", new Schema().withType(Type.ARRAY).withItems(new Schema().withRef("#/components/schemas/QuickSearchIndexStatusV1"))
          .withDescription("At most 100 persisted index rows, ordered by id."));

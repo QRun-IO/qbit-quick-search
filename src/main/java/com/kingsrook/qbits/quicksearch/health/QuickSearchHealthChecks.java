@@ -187,6 +187,11 @@ public class QuickSearchHealthChecks implements HealthCheckSupplier
       {
          outcome = HealthCheckOutcome.up("OpenSearch is green");
       }
+      else if(Boolean.TRUE.equals(status.clusterReachable()) && QuickSearchStatus.isSingleNodeReplicaYellow(status.clusterHealth(), status.nodes(), status.unassignedReplicaShards()))
+      {
+         outcome = HealthCheckOutcome.up("OpenSearch is yellow only because replicas cannot be assigned on a single node");
+         outcome.getDetails().withValue("note", "replicas cannot be assigned on a single-node cluster");
+      }
       else
       {
          outcome = HealthCheckOutcome.degraded("OpenSearch health is yellow or incomplete");
@@ -195,6 +200,9 @@ public class QuickSearchHealthChecks implements HealthCheckSupplier
       detail(outcome, "nodes", status.nodes());
       detail(outcome, "activeShards", status.activeShards());
       detail(outcome, "unassignedShards", status.unassignedShards());
+      detail(outcome, "unassignedReplicaShards", status.unassignedReplicaShards());
+      detail(outcome, "targetReplicas", status.targetReplicas());
+      detail(outcome, "replicaSettingsFailed", status.replicaSettingsFailed());
       return (outcome);
    }
 
