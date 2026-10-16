@@ -26,7 +26,7 @@
       <opensearch.version>3.10.0</opensearch.version>
       <jacoco.version>0.8.15</jacoco.version>
       <opensearch.test.image>opensearchproject/opensearch:2.19.6</opensearch.test.image>
-      <aws.sdk.version>2.41.10</aws.sdk.version>
+      <aws.sdk.version>2.55.16</aws.sdk.version>
    </properties>
 
    <parent>
@@ -125,7 +125,7 @@
       <dependency>
          <groupId>com.h2database</groupId>
          <artifactId>h2</artifactId>
-         <version>2.2.220</version>
+         <version>2.5.252</version>
          <scope>test</scope>
       </dependency>
 
@@ -145,7 +145,7 @@
       <dependency>
          <groupId>org.mockito</groupId>
          <artifactId>mockito-core</artifactId>
-         <version>5.8.0</version>
+         <version>5.24.0</version>
          <scope>test</scope>
       </dependency>
 
@@ -199,7 +199,7 @@
             <!-- Run integration tests with failsafe -->
             <groupId>org.apache.maven.plugins</groupId>
             <artifactId>maven-failsafe-plugin</artifactId>
-            <version>3.1.2</version>
+            <version>3.6.0</version>
             <configuration>
                <systemPropertyVariables>
                   <opensearch.test.image>${opensearch.test.image}</opensearch.test.image>
