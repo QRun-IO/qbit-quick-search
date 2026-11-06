@@ -20,4 +20,4 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 jobs:
   analyze:
-    uses: QRun-IO/qqq-orb/.github/workflows/qbit-codeql.yml@c288a8864fe9054f68410e1d78f5863aea4c4d22
+    uses: QRun-IO/qqq-orb/.github/workflows/qbit-codeql.yml@9b48a14bce9d409d4b2e26654486f219e9bbe3af
